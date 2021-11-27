@@ -1,6 +1,6 @@
 import os.path as op
 import numpy.testing as npt
-import shablona as ece
+import pyAMICA as ece
 
 data_path = op.join(ece.__path__[0], 'data')
 #Load data like: op.join(data_path, 'mydatafile.dat')

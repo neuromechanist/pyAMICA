@@ -1,1 +1,1 @@
-from .shablona import *  # noqa
+from .pyAMICA import *  # noqa
