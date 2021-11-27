@@ -1,0 +1,6 @@
+*.py[co]
+*~
+*.DS_Store
+_build/
+auto_examples/
+gen_api/
