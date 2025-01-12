@@ -1,4 +1,36 @@
-"""Visualization tools for AMICA results."""
+"""
+Visualization tools for analyzing AMICA results.
+
+This module provides a comprehensive set of visualization functions for analyzing
+and interpreting AMICA results. The visualizations include:
+
+1. Convergence Analysis:
+   - Log likelihood progression
+   - Gradient norm evolution
+   - Helps assess optimization quality and convergence
+
+2. Component Analysis:
+   - Mixing vectors (spatial patterns)
+   - Activation distributions
+   - Helps interpret discovered sources
+
+3. Model Comparison:
+   - Data reconstructions
+   - Component sharing patterns
+   - Helps evaluate model quality and differences
+
+4. PDF Analysis:
+   - Fitted probability density functions
+   - Mixture component contributions
+   - Helps understand source distributions
+
+These visualizations are essential for:
+- Validating model convergence
+- Interpreting discovered components
+- Comparing different models
+- Understanding source characteristics
+- Diagnosing potential issues
+"""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -289,7 +321,16 @@ def create_report(
     compressed: bool = False
 ) -> None:
     """
-    Create comprehensive visualization report.
+    Create comprehensive visualization report combining all analysis plots.
+    
+    This function generates a complete analysis report that includes:
+    1. Convergence plots showing optimization progress
+    2. Component visualizations showing learned sources
+    3. Component sharing matrix showing model relationships
+    4. Model comparison showing reconstruction quality
+    5. PDF fits showing learned source distributions
+    
+    The report can be displayed interactively or saved to a file.
     
     Parameters
     ----------

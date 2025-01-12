@@ -1,4 +1,19 @@
-"""Newton optimization for AMICA."""
+"""
+Newton optimization methods for AMICA.
+
+This module implements Newton's method for optimizing the AMICA model parameters.
+The Newton approach uses second-order information (the Hessian matrix) to improve
+convergence compared to standard gradient descent.
+
+Key components:
+1. Newton direction computation using natural gradient and approximate Hessian
+2. Parameter estimation for the Newton update
+3. Unmixing matrix updates using the computed direction
+
+The implementation follows the approach described in:
+Palmer, J. A., Kreutz-Delgado, K., & Makeig, S. (2012).
+AMICA: An adaptive mixture of independent component analyzers with shared components.
+"""
 
 import numpy as np
 from scipy import linalg
@@ -65,6 +80,15 @@ def compute_newton_parameters(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute parameters needed for Newton optimization.
+    
+    This function estimates three key parameters:
+    1. sigma2: Second moments of the activations
+    2. lambda_: Diagonal elements of the approximate Hessian
+    3. kappa: Off-diagonal elements of the approximate Hessian
+    
+    These parameters are used to construct the preconditioner for the
+    natural gradient, which approximates the inverse Hessian of the
+    log-likelihood with respect to the unmixing matrix.
     
     Parameters
     ----------

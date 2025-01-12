@@ -1,11 +1,32 @@
-"""Utility functions for AMICA implementation."""
+"""
+Utility functions for AMICA implementation.
+
+This module provides core utility functions used throughout the AMICA package,
+including mathematical operations, component analysis tools, and data processing
+utilities. These functions support the main AMICA algorithm implementation.
+"""
 
 import numpy as np
 from scipy import special
 
 
 def gammaln(x):
-    """Compute the log of the gamma function."""
+    """
+    Compute the natural logarithm of the gamma function.
+    
+    The gamma function is an extension of the factorial function to real and
+    complex numbers. This function computes ln(Γ(x)) using SciPy's implementation.
+    
+    Parameters
+    ----------
+    x : float or array_like
+        Input value(s)
+        
+    Returns
+    -------
+    float or ndarray
+        Natural logarithm of gamma function evaluated at x
+    """
     return special.gammaln(x)
 
 
@@ -13,14 +34,30 @@ def psifun(x):
     """
     Compute the digamma function (derivative of log gamma).
     
-    This is a Python implementation of the Fortran psifun function.
+    The digamma function is the logarithmic derivative of the gamma function,
+    defined as ψ(x) = d/dx ln(Γ(x)). This implementation uses SciPy's digamma
+    function and matches the behavior of the original Fortran implementation.
+    
+    Parameters
+    ----------
+    x : float or array_like
+        Input value(s)
+        
+    Returns
+    -------
+    float or ndarray
+        Digamma function evaluated at x
     """
     return special.digamma(x)
 
 
 def determine_block_size(data, min_size, max_size, step_size, num_threads=1):
     """
-    Determine optimal block size for data processing.
+    Determine optimal block size for data processing through empirical testing.
+    
+    This function tests different block sizes by performing representative matrix
+    operations and measuring execution time. The block size that results in the
+    fastest processing time is selected as optimal.
     
     Parameters
     ----------
@@ -65,7 +102,12 @@ def determine_block_size(data, min_size, max_size, step_size, num_threads=1):
 
 def identify_shared_components(A, W, comp_list, comp_thresh=0.99):
     """
-    Identify components that are shared between models.
+    Identify components that are shared between different models based on correlation.
+    
+    This function analyzes the mixing matrix columns to find components that are
+    highly correlated between different models, suggesting they represent the same
+    underlying source. When shared components are identified, they are merged to
+    maintain a more parsimonious representation.
     
     Parameters
     ----------
@@ -127,6 +169,11 @@ def get_unmixing_matrices(A, comp_list):
     """
     Compute unmixing matrices from mixing matrix and component assignments.
     
+    For each model, constructs the unmixing matrix by inverting the appropriate
+    subset of the mixing matrix columns as specified by the component assignments.
+    The unmixing matrices are used to transform the mixed signals back into their
+    source components.
+    
     Parameters
     ----------
     A : ndarray
@@ -153,7 +200,12 @@ def get_unmixing_matrices(A, comp_list):
 
 def reject_outliers(ll, rejsig):
     """
-    Identify outlier samples based on log likelihood.
+    Identify outlier samples based on log likelihood values.
+    
+    Uses a statistical approach to identify outliers by comparing log likelihood
+    values to the mean. Samples with log likelihood below (mean - rejsig * std)
+    are considered outliers. This helps improve model robustness by excluding
+    anomalous data points from the analysis.
     
     Parameters
     ----------

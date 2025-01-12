@@ -1,4 +1,23 @@
-"""Data loading and preprocessing for AMICA."""
+"""
+Data loading and preprocessing for AMICA.
+
+This module provides functionality for loading and preprocessing data for the AMICA
+algorithm. It handles:
+
+1. Loading binary data files in Fortran format
+2. Data preprocessing operations:
+   - Mean removal
+   - Sphering (whitening) using PCA
+   - Dimensionality reduction
+3. Result saving and loading with optional compression
+
+The preprocessing steps are crucial for AMICA's performance:
+- Mean removal centers the data, removing DC offset
+- Sphering decorrelates the data and normalizes variance, which can speed up
+  convergence and improve separation quality
+- PCA-based dimensionality reduction can help remove noise and reduce
+  computational complexity
+"""
 
 import numpy as np
 from pathlib import Path
@@ -110,7 +129,18 @@ def preprocess_data(
     pcadb: Optional[float] = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Preprocess data by removing mean and sphering.
+    Preprocess data by removing mean and applying sphering transformation.
+    
+    This function performs two main preprocessing steps:
+    1. Mean removal: Subtracts the temporal mean from each channel
+    2. Sphering: Applies a linear transformation to decorrelate the signals
+       and normalize their variance. This can be done either exactly or
+       approximately:
+       - Exact: W = Λ^(-1/2) E^T where Λ, E are eigenvalues/vectors of covariance
+       - Approximate: W = Λ^(-1/2) E^T (faster but less precise)
+       
+    Optionally reduces dimensionality by keeping only the top components based on
+    either a fixed number (pcakeep) or an energy threshold (pcadb).
     
     Parameters
     ----------

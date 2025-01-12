@@ -1,16 +1,110 @@
-"""AMICA (Adaptive Mixture ICA) implementation."""
+"""
+AMICA (Adaptive Mixture ICA) Implementation
+=========================================
+
+This module implements the Adaptive Mixture Independent Component Analysis (AMICA) 
+algorithm, which performs blind source separation using a mixture of adaptive 
+independent component analyzers.
+
+Key Features
+-----------
+* Multiple Source Models: Can learn different mixing models for different parts of the data
+* Flexible PDFs: Supports various source distributions including Gaussian, Laplace, and mixtures
+* Component Sharing: Automatically identifies and shares similar components across models
+* Outlier Rejection: Robust estimation by identifying and excluding outlier samples
+* Optimization: Efficient parameter updates using natural gradient and Newton methods
+* Preprocessing: Automatic mean removal and data sphering
+
+Mathematical Background
+--------------------
+AMICA extends traditional ICA by:
+
+1. Using mixture models for source PDFs:
+   p(s) = Σ_k α_k p_k(s)
+   where α_k are mixture weights and p_k are component PDFs
+
+2. Learning multiple mixing models:
+   x = A_m s + c_m
+   where m indexes different models and c_m are bias terms
+
+3. Optimizing model parameters via maximum likelihood:
+   L = Σ_t log p(x_t)
+   where p(x_t) includes all mixture components and models
+
+Usage Example
+------------
+>>> import numpy as np
+>>> from pyAMICA import AMICA
+>>> 
+>>> # Generate random data
+>>> X = np.random.randn(64, 1000)  # 64 channels, 1000 samples
+>>> 
+>>> # Initialize and fit model
+>>> model = AMICA(num_models=2)  # Use 2 mixing models
+>>> model.fit(X)
+>>> 
+>>> # Get separated sources
+>>> S = model.transform(X)
+
+The algorithm automatically:
+- Removes data mean if requested
+- Spheres the data if requested
+- Initializes model parameters
+- Optimizes parameters using natural gradient
+- Switches to Newton optimization if requested
+- Identifies shared components across models
+- Rejects outliers if requested
+
+See Also
+--------
+amica_pdf : PDF implementations
+amica_utils : Utility functions
+amica_viz : Visualization tools
+amica_cli : Command-line interface
+
+References
+----------
+1. Palmer, J. A., et al. "Newton Method for the ICA Mixture Model." 
+   ICASSP 2008.
+2. Palmer, J. A., et al. "AMICA: An Adaptive Mixture of Independent 
+   Component Analyzers with Shared Components." 2012.
+"""
 
 import numpy as np
 from scipy import linalg
 import logging
+import json
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Union
-import warnings
-
+from typing import Dict, Optional, Tuple
 from amica_utils import (
-    gammaln, psifun, determine_block_size, identify_shared_components,
-    get_unmixing_matrices, reject_outliers
+    gammaln, determine_block_size, identify_shared_components,
+    get_unmixing_matrices
 )
+
+
+def load_default_params(params_file: Optional[str] = None) -> Dict:
+    """
+    Load default parameters from JSON file.
+    
+    Parameters
+    ----------
+    params_file : str, optional
+        Path to JSON parameter file. If None, uses default params.json
+        
+    Returns
+    -------
+    params : dict
+        Dictionary of default parameters
+    """
+    if params_file is None:
+        params_file = Path(__file__).parent / 'params.json'
+    
+    with open(params_file) as f:
+        params = json.load(f)
+    
+    # Remove data-specific parameters
+    data_params = {'files', 'num_samples', 'data_dim', 'field_dim'}
+    return {k: v for k, v in params.items() if k not in data_params}
 
 
 class AMICA:
@@ -23,113 +117,80 @@ class AMICA:
     
     def __init__(
         self,
-        num_models: int = 1,
-        num_mix: int = 3,
-        max_iter: int = 2000,
-        do_newton: bool = False,
-        newt_start: int = 20,
-        newt_ramp: int = 10,
-        newtrate: float = 0.5,
-        do_reject: bool = False,
-        rejsig: float = 3.0,
-        rejstart: int = 2,
-        rejint: int = 3,
-        maxrej: int = 1,
-        num_comps: int = -1,
-        lrate: float = 0.1,
-        minlrate: float = 1e-12,
-        lratefact: float = 0.5,
-        rho0: float = 1.5,
-        minrho: float = 1.0,
-        maxrho: float = 2.0,
-        rholrate: float = 0.05,
-        rholratefact: float = 0.1,
-        invsigmax: float = 1000.0,
-        invsigmin: float = 1e-4,
-        do_history: bool = False,
-        histstep: int = 10,
-        do_opt_block: bool = True,
-        block_size: int = 128,
-        blk_min: int = 128,
-        blk_max: int = 1024,
-        blk_step: int = 128,
-        share_comps: bool = False,
-        comp_thresh: float = 0.99,
-        share_start: int = 100,
-        share_int: int = 100,
-        doscaling: bool = True,
-        scalestep: int = 1,
-        do_sphere: bool = True,
-        do_mean: bool = True,
-        do_approx_sphere: bool = True,
-        pcakeep: Optional[int] = None,
-        pcadb: Optional[float] = None,
-        writestep: int = 100,
-        max_decs: int = 5,
-        min_dll: float = 1e-9,
-        min_grad_norm: float = 1e-7,
-        use_min_dll: bool = True,
-        use_grad_norm: bool = True,
-        pdftype: int = 1,
-        outdir: Optional[str] = None,
-        seed: Optional[int] = None,
+        params_file: Optional[str] = None,
+        **kwargs
     ):
-        """Initialize AMICA with given parameters."""
+        """
+        Initialize AMICA with parameters.
+        
+        Parameters
+        ----------
+        params_file : str, optional
+            Path to JSON parameter file with default values
+        **kwargs : dict
+            Override default parameters with these values
+        """
+        # Load default parameters
+        params = load_default_params(params_file)
+        
+        # Override with any provided parameters
+        params.update(kwargs)
+        
         # Store parameters
-        self.num_models = num_models
-        self.num_mix = num_mix
-        self.max_iter = max_iter
-        self.do_newton = do_newton
-        self.newt_start = newt_start
-        self.newt_ramp = newt_ramp
-        self.newtrate = newtrate
-        self.do_reject = do_reject
-        self.rejsig = rejsig
-        self.rejstart = rejstart
-        self.rejint = rejint
-        self.maxrej = maxrej
-        self.num_comps = num_comps
-        self.lrate = lrate
-        self.lrate0 = lrate
-        self.minlrate = minlrate
-        self.lratefact = lratefact
-        self.rho0 = rho0
-        self.minrho = minrho
-        self.maxrho = maxrho
-        self.rholrate = rholrate
-        self.rholrate0 = rholrate
-        self.rholratefact = rholratefact
-        self.invsigmax = invsigmax
-        self.invsigmin = invsigmin
-        self.do_history = do_history
-        self.histstep = histstep
-        self.do_opt_block = do_opt_block
-        self.block_size = block_size
-        self.blk_min = blk_min
-        self.blk_max = blk_max
-        self.blk_step = blk_step
-        self.share_comps = share_comps
-        self.comp_thresh = comp_thresh
-        self.share_start = share_start
-        self.share_int = share_int
-        self.doscaling = doscaling
-        self.scalestep = scalestep
-        self.do_sphere = do_sphere
-        self.do_mean = do_mean
-        self.do_approx_sphere = do_approx_sphere
-        self.pcakeep = pcakeep
-        self.pcadb = pcadb
-        self.writestep = writestep
-        self.max_decs = max_decs
-        self.min_dll = min_dll
-        self.min_grad_norm = min_grad_norm
-        self.use_min_dll = use_min_dll
-        self.use_grad_norm = use_grad_norm
-        self.pdftype = pdftype
-        self.outdir = Path(outdir) if outdir else Path.cwd() / "output"
+        self.num_models = params.get('num_models', 1)
+        self.num_mix = params.get('num_mix', 3)
+        self.max_iter = params.get('max_iter', 2000)
+        self.do_newton = params.get('do_newton', False)
+        self.newt_start = params.get('newt_start', 20)
+        self.newt_ramp = params.get('newt_ramp', 10)
+        self.newtrate = params.get('newtrate', 0.5)
+        self.do_reject = params.get('do_reject', False)
+        self.rejsig = params.get('rejsig', 3.0)
+        self.rejstart = params.get('rejstart', 2)
+        self.rejint = params.get('rejint', 3)
+        self.maxrej = params.get('maxrej', 1)
+        self.num_comps = params.get('num_comps', -1)
+        self.lrate = params.get('lrate', 0.1)
+        self.lrate0 = self.lrate
+        self.minlrate = params.get('minlrate', 1e-12)
+        self.lratefact = params.get('lratefact', 0.5)
+        self.rho0 = params.get('rho0', 1.5)
+        self.minrho = params.get('minrho', 1.0)
+        self.maxrho = params.get('maxrho', 2.0)
+        self.rholrate = params.get('rholrate', 0.05)
+        self.rholrate0 = self.rholrate
+        self.rholratefact = params.get('rholratefact', 0.1)
+        self.invsigmax = params.get('invsigmax', 1000.0)
+        self.invsigmin = params.get('invsigmin', 1e-4)
+        self.do_history = params.get('do_history', False)
+        self.histstep = params.get('histstep', 10)
+        self.do_opt_block = params.get('do_opt_block', True)
+        self.block_size = params.get('block_size', 128)
+        self.blk_min = params.get('blk_min', 128)
+        self.blk_max = params.get('blk_max', 1024)
+        self.blk_step = params.get('blk_step', 128)
+        self.share_comps = params.get('share_comps', False)
+        self.comp_thresh = params.get('comp_thresh', 0.99)
+        self.share_start = params.get('share_start', 100)
+        self.share_int = params.get('share_int', 100)
+        self.doscaling = params.get('doscaling', True)
+        self.scalestep = params.get('scalestep', 1)
+        self.do_sphere = params.get('do_sphere', True)
+        self.do_mean = params.get('do_mean', True)
+        self.do_approx_sphere = params.get('do_approx_sphere', True)
+        self.pcakeep = params.get('pcakeep')
+        self.pcadb = params.get('pcadb')
+        self.writestep = params.get('writestep', 100)
+        self.max_decs = params.get('max_decs', 5)
+        self.min_dll = params.get('min_dll', 1e-9)
+        self.min_grad_norm = params.get('min_grad_norm', 1e-7)
+        self.use_min_dll = params.get('use_min_dll', True)
+        self.use_grad_norm = params.get('use_grad_norm', True)
+        self.pdftype = params.get('pdftype', 1)
+        self.outdir = Path(params.get('outdir', 'output'))
         
         # Initialize random state
-        self.rng = np.random.RandomState(seed)
+        self.rng = np.random.RandomState(params.get('seed'))
         
         # Initialize model parameters
         self.A = None  # Mixing matrix

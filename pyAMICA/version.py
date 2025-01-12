@@ -25,10 +25,20 @@ CLASSIFIERS = ["Development Status :: 3 - Alpha",
                "Topic :: Scientific/Engineering"]
 
 # Description should be a one-liner:
-description = "pyAMICA: Put a one-liner description of your code here"
+description = "pyAMICA: Python implementation of Adaptive Mixture ICA algorithm"
 # Long description will go up on the pypi page
 long_description = """
-pyAMICA: Put a longer description of your code here.
+AMICA (Adaptive Mixture ICA) is an advanced blind source separation algorithm 
+that uses adaptive mixtures of independent component analyzers. This implementation provides:
+
+- Multiple source models
+- Different PDF types
+- Newton optimization
+- Component sharing
+- Outlier rejection
+- Data preprocessing (mean removal, sphering)
+
+For more information, visit: http://github.com/CSC-UW/pyAMICA
 """
 
 NAME = "pyAMICA"
@@ -47,5 +57,5 @@ MINOR = _version_minor
 MICRO = _version_micro
 VERSION = __version__
 PACKAGE_DATA = {'pyAMICA': [pjoin('data', '*')]}
-REQUIRES = ["numpy"]
+REQUIRES = ["numpy", "scipy", "matplotlib", "tqdm", "json5"]
 PYTHON_REQUIRES = ">= 3.7"

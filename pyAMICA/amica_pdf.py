@@ -1,11 +1,48 @@
-"""PDF type implementations for AMICA."""
+"""
+Probability Density Function (PDF) implementations for AMICA.
+
+This module implements various probability density functions used in the AMICA
+algorithm for modeling source distributions. The supported PDFs are:
+
+1. Generalized Gaussian Distribution (GGD):
+   p(x) = exp(-|x|^ρ) / (2Γ(1+1/ρ))
+   - ρ=1: Laplace distribution (heavy-tailed)
+   - ρ=2: Gaussian distribution
+   - Other ρ: Interpolates between Laplace and Gaussian
+
+2. Logistic Distribution:
+   p(x) = exp(x) / (1 + exp(x))^2
+   - Symmetric, slightly heavier tails than Gaussian
+
+3. Generalized Logistic Distribution:
+   p(x) = ρ exp(x) / (1 + exp(x))^(ρ+1)
+   - Asymmetric, allows modeling skewed distributions
+
+4. Gaussian Mixture:
+   p(x) = 0.5[N(0,1) + N(0,ρ)]
+   - Bimodal, good for modeling multimodal data
+
+The choice of PDF can significantly impact separation quality. The module includes
+functionality to automatically select appropriate PDFs based on data statistics.
+"""
 
 import numpy as np
 from scipy import special
 
 def compute_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute PDF value and derivative based on PDF type.
+    Compute PDF value and its derivative for given activation values.
+    
+    For each supported PDF type, computes both the probability density p(y)
+    and its derivative dp(y)/dy. These are used in the AMICA algorithm for:
+    1. Computing data likelihood during model fitting
+    2. Gradient calculations for parameter updates
+    3. Estimating component responsibilities
+    
+    The shape parameter ρ controls the distribution's properties:
+    - For GGD: Controls tail heaviness (1=Laplace, 2=Gaussian)
+    - For Gen. Logistic: Controls asymmetry
+    - For Gaussian Mixture: Controls variance ratio of components
     
     Parameters
     ----------
@@ -69,7 +106,15 @@ def compute_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.ndarray
 
 def compute_log_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute log PDF value and its derivative.
+    Compute logarithm of PDF value and its derivative.
+    
+    Working in log space provides better numerical stability, especially for:
+    1. Very small probability densities
+    2. Product of probabilities (becomes sum of log probabilities)
+    3. Computing likelihood ratios
+    
+    The derivative of log PDF (score function) is used in natural gradient
+    calculations for more efficient optimization.
     
     Parameters
     ----------
@@ -95,6 +140,21 @@ def compute_log_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.nda
 def choose_pdf_type(data: np.ndarray, rho: float = 1.5) -> int:
     """
     Choose best PDF type based on data statistics.
+    
+    Uses higher-order statistics to characterize the data distribution:
+    1. Kurtosis: Measures tail heaviness
+       - kurt ≈ 0: Gaussian-like
+       - kurt > 0: Heavier tails
+       - kurt < 0: Lighter tails
+    2. Skewness: Measures asymmetry
+       - skew ≈ 0: Symmetric
+       - skew ≠ 0: Asymmetric
+    
+    Selection criteria:
+    - Near-Gaussian (low kurt & skew): Generalized Gaussian
+    - Heavy tails (high kurt): Logistic
+    - High asymmetry: Generalized Logistic
+    - Otherwise: Gaussian Mixture
     
     Parameters
     ----------
