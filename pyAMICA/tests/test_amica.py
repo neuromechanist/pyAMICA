@@ -12,7 +12,7 @@ from pyAMICA.amica_newton import compute_newton_direction
 
 class TestAMICA(unittest.TestCase):
     """Test AMICA implementation against Fortran code."""
-    
+
     @classmethod
     def setUpClass(cls):
         """Create test data."""
@@ -21,16 +21,16 @@ class TestAMICA(unittest.TestCase):
         cls.data_dim = 64
         cls.num_samples = 1000
         cls.data = rng.randn(cls.data_dim, cls.num_samples)
-        
+
         # Save test data in Fortran format
         cls.test_dir = Path('test_data')
         if not cls.test_dir.exists():
             cls.test_dir.mkdir()
-            
+
         data_file = cls.test_dir / 'test.bin'
         with open(data_file, 'wb') as f:
             cls.data.T.astype(np.float32).tofile(f)
-            
+
     def test_data_loading(self):
         """Test data loading matches Fortran."""
         data = load_data_file(
@@ -41,7 +41,7 @@ class TestAMICA(unittest.TestCase):
             dtype=np.float32
         )
         np.testing.assert_allclose(data, self.data)
-        
+
     def test_preprocessing(self):
         """Test preprocessing matches Fortran."""
         # Test mean removal
@@ -59,7 +59,7 @@ class TestAMICA(unittest.TestCase):
             np.zeros(self.data_dim),
             atol=1e-10
         )
-        
+
         # Test sphering
         data, _, sphere = preprocess_data(
             self.data.copy(),
@@ -72,7 +72,7 @@ class TestAMICA(unittest.TestCase):
             np.eye(self.data_dim),
             atol=1e-10
         )
-        
+
     def test_pdf_computation(self):
         """Test PDF computation matches Fortran."""
         # Test Laplace distribution
@@ -86,7 +86,7 @@ class TestAMICA(unittest.TestCase):
             dpdf,
             -np.sign(y) * pdf
         )
-        
+
         # Test Gaussian distribution
         pdf, dpdf = compute_pdf(y, rho=2.0)
         np.testing.assert_allclose(
@@ -97,31 +97,31 @@ class TestAMICA(unittest.TestCase):
             dpdf,
             -2 * y * pdf
         )
-        
+
     def test_newton_direction(self):
         """Test Newton direction computation matches Fortran."""
         rng = np.random.RandomState(42)
-        
+
         # Create test inputs
         data_dim = 10
         dA = rng.randn(data_dim, data_dim)
         sigma2 = np.abs(rng.randn(data_dim))
         lambda_ = np.abs(rng.randn(data_dim))
         kappa = np.abs(rng.randn(data_dim))
-        
+
         # Compute Newton direction
         H = compute_newton_direction(
             dA, sigma2[:, None], lambda_[:, None],
             kappa[:, None], 0
         )
-        
+
         # Test diagonal elements
         for i in range(data_dim):
             self.assertAlmostEqual(
                 H[i, i],
                 dA[i, i] / lambda_[i]
             )
-            
+
         # Test off-diagonal elements
         for i in range(data_dim):
             for j in range(data_dim):
@@ -135,23 +135,23 @@ class TestAMICA(unittest.TestCase):
                         )
                     else:
                         self.assertAlmostEqual(H[i, j], 0.0)
-                        
+
     def test_full_amica(self):
         """Test full AMICA optimization."""
         # Create simple test case
         rng = np.random.RandomState(42)
         n_sources = 4
         n_samples = 1000
-        
+
         # Create independent sources
         S = rng.laplace(size=(n_sources, n_samples))
-        
+
         # Create random mixing matrix
         A_true = rng.randn(n_sources, n_sources)
-        
+
         # Mix sources
         X = np.dot(A_true, S)
-        
+
         # Run AMICA
         model = AMICA(
             num_models=1,
@@ -162,14 +162,14 @@ class TestAMICA(unittest.TestCase):
             seed=42
         )
         model.fit(X)
-        
+
         # Get unmixed sources
         S_est = model.transform(X)
-        
+
         # Compute correlation with true sources
         corr = np.corrcoef(S.ravel(), S_est[:,:,0].ravel())[0,1]
         self.assertGreater(np.abs(corr), 0.9)
-        
+
     @classmethod
     def tearDownClass(cls):
         """Clean up test files."""

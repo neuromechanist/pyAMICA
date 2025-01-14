@@ -28,10 +28,10 @@ def compute_newton_direction(
 ) -> np.ndarray:
     """
     Compute Newton direction for unmixing matrix update.
-    
+
     This implements the Newton direction computation from the Fortran AMICA code,
     using the natural gradient preconditioned by the approximate Hessian.
-    
+
     Parameters
     ----------
     dA : ndarray
@@ -44,7 +44,7 @@ def compute_newton_direction(
         Kappa parameters
     h : int
         Model index
-        
+
     Returns
     -------
     H : ndarray
@@ -52,7 +52,7 @@ def compute_newton_direction(
     """
     data_dim = dA.shape[0]
     H = np.zeros_like(dA)
-    
+
     # Compute Newton direction
     for i in range(data_dim):
         for j in range(data_dim):
@@ -66,7 +66,7 @@ def compute_newton_direction(
                 sk2 = sigma2[j, h] * kappa[i, h]
                 if sk1 * sk2 > 1.0:
                     H[i, j] = (sk1 * dA[i, j] - dA[j, i]) / (sk1 * sk2 - 1.0)
-                    
+
     return H
 
 
@@ -80,16 +80,16 @@ def compute_newton_parameters(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute parameters needed for Newton optimization.
-    
+
     This function estimates three key parameters:
     1. sigma2: Second moments of the activations
     2. lambda_: Diagonal elements of the approximate Hessian
     3. kappa: Off-diagonal elements of the approximate Hessian
-    
+
     These parameters are used to construct the preconditioner for the
     natural gradient, which approximates the inverse Hessian of the
     log-likelihood with respect to the unmixing matrix.
-    
+
     Parameters
     ----------
     b : ndarray
@@ -104,7 +104,7 @@ def compute_newton_parameters(
         PDF derivatives
     h : int
         Model index
-        
+
     Returns
     -------
     sigma2 : ndarray
@@ -116,17 +116,17 @@ def compute_newton_parameters(
     """
     batch_size = b.shape[0]
     data_dim = b.shape[1]
-    
+
     # Initialize parameters
     sigma2 = np.zeros(data_dim)
     lambda_ = np.zeros(data_dim)
     kappa = np.zeros(data_dim)
-    
+
     # Compute parameters
     for i in range(data_dim):
         # Second moments
         sigma2[i] = np.sum(v[:, h] * b[:, i]**2) / np.sum(v[:, h])
-        
+
         # Lambda and kappa parameters
         for j in range(z.shape[2]):  # num_mix
             lambda_[i] += np.sum(
@@ -135,10 +135,10 @@ def compute_newton_parameters(
             kappa[i] += np.sum(
                 v[:, h] * z[:, i, j, h] * dpdf[:, i, j, h]**2
             )
-            
+
         lambda_[i] /= np.sum(v[:, h])
         kappa[i] /= np.sum(v[:, h])
-        
+
     return sigma2, lambda_, kappa
 
 
@@ -154,7 +154,7 @@ def update_unmixing_matrix(
 ) -> np.ndarray:
     """
     Update unmixing matrix using Newton direction.
-    
+
     Parameters
     ----------
     A : ndarray
@@ -173,7 +173,7 @@ def update_unmixing_matrix(
         Model index
     lrate : float
         Learning rate
-        
+
     Returns
     -------
     A : ndarray
@@ -181,8 +181,8 @@ def update_unmixing_matrix(
     """
     # Compute Newton direction
     H = compute_newton_direction(dA, sigma2, lambda_, kappa, h)
-    
+
     # Update mixing matrix
     A[:, comp_list[:, h]] += lrate * np.dot(A[:, comp_list[:, h]], H)
-    
+
     return A

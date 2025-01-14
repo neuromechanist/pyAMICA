@@ -40,7 +40,7 @@ from amica_data import load_multiple_files
 def parse_args() -> argparse.Namespace:
     """
     Parse command line arguments for AMICA execution.
-    
+
     Returns
     -------
     args : argparse.Namespace
@@ -53,13 +53,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='AMICA: Adaptive Mixture ICA'
     )
-    
+
     # Required arguments
     parser.add_argument(
         'paramfile',
         help='Parameter file in JSON format'
     )
-    
+
     # Optional arguments
     parser.add_argument(
         '--outdir',
@@ -76,30 +76,30 @@ def parse_args() -> argparse.Namespace:
         help='Verbose output',
         action='store_true'
     )
-    
+
     return parser.parse_args()
 
 
 def load_params(paramfile: str, default_paramfile: Optional[str] = None) -> Dict[str, Any]:
     """
     Load and validate AMICA parameters from JSON configuration file.
-    
+
     The function loads default parameters from default_paramfile (if provided),
     then updates them with user-provided parameters from paramfile.
-    
+
     Required parameters in paramfile are:
     - files: List of data files to process
     - num_samples: List of sample counts per file
     - data_dim: Number of channels/dimensions
     - field_dim: List of field dimensions per file
-    
+
     Parameters
     ----------
     paramfile : str
         Path to JSON parameter file with user settings
     default_paramfile : str, optional
         Path to JSON file with default parameters
-        
+
     Returns
     -------
     params : dict
@@ -111,12 +111,12 @@ def load_params(paramfile: str, default_paramfile: Optional[str] = None) -> Dict
             params = json.load(f)
     else:
         params = {}
-        
+
     # Update with user parameters
     with open(paramfile) as f:
         user_params = json.load(f)
         params.update(user_params)
-        
+
     # Required parameters
     required = {
         'files',
@@ -124,22 +124,22 @@ def load_params(paramfile: str, default_paramfile: Optional[str] = None) -> Dict
         'data_dim',
         'field_dim'
     }
-    
+
     missing = required - set(params.keys())
     if missing:
         raise ValueError(
             f"Missing required parameters: {', '.join(missing)}")
-            
+
     return params
 
 
 def setup_logging(verbose: bool = False):
     """
     Configure logging for AMICA execution.
-    
+
     Sets up logging with appropriate level and format. When verbose is True,
     DEBUG level messages are included, otherwise only INFO and above are shown.
-    
+
     Parameters
     ----------
     verbose : bool
@@ -155,7 +155,7 @@ def setup_logging(verbose: bool = False):
 def main():
     """
     Main entry point for AMICA command-line execution.
-    
+
     This function orchestrates the AMICA workflow:
     1. Parses command line arguments
     2. Sets up logging
@@ -163,51 +163,51 @@ def main():
     4. Loads data from binary files
     5. Initializes and fits the AMICA model
     6. Saves results to the specified output directory
-    
+
     The execution can be customized through the parameter file and
     command line arguments.
     """
     # Parse arguments
     args = parse_args()
-    
+
     # Setup logging
     setup_logging(args.verbose)
     logger = logging.getLogger('AMICA')
-    
+
     # Load parameters
     logger.info(f"Loading parameters from {args.paramfile}")
     params = load_params(args.paramfile)
-    
+
     # Load data
     logger.info("Loading data files:")
     for f in params['files']:
         logger.info(f"  {f}")
-        
+
     data = load_multiple_files(
         params['files'],
         params['data_dim'],
         params['field_dim'],
         params['num_samples']
     )
-    
+
     # Create output directory
     outdir = Path(args.outdir)
     if not outdir.exists():
         outdir.mkdir(parents=True)
-        
+
     # Initialize AMICA
     model = AMICA(
         params_file=args.paramfile,
         outdir=str(outdir),
         seed=args.seed
     )
-    
+
     # Fit model
     logger.info("Fitting AMICA model")
     model.fit(data)
-    
+
     logger.info(f"Results saved to {outdir}")
-    
+
 
 if __name__ == '__main__':
     main()

@@ -34,7 +34,7 @@ def load_data_file(
 ) -> np.ndarray:
     """
     Load data from binary file in Fortran format.
-    
+
     Parameters
     ----------
     filepath : str
@@ -49,7 +49,7 @@ def load_data_file(
         Data type (default: float64)
     byte_size : int
         Size of each value in bytes (default: 4)
-        
+
     Returns
     -------
     data : ndarray
@@ -57,7 +57,7 @@ def load_data_file(
     """
     # Calculate record length
     recl = byte_size * data_dim
-    
+
     # Open file in direct access mode
     with open(filepath, 'rb') as f:
         # Read data in chunks
@@ -67,7 +67,7 @@ def load_data_file(
                 # Read one record
                 record = np.fromfile(f, dtype=dtype, count=data_dim)
                 data[:, i*field_dim + j] = record
-                
+
     return data
 
 
@@ -81,7 +81,7 @@ def load_multiple_files(
 ) -> np.ndarray:
     """
     Load and concatenate data from multiple binary files.
-    
+
     Parameters
     ----------
     filepaths : list of str
@@ -96,7 +96,7 @@ def load_multiple_files(
         Data type (default: float64)
     byte_size : int
         Size of each value in bytes (default: 4)
-        
+
     Returns
     -------
     data : ndarray
@@ -104,10 +104,10 @@ def load_multiple_files(
     """
     # Calculate total samples
     total_samples = sum(fd * ns for fd, ns in zip(field_dims, num_samples))
-    
+
     # Allocate output array
     data = np.zeros((data_dim, total_samples), dtype=dtype)
-    
+
     # Load each file
     idx = 0
     for filepath, field_dim, n_samples in zip(filepaths, field_dims, num_samples):
@@ -116,7 +116,7 @@ def load_multiple_files(
         samples = field_dim * n_samples
         data[:, idx:idx+samples] = file_data
         idx += samples
-        
+
     return data
 
 
@@ -130,7 +130,7 @@ def preprocess_data(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Preprocess data by removing mean and applying sphering transformation.
-    
+
     This function performs two main preprocessing steps:
     1. Mean removal: Subtracts the temporal mean from each channel
     2. Sphering: Applies a linear transformation to decorrelate the signals
@@ -138,10 +138,10 @@ def preprocess_data(
        approximately:
        - Exact: W = Λ^(-1/2) E^T where Λ, E are eigenvalues/vectors of covariance
        - Approximate: W = Λ^(-1/2) E^T (faster but less precise)
-       
+
     Optionally reduces dimensionality by keeping only the top components based on
     either a fixed number (pcakeep) or an energy threshold (pcadb).
-    
+
     Parameters
     ----------
     data : ndarray
@@ -156,7 +156,7 @@ def preprocess_data(
         Number of components to keep
     pcadb : float, optional
         dB threshold for keeping components
-        
+
     Returns
     -------
     data : ndarray
@@ -167,27 +167,27 @@ def preprocess_data(
         Sphering matrix (or identity if do_sphere=False)
     """
     data_dim = data.shape[0]
-    
+
     # Remove mean if requested
     if do_mean:
         mean = np.mean(data, axis=1, keepdims=True)
         data = data - mean
     else:
         mean = np.zeros((data_dim, 1))
-        
+
     # Compute sphering matrix if requested
     if do_sphere:
         # Compute covariance
         cov = np.cov(data)
-        
+
         # Eigenvalue decomposition
         evals, evecs = np.linalg.eigh(cov)
-        
+
         # Sort in descending order
         idx = np.argsort(evals)[::-1]
         evals = evals[idx]
         evecs = evecs[:, idx]
-        
+
         # Determine number of components to keep
         if pcakeep is not None:
             n_comp = min(pcakeep, len(evals))
@@ -196,24 +196,24 @@ def preprocess_data(
             n_comp = np.sum(db > -pcadb)
         else:
             n_comp = len(evals)
-            
+
         # Create sphering matrix
         if do_approx_sphere:
             # Approximate sphering (faster but less accurate)
             sphere = np.dot(
-                np.diag(1.0/np.sqrt(evals[:n_comp])), 
+                np.diag(1.0/np.sqrt(evals[:n_comp])),
                 evecs[:, :n_comp].T)
         else:
             # Exact sphering
             sphere = np.linalg.inv(
                 np.dot(np.diag(np.sqrt(evals[:n_comp])),
                       evecs[:, :n_comp].T))
-        
+
         # Apply sphering
         data = np.dot(sphere, data)
     else:
         sphere = np.eye(data_dim)
-        
+
     return data, mean, sphere
 
 
@@ -236,7 +236,7 @@ def save_results(
 ):
     """
     Save AMICA results to disk.
-    
+
     Parameters
     ----------
     outdir : str
@@ -273,7 +273,7 @@ def save_results(
     outdir = Path(outdir)
     if not outdir.exists():
         outdir.mkdir(parents=True)
-        
+
     # Save parameters
     params = {
         'A': A,
@@ -288,20 +288,20 @@ def save_results(
         'sphere': sphere,
         'comp_list': comp_list
     }
-    
+
     for name, param in params.items():
         if compress:
             np.savez_compressed(outdir / f"{name}.npz", param)
         else:
             np.save(outdir / f"{name}.npy", param)
-            
+
     # Save optimization history
     history = {
         'll': np.array(ll)
     }
     if nd is not None:
         history['nd'] = np.array(nd)
-        
+
     for name, hist in history.items():
         if compress:
             np.savez_compressed(outdir / f"{name}.npz", hist)
@@ -315,14 +315,14 @@ def load_results(
 ) -> dict:
     """
     Load saved AMICA results from disk.
-    
+
     Parameters
     ----------
     indir : str
         Input directory containing saved results
     compressed : bool
         Whether files are compressed
-        
+
     Returns
     -------
     results : dict
@@ -330,13 +330,13 @@ def load_results(
     """
     indir = Path(indir)
     results = {}
-    
+
     # Parameter names to load
     param_names = [
         'A', 'W', 'c', 'mu', 'alpha', 'beta', 'rho', 'gm',
         'mean', 'sphere', 'comp_list', 'll', 'nd'
     ]
-    
+
     # Load each parameter
     for name in param_names:
         filepath = indir / f"{name}.{'npz' if compressed else 'npy'}"
@@ -345,5 +345,5 @@ def load_results(
                 results[name] = np.load(filepath)['arr_0']
             else:
                 results[name] = np.load(filepath)
-                
+
     return results

@@ -1,8 +1,8 @@
 """
 pyAMICA: Python implementation of Adaptive Mixture ICA algorithm.
 
-This package provides a Python implementation of the Adaptive Mixture ICA (AMICA) 
-algorithm for blind source separation using adaptive mixtures of independent 
+This package provides a Python implementation of the Adaptive Mixture ICA (AMICA)
+algorithm for blind source separation using adaptive mixtures of independent
 component analyzers.
 
 Main Features:

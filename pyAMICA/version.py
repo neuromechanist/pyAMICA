@@ -28,7 +28,7 @@ CLASSIFIERS = ["Development Status :: 3 - Alpha",
 description = "pyAMICA: Python implementation of Adaptive Mixture ICA algorithm"
 # Long description will go up on the pypi page
 long_description = """
-AMICA (Adaptive Mixture ICA) is an advanced blind source separation algorithm 
+AMICA (Adaptive Mixture ICA) is an advanced blind source separation algorithm
 that uses adaptive mixtures of independent component analyzers. This implementation provides:
 
 - Multiple source models
