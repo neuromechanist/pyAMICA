@@ -66,7 +66,7 @@ def load_data_file(
             for j in range(field_dim):
                 # Read one record
                 record = np.fromfile(f, dtype=dtype, count=data_dim)
-                data[:, i*field_dim + j] = record
+                data[:, i * field_dim + j] = record
 
     return data
 
@@ -114,7 +114,7 @@ def load_multiple_files(
         file_data = load_data_file(
             filepath, data_dim, field_dim, n_samples, dtype, byte_size)
         samples = field_dim * n_samples
-        data[:, idx:idx+samples] = file_data
+        data[:, idx:idx + samples] = file_data
         idx += samples
 
     return data
@@ -201,13 +201,13 @@ def preprocess_data(
         if do_approx_sphere:
             # Approximate sphering (faster but less accurate)
             sphere = np.dot(
-                np.diag(1.0/np.sqrt(evals[:n_comp])),
+                np.diag(1.0 / np.sqrt(evals[:n_comp])),
                 evecs[:, :n_comp].T)
         else:
             # Exact sphering
             sphere = np.linalg.inv(
                 np.dot(np.diag(np.sqrt(evals[:n_comp])),
-                      evecs[:, :n_comp].T))
+                       evecs[:, :n_comp].T))
 
         # Apply sphering
         data = np.dot(sphere, data)

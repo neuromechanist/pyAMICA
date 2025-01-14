@@ -189,7 +189,7 @@ def plot_model_comparison(
             ax = axes[i, h + 1]
 
             # Get reconstruction
-            S = np.dot(results['W'][:, :, h], data[:, t:t+1])
+            S = np.dot(results['W'][:, :, h], data[:, t:t + 1])
             X_hat = np.dot(results['A'][:, results['comp_list'][:, h]], S)
 
             ax.plot(X_hat, 'r-')
@@ -301,7 +301,7 @@ def plot_pdf_fits(
             pdf = alpha * beta * pdf
 
             ax.plot(x, pdf, '--', alpha=0.5,
-                   label=f'Mix {j+1} (α={alpha:.2f}, ρ={rho:.2f})')
+                    label=f'Mix {j+1} (α={alpha:.2f}, ρ={rho:.2f})')
             pdf_total += pdf
 
         ax.plot(x, pdf_total, 'r-', label='Total')

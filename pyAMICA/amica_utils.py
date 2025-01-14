@@ -135,7 +135,7 @@ def identify_shared_components(A, W, comp_list, comp_thresh=0.99):
 
     # Compare components between models
     for h1 in range(num_models):
-        for h2 in range(h1+1, num_models):
+        for h2 in range(h1 + 1, num_models):
             for i1 in range(data_dim):
                 for i2 in range(data_dim):
                     k1 = comp_list[i1, h1]

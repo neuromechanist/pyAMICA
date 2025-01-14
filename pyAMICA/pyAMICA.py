@@ -310,13 +310,13 @@ class AMICA:
             if self.do_approx_sphere:
                 # Approximate sphering (faster but less accurate)
                 self.sphere = np.dot(
-                    np.diag(1.0/np.sqrt(evals[:n_comp])),
-                    evecs[:,:n_comp].T)
+                    np.diag(1.0 / np.sqrt(evals[:n_comp])),
+                    evecs[:, :n_comp].T)
             else:
                 # Exact sphering
                 self.sphere = linalg.inv(
                     np.dot(np.diag(np.sqrt(evals[:n_comp])),
-                          evecs[:,:n_comp].T))
+                           evecs[:, :n_comp].T))
 
             # Apply sphering
             data = np.dot(self.sphere, data)
@@ -332,26 +332,26 @@ class AMICA:
             self.A = np.zeros((self.data_dim, self.num_comps))
             for h in range(self.num_models):
                 if not hasattr(self, 'fix_init') or not self.fix_init:
-                    self.A[:, h*self.data_dim:(h+1)*self.data_dim] = (
-                        np.eye(self.data_dim) +
-                        0.01 * (0.5 - self.rng.rand(self.data_dim, self.data_dim))
+                    self.A[:, h * self.data_dim:(h + 1) * self.data_dim] = (
+                        np.eye(self.data_dim) + 0.01 * (
+                            0.5 - self.rng.rand(self.data_dim, self.data_dim))
                     )
                 else:
-                    self.A[:, h*self.data_dim:(h+1)*self.data_dim] = np.eye(self.data_dim)
+                    self.A[:, h * self.data_dim:(h + 1) * self.data_dim] = np.eye(self.data_dim)
 
         # Initialize component assignments
         self.comp_list = np.zeros((self.data_dim, self.num_models), dtype=int)
         self.comp_used = np.ones(self.num_comps, dtype=bool)
         for h in range(self.num_models):
-            self.comp_list[:,h] = np.arange(h*self.data_dim, (h+1)*self.data_dim)
+            self.comp_list[:, h] = np.arange(h * self.data_dim, (h + 1) * self.data_dim)
 
         # Initialize mixture parameters
         if self.mu is None:
             self.mu = np.zeros((self.num_mix, self.num_comps))
             for k in range(self.num_comps):
-                self.mu[:,k] = np.linspace(-1, 1, self.num_mix)
+                self.mu[:, k] = np.linspace(-1, 1, self.num_mix)
                 if not hasattr(self, 'fix_init') or not self.fix_init:
-                    self.mu[:,k] += 0.05 * (1 - 2*self.rng.rand(self.num_mix))
+                    self.mu[:, k] += 0.05 * (1 - 2 * self.rng.rand(self.num_mix))
 
         if self.alpha is None:
             self.alpha = np.ones((self.num_mix, self.num_comps)) / self.num_mix
@@ -409,13 +409,13 @@ class AMICA:
             dpdf = -np.sign(y) * pdf
         elif rho == 2.0:
             # Gaussian distribution
-            pdf = np.exp(-y*y) / np.sqrt(np.pi)
+            pdf = np.exp(-y * y) / np.sqrt(np.pi)
             dpdf = -2 * y * pdf
         else:
             # Generalized Gaussian distribution
             pdf = np.exp(-np.power(np.abs(y), rho)) / (
-                2.0 * gammaln(1.0 + 1.0/rho))
-            dpdf = -rho * np.power(np.abs(y), rho-1) * np.sign(y) * pdf
+                2.0 * gammaln(1.0 + 1.0 / rho))
+            dpdf = -rho * np.power(np.abs(y), rho - 1) * np.sign(y) * pdf
 
         return pdf, dpdf
 
@@ -451,7 +451,7 @@ class AMICA:
         # Process data in blocks
         for start in range(0, self.data.shape[1], self.block_size):
             end = min(start + self.block_size, self.data.shape[1])
-            X = self.data[:,start:end]
+            X = self.data[:, start:end]
 
             # Get block updates
             block_updates = self._get_block_updates(X)
@@ -499,21 +499,21 @@ class AMICA:
         # Compute activations for each model
         b = np.zeros((batch_size, self.data_dim, self.num_models))
         for h in range(self.num_models):
-            b[:,:,h] = np.dot(X.T, self.W[:,:,h]) - self.c[:,h]
+            b[:, :, h] = np.dot(X.T, self.W[:, :, h]) - self.c[:, h]
 
         # Compute mixture probabilities and responsibilities
         z = np.zeros((batch_size, self.data_dim, self.num_mix, self.num_models))
         for h in range(self.num_models):
             for i in range(self.data_dim):
-                k = self.comp_list[i,h]
+                k = self.comp_list[i, h]
                 for j in range(self.num_mix):
-                    y = self.beta[j,k] * (b[:,i,h] - self.mu[j,k])
+                    y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
 
                     # Compute PDF and its derivative
-                    pdf, dpdf = self._compute_pdf(y, self.rho[j,k])
+                    pdf, dpdf = self._compute_pdf(y, self.rho[j, k])
 
                     # Compute log probability
-                    z[:,i,j,h] = np.log(self.alpha[j,k]) + np.log(self.beta[j,k]) + np.log(pdf)
+                    z[:, i, j, h] = np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + np.log(pdf)
 
         # Normalize responsibilities
         z = np.exp(z - np.max(z, axis=2, keepdims=True))
@@ -522,10 +522,10 @@ class AMICA:
         # Compute model probabilities
         v = np.zeros((batch_size, self.num_models))
         for h in range(self.num_models):
-            v[:,h] = np.log(self.gm[h])
+            v[:, h] = np.log(self.gm[h])
             for i in range(self.data_dim):
-                k = self.comp_list[i,h]
-                v[:,h] += np.sum(z[:,i,:,h] * z[:,i,:,h], axis=1)
+                k = self.comp_list[i, h]
+                v[:, h] += np.sum(z[:, i, :, h] * z[:, i, :, h], axis=1)
 
         v = np.exp(v - np.max(v, axis=1, keepdims=True))
         v /= np.sum(v, axis=1, keepdims=True)
@@ -535,53 +535,53 @@ class AMICA:
 
         for h in range(self.num_models):
             # Model weights
-            updates['dgm'][h] = np.sum(v[:,h])
+            updates['dgm'][h] = np.sum(v[:, h])
 
             for i in range(self.data_dim):
-                k = self.comp_list[i,h]
+                k = self.comp_list[i, h]
 
                 # Mixture weights
                 for j in range(self.num_mix):
-                    updates['dalpha'][j,k] += np.sum(v[:,h] * z[:,i,j,h])
+                    updates['dalpha'][j, k] += np.sum(v[:, h] * z[:, i, j, h])
 
                     # Component means
-                    y = self.beta[j,k] * (b[:,i,h] - self.mu[j,k])
-                    pdf, dpdf = self._compute_pdf(y, self.rho[j,k])
-                    updates['dmu'][j,k] += np.sum(v[:,h] * z[:,i,j,h] * dpdf)
+                    y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
+                    pdf, dpdf = self._compute_pdf(y, self.rho[j, k])
+                    updates['dmu'][j, k] += np.sum(v[:, h] * z[:, i, j, h] * dpdf)
 
                     # Scale parameters
-                    updates['dbeta'][j,k] += np.sum(
-                        v[:,h] * z[:,i,j,h] * y * dpdf)
+                    updates['dbeta'][j, k] += np.sum(
+                        v[:, h] * z[:, i, j, h] * y * dpdf)
 
                     # Shape parameters
-                    if self.rho[j,k] not in (1.0, 2.0):
+                    if self.rho[j, k] not in (1.0, 2.0):
                         logy = np.log(np.abs(y))
-                        updates['drho'][j,k] += np.sum(
-                            v[:,h] * z[:,i,j,h] *
-                            np.power(np.abs(y), self.rho[j,k]) * logy)
+                        updates['drho'][j, k] += np.sum(
+                            v[:, h] * z[:, i, j, h] * np.power(
+                                np.abs(y), self.rho[j, k]) * logy)
 
                     if self.do_newton:
                         # Newton optimization parameters
-                        updates['dbaralpha'][j,i,h] += np.sum(v[:,h] * z[:,i,j,h])
-                        updates['dsigma2'][i,h] += np.sum(v[:,h] * b[:,i,h]**2)
-                        updates['dlambda'][i,h] += np.sum(
-                            v[:,h] * z[:,i,j,h] * (dpdf * y - 1)**2)
-                        updates['dkappa'][i,h] += np.sum(
-                            v[:,h] * z[:,i,j,h] * dpdf**2)
+                        updates['dbaralpha'][j, i, h] += np.sum(v[:, h] * z[:, i, j, h])
+                        updates['dsigma2'][i, h] += np.sum(v[:, h] * b[:, i, h]**2)
+                        updates['dlambda'][i, h] += np.sum(
+                            v[:, h] * z[:, i, j, h] * (dpdf * y - 1)**2)
+                        updates['dkappa'][i, h] += np.sum(
+                            v[:, h] * z[:, i, j, h] * dpdf**2)
 
             # Unmixing matrices
             g = np.zeros((batch_size, self.data_dim))
             for i in range(self.data_dim):
-                k = self.comp_list[i,h]
+                k = self.comp_list[i, h]
                 for j in range(self.num_mix):
-                    y = self.beta[j,k] * (b[:,i,h] - self.mu[j,k])
-                    _, dpdf = self._compute_pdf(y, self.rho[j,k])
-                    g[:,i] += self.beta[j,k] * z[:,i,j,h] * dpdf
+                    y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
+                    _, dpdf = self._compute_pdf(y, self.rho[j, k])
+                    g[:, i] += self.beta[j, k] * z[:, i, j, h] * dpdf
 
-            updates['dA'][:,:,h] += np.dot(X, v[:,h:h+1] * g)
+            updates['dA'][:, :, h] += np.dot(X, v[:, h: h + 1] * g)
 
             # Bias terms
-            updates['dc'][:,h] += np.sum(v[:,h:h+1] * g, axis=0)
+            updates['dc'][:, h] += np.sum(v[:, h: h + 1] * g, axis=0)
 
         return updates
 
@@ -621,17 +621,17 @@ class AMICA:
         # Update unmixing matrices
         if self.do_newton and self.iter >= self.newt_start:
             # Update Newton parameters
-            self.sigma2 = updates['dsigma2'] / updates['dgm'][:,None]
-            self.lambda_ = updates['dlambda'] / updates['dgm'][:,None]
-            self.kappa = updates['dkappa'] / updates['dgm'][:,None]
-            self.baralpha = updates['dbaralpha'] / updates['dgm'][:,None,None]
+            self.sigma2 = updates['dsigma2'] / updates['dgm'][:, None]
+            self.lambda_ = updates['dlambda'] / updates['dgm'][:, None]
+            self.kappa = updates['dkappa'] / updates['dgm'][:, None]
+            self.baralpha = updates['dbaralpha'] / updates['dgm'][:, None, None]
 
             # Newton updates
             self.lrate = min(self.newtrate,
-                           self.lrate + min(1.0/self.newt_ramp, self.lrate))
+                             self.lrate + min(1.0 / self.newt_ramp, self.lrate))
 
             for h in range(self.num_models):
-                dA = -updates['dA'][:,:,h] / updates['dgm'][h]
+                dA = -updates['dA'][:, :, h] / updates['dgm'][h]
                 dA[np.diag_indices_from(dA)] += 1
 
                 # Compute Newton direction
@@ -639,38 +639,38 @@ class AMICA:
                 for i in range(self.data_dim):
                     for j in range(self.data_dim):
                         if i == j:
-                            H[i,i] = dA[i,i] / self.lambda_[i,h]
+                            H[i, i] = dA[i, i] / self.lambda_[i, h]
                         else:
-                            sk1 = self.sigma2[i,h] * self.kappa[j,h]
-                            sk2 = self.sigma2[j,h] * self.kappa[i,h]
-                            if sk1*sk2 > 1.0:
-                                H[i,j] = (sk1*dA[i,j] - dA[j,i]) / (sk1*sk2 - 1.0)
+                            sk1 = self.sigma2[i, h] * self.kappa[j, h]
+                            sk2 = self.sigma2[j, h] * self.kappa[i, h]
+                            if sk1 * sk2 > 1.0:
+                                H[i, j] = (sk1 * dA[i, j] - dA[j, i]) / (sk1 * sk2 - 1.0)
 
-                self.A[:,self.comp_list[:,h]] += self.lrate * np.dot(
-                    self.A[:,self.comp_list[:,h]], H)
+                self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
+                    self.A[:, self.comp_list[:, h]], H)
         else:
             # Natural gradient updates
             self.lrate = min(self.lrate0,
-                           self.lrate + min(1.0/self.newt_ramp, self.lrate))
+                             self.lrate + min(1.0 / self.newt_ramp, self.lrate))
 
             for h in range(self.num_models):
-                dA = -updates['dA'][:,:,h] / updates['dgm'][h]
+                dA = -updates['dA'][:, :, h] / updates['dgm'][h]
                 dA[np.diag_indices_from(dA)] += 1
 
-                self.A[:,self.comp_list[:,h]] += self.lrate * np.dot(
-                    self.A[:,self.comp_list[:,h]], dA)
+                self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
+                    self.A[:, self.comp_list[:, h]], dA)
 
         # Update bias terms
-        self.c += self.lrate * updates['dc'] / updates['dgm'][:,None]
+        self.c += self.lrate * updates['dc'] / updates['dgm'][:, None]
 
         # Rescale parameters if requested
         if self.doscaling and self.iter % self.scalestep == 0:
             for k in range(self.num_comps):
-                scale = np.sqrt(np.sum(self.A[:,k]**2))
+                scale = np.sqrt(np.sum(self.A[:, k]**2))
                 if scale > 0:
-                    self.A[:,k] /= scale
-                    self.mu[:,k] *= scale
-                    self.beta[:,k] /= scale
+                    self.A[:, k] /= scale
+                    self.mu[:, k] *= scale
+                    self.beta[:, k] /= scale
 
         # Update unmixing matrices
         self._update_unmixing_matrices()
@@ -682,9 +682,8 @@ class AMICA:
         if self.use_grad_norm:
             dA = np.zeros_like(self.A)
             for h in range(self.num_models):
-                dA[:,self.comp_list[:,h]] += self.gm[h] * updates['dA'][:,:,h]
-            self.nd.append(np.sqrt(np.sum(dA**2) /
-                                 (self.data_dim * self.num_comps)))
+                dA[:, self.comp_list[:, h]] += self.gm[h] * updates['dA'][:, :, h]
+            self.nd.append(np.sqrt(np.sum(dA**2) / (self.data_dim * self.num_comps)))
 
     def _optimize(self):
         """Main optimization loop."""
@@ -709,16 +708,14 @@ class AMICA:
                 break
 
             # Reject outliers if requested
-            if (self.do_reject and self.maxrej > 0 and
-                ((iter == self.rejstart) or
-                 (((iter - self.rejstart) % self.rejint == 0) and
-                  (numrej < self.maxrej)))):
+            if (self.do_reject and self.maxrej > 0 and (
+                    (iter == self.rejstart) or (
+                        ((iter - self.rejstart) % self.rejint == 0) and (numrej < self.maxrej)))):
                 self._reject_outliers()
                 numrej += 1
 
             # Share components if requested
-            if (self.share_comps and iter >= self.share_start and
-                (iter - self.share_start) % self.share_int == 0):
+            if (self.share_comps and iter >= self.share_start and (iter - self.share_start) % self.share_int == 0):
                 self.comp_list, self.comp_used = identify_shared_components(
                     self.A, self.W, self.comp_list, self.comp_thresh)
 
@@ -869,7 +866,7 @@ class AMICA:
 
         S = np.zeros((self.num_comps, data.shape[1], self.num_models))
         for h in range(self.num_models):
-            idx = self.comp_list[:,h]
-            S[idx,:,h] = np.dot(self.W[:,:,h], data)
+            idx = self.comp_list[:, h]
+            S[idx, :, h] = np.dot(self.W[:, :, h], data)
 
         return S

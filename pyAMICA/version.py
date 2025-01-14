@@ -38,19 +38,19 @@ that uses adaptive mixtures of independent component analyzers. This implementat
 - Outlier rejection
 - Data preprocessing (mean removal, sphering)
 
-For more information, visit: http://github.com/CSC-UW/pyAMICA
+For more information, visit: http://github.com/neuromechanist/pyAMICA
 """
 
 NAME = "pyAMICA"
-MAINTAINER = "Graham Findlay"
-MAINTAINER_EMAIL = "gfindlay@wisc.edu"
+MAINTAINER = "Seyed Yahya Shirazi"
+MAINTAINER_EMAIL = "shirazi@ieee.org"
 DESCRIPTION = description
 LONG_DESCRIPTION = long_description
-URL = "http://github.com/CSC-UW/pyAMICA"
+URL = "http://github.com/neuromechanist/pyAMICA"
 DOWNLOAD_URL = ""
 LICENSE = "MIT"
-AUTHOR = "Graham Findlay"
-AUTHOR_EMAIL = "gfindlay@wisc.edu"
+AUTHOR = "Seyed Yahya Shirazi"
+AUTHOR_EMAIL = "shirazi@ieee.org"
 PLATFORMS = "OS Independent"
 MAJOR = _version_major
 MINOR = _version_minor
@@ -58,4 +58,4 @@ MICRO = _version_micro
 VERSION = __version__
 PACKAGE_DATA = {'pyAMICA': [pjoin('data', '*')]}
 REQUIRES = ["numpy", "scipy", "matplotlib", "tqdm", "json5"]
-PYTHON_REQUIRES = ">= 3.7"
+PYTHON_REQUIRES = ">= 3.10"
