@@ -28,9 +28,7 @@ def load_data_file(
     filepath: str,
     data_dim: int,
     field_dim: int,
-    num_samples: int,
-    dtype: np.dtype = np.float64,
-    byte_size: int = 4
+    dtype: np.dtype = np.float64
 ) -> np.ndarray:
     """
     Load data from binary file in Fortran format.
@@ -42,31 +40,22 @@ def load_data_file(
     data_dim : int
         Number of channels/dimensions
     field_dim : int
-        Number of samples per field
-    num_samples : int
-        Number of samples to read
+        Number of samples per field/channel
     dtype : np.dtype
         Data type (default: float64)
-    byte_size : int
-        Size of each value in bytes (default: 4)
 
     Returns
     -------
     data : ndarray
-        Loaded data array of shape (data_dim, samples)
+        Loaded data array of shape (data_dim, field_dim)
     """
-    # Calculate record length
-    recl = byte_size * data_dim
-
-    # Open file in direct access mode
+    # Read entire file at once
     with open(filepath, 'rb') as f:
-        # Read data in chunks
-        data = np.zeros((data_dim, field_dim * num_samples), dtype=dtype)
-        for i in range(num_samples):
-            for j in range(field_dim):
-                # Read one record
-                record = np.fromfile(f, dtype=dtype, count=data_dim)
-                data[:, i * field_dim + j] = record
+        # Read all data and reshape considering Fortran order
+        data = np.fromfile(f, dtype=dtype)
+        # Reshape to (field_dim, data_dim) and transpose to get (data_dim, field_dim)
+        # Using Fortran order 'F' since data is stored in column-major format
+        data = data.reshape((field_dim, data_dim), order='F').T
 
     return data
 
@@ -75,9 +64,7 @@ def load_multiple_files(
     filepaths: List[str],
     data_dim: int,
     field_dims: List[int],
-    num_samples: List[int],
-    dtype: np.dtype = np.float64,
-    byte_size: int = 4
+    dtype: np.dtype = np.float64
 ) -> np.ndarray:
     """
     Load and concatenate data from multiple binary files.
@@ -90,32 +77,26 @@ def load_multiple_files(
         Number of channels/dimensions
     field_dims : list of int
         Number of samples per field for each file
-    num_samples : list of int
-        Number of samples to read from each file
     dtype : np.dtype
         Data type (default: float64)
-    byte_size : int
-        Size of each value in bytes (default: 4)
 
     Returns
     -------
     data : ndarray
-        Concatenated data array
+        Concatenated data array of shape (data_dim, total_samples)
     """
     # Calculate total samples
-    total_samples = sum(fd * ns for fd, ns in zip(field_dims, num_samples))
+    total_samples = sum(field_dims)
 
     # Allocate output array
     data = np.zeros((data_dim, total_samples), dtype=dtype)
 
     # Load each file
     idx = 0
-    for filepath, field_dim, n_samples in zip(filepaths, field_dims, num_samples):
-        file_data = load_data_file(
-            filepath, data_dim, field_dim, n_samples, dtype, byte_size)
-        samples = field_dim * n_samples
-        data[:, idx:idx + samples] = file_data
-        idx += samples
+    for filepath, field_dim in zip(filepaths, field_dims):
+        file_data = load_data_file(filepath, data_dim, field_dim, dtype)
+        data[:, idx:idx + field_dim] = file_data
+        idx += field_dim
 
     return data
 

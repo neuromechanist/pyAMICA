@@ -14,9 +14,8 @@ Example usage:
 
 The parameter file should be in JSON format and must include:
 - files: List of binary data files to process
-- num_samples: Number of samples per file
 - data_dim: Number of channels/dimensions
-- field_dim: Number of samples per field for each file
+- field_dim: Number of samples per channel for each file
 
 Optional parameters can be included in the JSON file:
 - num_models: Number of models (default: 1)
@@ -87,9 +86,8 @@ def load_params(paramfile: str, default_paramfile: str = None) -> Dict[str, Any]
 
     Required parameters in paramfile are:
     - files: List of data files to process
-    - num_samples: List of sample counts per file
     - data_dim: Number of channels/dimensions
-    - field_dim: List of field dimensions per file
+    - field_dim: List of samples per channel for each file
 
     Parameters
     ----------
@@ -118,7 +116,6 @@ def load_params(paramfile: str, default_paramfile: str = None) -> Dict[str, Any]
     # Required parameters
     required = {
         'files',
-        'num_samples',
         'data_dim',
         'field_dim'
     }
@@ -184,8 +181,7 @@ def main():
     data = load_multiple_files(
         params['files'],
         params['data_dim'],
-        params['field_dim'],
-        params['num_samples']
+        params['field_dim']
     )
 
     # Create output directory

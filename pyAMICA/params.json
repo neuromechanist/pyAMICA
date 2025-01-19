@@ -3,7 +3,6 @@
         "data1.bin",
         "data2.bin"
     ],
-    "num_samples": [100, 100],
     "data_dim": 64,
     "field_dim": [1000, 1000],
     
