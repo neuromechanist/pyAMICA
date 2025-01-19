@@ -64,7 +64,7 @@ def load_multiple_files(
     filepaths: List[str],
     data_dim: int,
     field_dims: List[int],
-    dtype: np.dtype = np.float64
+    dtype: np.dtype = np.float32
 ) -> np.ndarray:
     """
     Load and concatenate data from multiple binary files.
