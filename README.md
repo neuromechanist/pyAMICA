@@ -1,6 +1,8 @@
-# AMICA: Adaptive Mixture ICA
+# [WIP] AMICA: Adaptive Mixture ICA
 
-Python implementation of the Adaptive Mixture ICA algorithm, based on the original Fortran implementation.
+Python implementation of the Adaptive Mixture ICA algorithm, based on the original Fortran implementation. This implementation is designed to be more user-friendly and easier to integrate with other Python libraries.
+
+NOTE: This is a work in progress and may not be fully functional yet. User should not rely on this implementation for any research or production purposes, as the results may not be accurate or reliable.
 
 ## Overview
 
