@@ -385,9 +385,9 @@ class AMICA:
         """Update unmixing matrices from mixing matrix."""
         self.W = get_unmixing_matrices(self.A, self.comp_list)
 
-    def _compute_pdf(self, y: np.ndarray, rho: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _compute_log_pdf(self, y: np.ndarray, rho: float) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Compute PDF value and its derivative for given activation.
+        Compute log PDF value and its derivative for given activation.
 
         Parameters
         ----------
@@ -398,26 +398,28 @@ class AMICA:
 
         Returns
         -------
-        pdf : ndarray
-            PDF values
+        log_pdf : ndarray
+            Log PDF values
         dpdf : ndarray
-            PDF derivatives
+            PDF derivatives (not in log space)
         """
         if rho == 1.0:
             # Laplace distribution
-            pdf = np.exp(-np.abs(y)) / 2.0
+            log_pdf = -np.abs(y) - np.log(2.0)
+            pdf = np.exp(log_pdf)
             dpdf = -np.sign(y) * pdf
         elif rho == 2.0:
             # Gaussian distribution
-            pdf = np.exp(-y * y) / np.sqrt(np.pi)
+            log_pdf = -y * y - 0.5 * np.log(np.pi)
+            pdf = np.exp(log_pdf)
             dpdf = -2 * y * pdf
         else:
             # Generalized Gaussian distribution
-            pdf = np.exp(-np.power(np.abs(y), rho)) / (
-                2.0 * gammaln(1.0 + 1.0 / rho))
+            log_pdf = -np.power(np.abs(y), rho) - np.log(2.0) - gammaln(1.0 + 1.0 / rho)
+            pdf = np.exp(log_pdf)
             dpdf = -rho * np.power(np.abs(y), rho - 1) * np.sign(y) * pdf
 
-        return pdf, dpdf
+        return log_pdf, dpdf
 
     def _get_updates_and_likelihood(self) -> Dict:
         """
@@ -509,11 +511,11 @@ class AMICA:
                 for j in range(self.num_mix):
                     y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
 
-                    # Compute PDF and its derivative
-                    pdf, dpdf = self._compute_pdf(y, self.rho[j, k])
+                    # Compute log PDF and its derivative
+                    log_pdf, dpdf = self._compute_log_pdf(y, self.rho[j, k])
 
-                    # Compute log probability
-                    z[:, i, j, h] = np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + np.log(pdf)
+                    # Compute log probability directly in log space
+                    z[:, i, j, h] = np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + log_pdf
 
         # Normalize responsibilities
         z = np.exp(z - np.max(z, axis=2, keepdims=True))
@@ -546,7 +548,7 @@ class AMICA:
 
                     # Component means
                     y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
-                    pdf, dpdf = self._compute_pdf(y, self.rho[j, k])
+                    log_pdf, dpdf = self._compute_log_pdf(y, self.rho[j, k])
                     updates['dmu'][j, k] += np.sum(v[:, h] * z[:, i, j, h] * dpdf)
 
                     # Scale parameters
@@ -575,7 +577,7 @@ class AMICA:
                 k = self.comp_list[i, h]
                 for j in range(self.num_mix):
                     y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
-                    _, dpdf = self._compute_pdf(y, self.rho[j, k])
+                    _, dpdf = self._compute_log_pdf(y, self.rho[j, k])
                     g[:, i] += self.beta[j, k] * z[:, i, j, h] * dpdf
 
             updates['dA'][:, :, h] += np.dot(X, v[:, h: h + 1] * g)
