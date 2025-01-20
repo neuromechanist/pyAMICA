@@ -1,0 +1,68 @@
+{
+    "files": ["pyAMICA/sample_data/eeglab_data.fdt"],
+    "outdir": "./amicaout/",
+    "data_dim": 32,
+    "field_dim": [30504],
+    
+    "num_models": 1,
+    "num_mix": 3,
+    "max_iter": 2000,
+    "num_comps": 32,
+    
+    "do_newton": true,
+    "newt_start": 50,
+    "newt_ramp": 10,
+    "newtrate": 1.0,
+    
+    "do_reject": false,
+    "rejsig": 3.0,
+    "rejstart": 2,
+    "rejint": 3,
+    "maxrej": 3,
+    
+    "lrate": 0.05,
+    "minlrate": 1e-8,
+    "lratefact": 0.5,
+    "rho0": 1.5,
+    "minrho": 1.0,
+    "maxrho": 2.0,
+    "rholrate": 0.05,
+    "rholratefact": 0.5,
+    
+    "invsigmax": 100.0,
+    "invsigmin": 0.0,
+    
+    "do_history": false,
+    "histstep": 10,
+    
+    "do_opt_block": false,
+    "block_size": 512,
+    "blk_min": 256,
+    "blk_max": 1024,
+    "blk_step": 256,
+    
+    "share_comps": false,
+    "comp_thresh": 0.99,
+    "share_start": 100,
+    "share_int": 100,
+    
+    "doscaling": true,
+    "scalestep": 1,
+    
+    "do_sphere": true,
+    "do_mean": true,
+    "do_approx_sphere": false,
+    
+    "pcakeep": 32,
+    "pcadb": 30.0,
+    
+    "writestep": 20,
+    "max_decs": 3,
+    "min_dll": 1e-9,
+    "min_grad_norm": 1e-9,
+    
+    "use_min_dll": true,
+    "use_grad_norm": true,
+    
+    "pdftype": 0
+}
