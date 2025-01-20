@@ -1,5 +1,5 @@
-files ./eeglab_data.fdt
-outdir ./amicaout/
+files /Users/yahya/Documents/git/eeglab_pulls/sample_data/eeglab_data.fdt
+outdir /Users/yahya/Documents/git/eeglab_pulls/sample_data/amicaout/
 block_size 512
 do_opt_block 0
 blk_min 256
