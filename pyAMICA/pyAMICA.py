@@ -76,7 +76,7 @@ import logging
 import json
 from pathlib import Path
 from typing import Dict, Optional, Tuple
-from amica_utils import (
+from .amica_utils import (
     gammaln, determine_block_size, identify_shared_components,
     get_unmixing_matrices
 )

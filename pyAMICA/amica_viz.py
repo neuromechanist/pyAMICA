@@ -35,9 +35,9 @@ These visualizations are essential for:
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Optional, Union, List, Tuple
+from typing import Optional, Union, Tuple
 
-from amica_data import load_results
+from .amica_data import load_results
 
 
 def plot_convergence(
@@ -164,7 +164,6 @@ def plot_model_comparison(
 
     # Get reconstructions for each model
     n_models = results['W'].shape[2]
-    n_channels = data.shape[0]
 
     if figsize is None:
         figsize = (12, 3 * n_examples)
