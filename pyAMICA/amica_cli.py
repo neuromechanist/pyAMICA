@@ -140,11 +140,19 @@ def setup_logging(verbose: bool = False):
     verbose : bool
         Whether to enable verbose (DEBUG level) logging
     """
+    # Get the root logger and remove any existing handlers
+    root = logging.getLogger()
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
+    # Get the AMICA logger and remove any existing handlers
+    logger = logging.getLogger('AMICA')
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    # Set level based on verbose flag
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    logger.setLevel(level)
 
 
 def main():

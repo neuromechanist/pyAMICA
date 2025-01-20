@@ -74,6 +74,7 @@ import numpy as np
 from scipy import linalg
 import logging
 import json
+import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from .amica_utils import (
@@ -228,12 +229,24 @@ class AMICA:
     def _setup_logging(self):
         """Setup logging configuration."""
         self.logger = logging.getLogger("AMICA")
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-            self.logger.setLevel(logging.INFO)
+        
+        # Add console handler for stdout
+        console_handler = logging.StreamHandler()
+        console_formatter = logging.Formatter('%(message)s')
+        console_handler.setFormatter(console_formatter)
+        self.logger.addHandler(console_handler)
+        
+        # Add file handler for out.txt
+        self.outdir = Path(self.outdir)
+        if not self.outdir.exists():
+            self.outdir.mkdir(parents=True)
+        file_handler = logging.FileHandler(self.outdir / 'out.txt', mode='w')
+        file_formatter = logging.Formatter('%(message)s')
+        file_handler.setFormatter(file_formatter)
+        self.logger.addHandler(file_handler)
+        
+        # Prevent propagation to avoid duplicate logging
+        self.logger.propagate = False
 
     def fit(self, data: np.ndarray) -> "AMICA":
         """
@@ -521,19 +534,23 @@ class AMICA:
         z = np.exp(z - np.max(z, axis=2, keepdims=True))
         z /= np.sum(z, axis=2, keepdims=True)
 
-        # Compute model probabilities
+        # Compute model probabilities and log likelihood
         v = np.zeros((batch_size, self.num_models))
+        ll = np.zeros(batch_size)
         for h in range(self.num_models):
             v[:, h] = np.log(self.gm[h])
             for i in range(self.data_dim):
                 k = self.comp_list[i, h]
-                v[:, h] += np.sum(z[:, i, :, h] * z[:, i, :, h], axis=1)
+                # Sum log probabilities across mixture components
+                ll_i = np.log(np.sum(np.exp(z[:, i, :, h]), axis=1))
+                v[:, h] += ll_i
+                ll += ll_i
 
         v = np.exp(v - np.max(v, axis=1, keepdims=True))
         v /= np.sum(v, axis=1, keepdims=True)
 
         # Accumulate parameter updates
-        updates['ll'] = np.sum(np.log(np.sum(v, axis=1)))
+        updates['ll'] = np.sum(ll)
 
         for h in range(self.num_models):
             # Model weights
@@ -695,6 +712,7 @@ class AMICA:
         numdecs = 0
         numincs = 0
         numrej = 0
+        start_time = time.time()
 
         for iter in range(self.max_iter):
             self.iter = iter
@@ -704,6 +722,24 @@ class AMICA:
 
             # Update parameters
             self._update_parameters(updates)
+
+            # Log iteration details in original AMICA format
+            elapsed_time = time.time() - start_time
+            seconds_per_iter = elapsed_time / (iter + 1) if iter > 0 else elapsed_time
+            total_seconds = seconds_per_iter * self.max_iter
+            total_hours = total_seconds / 3600
+            current_seconds = (elapsed_time / 3600 - int(elapsed_time / 3600)) * 3600
+            
+            if len(self.ll) > 1:
+                ll_diff = self.ll[-1] - self.ll[-2]
+                if self.use_grad_norm:
+                    self.logger.info(
+                        f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
+                        f"LL = {self.ll[-1]:13.10f} "
+                        f"nd = {self.nd[-1]:11.10f}, "
+                        f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
+                        f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
+                    )
 
             # Check convergence
             if self._check_convergence(numdecs, numincs):
