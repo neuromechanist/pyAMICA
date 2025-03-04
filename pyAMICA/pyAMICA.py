@@ -243,7 +243,18 @@ class AMICA:
 
     def _setup_logging(self):
         """Setup logging configuration."""
+        # Create main logger
         self.logger = logging.getLogger("AMICA")
+        self.logger.setLevel(logging.INFO)
+        
+        # Ensure output directory exists
+        self.outdir = Path(self.outdir)
+        if not self.outdir.exists():
+            self.outdir.mkdir(parents=True)
+        
+        # Remove any existing handlers
+        for handler in self.logger.handlers[:]:
+            self.logger.removeHandler(handler)
         
         # Add console handler for stdout
         console_handler = logging.StreamHandler()
@@ -252,10 +263,8 @@ class AMICA:
         self.logger.addHandler(console_handler)
         
         # Add file handler for out.txt
-        self.outdir = Path(self.outdir)
-        if not self.outdir.exists():
-            self.outdir.mkdir(parents=True)
-        file_handler = logging.FileHandler(self.outdir / 'out.txt', mode='w')
+        self.file_path = self.outdir / 'out.txt'
+        file_handler = logging.FileHandler(self.file_path, mode='w')
         file_formatter = logging.Formatter('%(message)s')
         file_handler.setFormatter(file_formatter)
         self.logger.addHandler(file_handler)
@@ -277,6 +286,7 @@ class AMICA:
         self : AMICA
             The fitted model.
         """
+        # Log initial message
         self.logger.info("Starting AMICA fitting...")
 
         # Initialize dimensions
@@ -721,6 +731,7 @@ class AMICA:
 
     def _optimize(self):
         """Main optimization loop."""
+        # Log optimization start
         self.logger.info("Starting optimization...")
 
         # Initialize optimization variables
@@ -773,19 +784,23 @@ class AMICA:
                 if len(self.ll) > 1:
                     ll_diff = self.ll[-1] - self.ll[-2]
                     
-                    # Update tqdm progress bar - only show iteration count in the bar itself
-                    # We'll display LL in a separate line after completion
-                    
-                    # Log detailed per-line format if verbose or not using tqdm
-                    if self.verbose or not self.use_tqdm:
-                        if self.use_grad_norm:
-                            self.logger.info(
-                                f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
-                                f"LL = {self.ll[-1]:13.10f} "
-                                f"nd = {self.nd[-1]:11.10f}, "
-                                f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
-                                f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
-                            )
+                    # Always log detailed metrics to the file logger
+                    if self.use_grad_norm:
+                        detailed_log = (
+                            f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
+                            f"LL = {self.ll[-1]:13.10f} "
+                            f"nd = {self.nd[-1]:11.10f}, "
+                            f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
+                            f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
+                        )
+                        
+                        # Always write detailed logs to the file
+                        with open(self.file_path, 'a') as f:
+                            f.write(detailed_log + '\n')
+                        
+                        # Also log to console if verbose or not using tqdm
+                        if self.verbose or not self.use_tqdm:
+                            self.logger.info(detailed_log)
 
                 # Check convergence
                 converged, reason = self._check_convergence(numdecs, numincs)
@@ -819,13 +834,21 @@ class AMICA:
                 
                 # Display final metrics after progress bar is closed
                 if len(self.ll) > 0 and self.use_grad_norm and len(self.nd) > 0:
-                    self.logger.info(f"Final LL: {self.ll[-1]:.6e}, Gradient norm: {self.nd[-1]:.6e}")
+                    final_metrics = f"Final LL: {self.ll[-1]:.6e}, Gradient norm: {self.nd[-1]:.6e}"
+                    self.logger.info(final_metrics)
+                    # Also log to file if using tqdm (since it wouldn't be logged during iterations)
+                    with open(self.file_path, 'a') as f:
+                        f.write(final_metrics + '\n')
             
             # Log convergence reason if available
             if convergence_reason:
                 self.logger.info(convergence_reason)
+                with open(self.file_path, 'a') as f:
+                    f.write(convergence_reason + '\n')
                 
-            self.logger.info(f"Optimization finished after {final_iter+1} iterations")
+            # Log final message (only once)
+            final_message = f"Optimization finished after {final_iter+1} iterations"
+            self.logger.info(final_message)
 
     def _check_convergence(self, numdecs: int, numincs: int) -> Tuple[bool, Optional[str]]:
         """
