@@ -76,7 +76,8 @@ import logging
 import json
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union, Any
+from tqdm import tqdm
 from .amica_utils import (
     gammaln, determine_block_size, identify_shared_components,
     get_unmixing_matrices
@@ -114,11 +115,18 @@ class AMICA:
 
     This class implements the AMICA algorithm for blind source separation using
     adaptive mixtures of independent component analyzers.
+
+    The algorithm provides two progress reporting modes:
+    1. A modern tqdm progress bar (default) showing overall progress and key metrics
+    2. Detailed per-line progress output in the style of the original Fortran implementation
+       (enabled with verbose=True or use_tqdm=False)
     """
 
     def __init__(
         self,
         params_file: Optional[str] = None,
+        use_tqdm: bool = True,
+        verbose: bool = False,
         **kwargs
     ):
         """
@@ -128,9 +136,16 @@ class AMICA:
         ----------
         params_file : str, optional
             Path to JSON parameter file with default values
+        use_tqdm : bool, default=True
+            Whether to use tqdm progress bar (False will use per-line printing)
+        verbose : bool, default=False
+            Whether to enable verbose output (will use per-line printing regardless of use_tqdm)
         **kwargs : dict
             Override default parameters with these values
         """
+        # Store progress bar settings
+        self.use_tqdm = use_tqdm
+        self.verbose = verbose
         # Load default parameters
         params = load_default_params(params_file)
 
@@ -714,7 +729,17 @@ class AMICA:
         numrej = 0
         start_time = time.time()
 
-        for iter in range(self.max_iter):
+        # Determine whether to use tqdm or per-line printing
+        use_tqdm_progress = self.use_tqdm and not self.verbose
+        
+        # Create iterator (with or without tqdm)
+        if use_tqdm_progress:
+            iterator = tqdm(range(self.max_iter), desc="AMICA Optimization",
+                            unit="iter", ncols=100, leave=True)
+        else:
+            iterator = range(self.max_iter)
+
+        for iter in iterator:
             self.iter = iter
 
             # Get updates and likelihood
@@ -723,7 +748,7 @@ class AMICA:
             # Update parameters
             self._update_parameters(updates)
 
-            # Log iteration details in original AMICA format
+            # Calculate metrics for logging/progress
             elapsed_time = time.time() - start_time
             seconds_per_iter = elapsed_time / (iter + 1) if iter > 0 else elapsed_time
             total_seconds = seconds_per_iter * self.max_iter
@@ -732,14 +757,26 @@ class AMICA:
             
             if len(self.ll) > 1:
                 ll_diff = self.ll[-1] - self.ll[-2]
-                if self.use_grad_norm:
-                    self.logger.info(
-                        f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
-                        f"LL = {self.ll[-1]:13.10f} "
-                        f"nd = {self.nd[-1]:11.10f}, "
-                        f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
-                        f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
-                    )
+                
+                # Update tqdm progress bar
+                if use_tqdm_progress and self.use_grad_norm:
+                    iterator.set_postfix({
+                        'LL': f"{self.ll[-1]:.5e}",
+                        'lrate': f"{self.lrate:.5e}",
+                        'grad_norm': f"{self.nd[-1]:.5e}",
+                        'ΔLL': f"{ll_diff:.5e}"
+                    })
+                
+                # Log detailed per-line format if verbose or not using tqdm
+                elif self.verbose or not self.use_tqdm:
+                    if self.use_grad_norm:
+                        self.logger.info(
+                            f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
+                            f"LL = {self.ll[-1]:13.10f} "
+                            f"nd = {self.nd[-1]:11.10f}, "
+                            f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
+                            f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
+                        )
 
             # Check convergence
             if self._check_convergence(numdecs, numincs):
