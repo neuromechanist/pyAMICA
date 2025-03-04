@@ -77,6 +77,7 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+from tqdm import tqdm
 from .amica_utils import (
     gammaln, determine_block_size, identify_shared_components,
     get_unmixing_matrices
@@ -114,11 +115,18 @@ class AMICA:
 
     This class implements the AMICA algorithm for blind source separation using
     adaptive mixtures of independent component analyzers.
+
+    The algorithm provides two progress reporting modes:
+    1. A modern tqdm progress bar (default) showing overall progress and key metrics
+    2. Detailed per-line progress output in the style of the original Fortran implementation
+       (enabled with verbose=True or use_tqdm=False)
     """
 
     def __init__(
         self,
         params_file: Optional[str] = None,
+        use_tqdm: bool = True,
+        verbose: bool = False,
         **kwargs
     ):
         """
@@ -128,9 +136,16 @@ class AMICA:
         ----------
         params_file : str, optional
             Path to JSON parameter file with default values
+        use_tqdm : bool, default=True
+            Whether to use tqdm progress bar (False will use per-line printing)
+        verbose : bool, default=False
+            Whether to enable verbose output (will use per-line printing regardless of use_tqdm)
         **kwargs : dict
             Override default parameters with these values
         """
+        # Store progress bar settings
+        self.use_tqdm = use_tqdm
+        self.verbose = verbose
         # Load default parameters
         params = load_default_params(params_file)
 
@@ -228,7 +243,18 @@ class AMICA:
 
     def _setup_logging(self):
         """Setup logging configuration."""
+        # Create main logger
         self.logger = logging.getLogger("AMICA")
+        self.logger.setLevel(logging.INFO)
+        
+        # Ensure output directory exists
+        self.outdir = Path(self.outdir)
+        if not self.outdir.exists():
+            self.outdir.mkdir(parents=True)
+        
+        # Remove any existing handlers
+        for handler in self.logger.handlers[:]:
+            self.logger.removeHandler(handler)
         
         # Add console handler for stdout
         console_handler = logging.StreamHandler()
@@ -237,10 +263,8 @@ class AMICA:
         self.logger.addHandler(console_handler)
         
         # Add file handler for out.txt
-        self.outdir = Path(self.outdir)
-        if not self.outdir.exists():
-            self.outdir.mkdir(parents=True)
-        file_handler = logging.FileHandler(self.outdir / 'out.txt', mode='w')
+        self.file_path = self.outdir / 'out.txt'
+        file_handler = logging.FileHandler(self.file_path, mode='w')
         file_formatter = logging.Formatter('%(message)s')
         file_handler.setFormatter(file_formatter)
         self.logger.addHandler(file_handler)
@@ -262,6 +286,7 @@ class AMICA:
         self : AMICA
             The fitted model.
         """
+        # Log initial message
         self.logger.info("Starting AMICA fitting...")
 
         # Initialize dimensions
@@ -706,6 +731,7 @@ class AMICA:
 
     def _optimize(self):
         """Main optimization loop."""
+        # Log optimization start
         self.logger.info("Starting optimization...")
 
         # Initialize optimization variables
@@ -713,61 +739,118 @@ class AMICA:
         numincs = 0
         numrej = 0
         start_time = time.time()
+        convergence_reason = None
+        final_iter = 0
 
-        for iter in range(self.max_iter):
-            self.iter = iter
+        # Determine whether to use tqdm or per-line printing
+        use_tqdm_progress = self.use_tqdm and not self.verbose
+        
+        # Create iterator (with or without tqdm)
+        if use_tqdm_progress:
+            # Use minimal progress bar with dynamic width and ASCII characters for better compatibility
+            progress_bar = tqdm(
+                range(self.max_iter), 
+                desc="AMICA", 
+                unit="it",
+                ncols=60,  # Smaller fixed width
+                dynamic_ncols=True,  # Adapt to terminal width
+                ascii=True,  # Use ASCII characters for better compatibility
+                miniters=1,  # Update on every iteration
+                leave=True,
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'  # Simpler format
+            )
+            iterator = progress_bar
+        else:
+            iterator = range(self.max_iter)
 
-            # Get updates and likelihood
-            updates = self._get_updates_and_likelihood()
+        try:
+            for iter in iterator:
+                self.iter = iter
+                final_iter = iter
 
-            # Update parameters
-            self._update_parameters(updates)
+                # Get updates and likelihood
+                updates = self._get_updates_and_likelihood()
 
-            # Log iteration details in original AMICA format
-            elapsed_time = time.time() - start_time
-            seconds_per_iter = elapsed_time / (iter + 1) if iter > 0 else elapsed_time
-            total_seconds = seconds_per_iter * self.max_iter
-            total_hours = total_seconds / 3600
-            current_seconds = (elapsed_time / 3600 - int(elapsed_time / 3600)) * 3600
+                # Update parameters
+                self._update_parameters(updates)
+
+                # Calculate metrics for logging/progress
+                elapsed_time = time.time() - start_time
+                seconds_per_iter = elapsed_time / (iter + 1) if iter > 0 else elapsed_time
+                total_seconds = seconds_per_iter * self.max_iter
+                total_hours = total_seconds / 3600
+                current_seconds = (elapsed_time / 3600 - int(elapsed_time / 3600)) * 3600
+                
+                if len(self.ll) > 1:
+                    ll_diff = self.ll[-1] - self.ll[-2]
+                    
+                    # Always log detailed metrics to the file logger
+                    if self.use_grad_norm:
+                        detailed_log = (
+                            f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
+                            f"LL = {self.ll[-1]:13.10f} "
+                            f"nd = {self.nd[-1]:11.10f}, "
+                            f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
+                            f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
+                        )
+                        
+                        # Always write detailed logs to the file
+                        with open(self.file_path, 'a') as f:
+                            f.write(detailed_log + '\n')
+                        
+                        # Also log to console if verbose or not using tqdm
+                        if self.verbose or not self.use_tqdm:
+                            self.logger.info(detailed_log)
+
+                # Check convergence
+                converged, reason = self._check_convergence(numdecs, numincs)
+                if converged:
+                    convergence_reason = reason
+                    break
+
+                # Reject outliers if requested
+                if (self.do_reject and self.maxrej > 0 and (
+                        (iter == self.rejstart) or (
+                            ((iter - self.rejstart) % self.rejint == 0) and (numrej < self.maxrej)))):
+                    self._reject_outliers()
+                    numrej += 1
+
+                # Share components if requested
+                if (self.share_comps and iter >= self.share_start and (iter - self.share_start) % self.share_int == 0):
+                    self.comp_list, self.comp_used = identify_shared_components(
+                        self.A, self.W, self.comp_list, self.comp_thresh)
+
+                # Write intermediate results if requested
+                if self.writestep > 0 and iter % self.writestep == 0:
+                    self._write_results()
+
+                # Write history if requested
+                if self.do_history and iter % self.histstep == 0:
+                    self._write_history()
+        finally:
+            # Close the progress bar if using tqdm
+            if use_tqdm_progress:
+                progress_bar.close()
+                
+                # Display final metrics after progress bar is closed
+                if len(self.ll) > 0 and self.use_grad_norm and len(self.nd) > 0:
+                    final_metrics = f"Final LL: {self.ll[-1]:.6e}, Gradient norm: {self.nd[-1]:.6e}"
+                    self.logger.info(final_metrics)
+                    # Also log to file if using tqdm (since it wouldn't be logged during iterations)
+                    with open(self.file_path, 'a') as f:
+                        f.write(final_metrics + '\n')
             
-            if len(self.ll) > 1:
-                ll_diff = self.ll[-1] - self.ll[-2]
-                if self.use_grad_norm:
-                    self.logger.info(
-                        f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
-                        f"LL = {self.ll[-1]:13.10f} "
-                        f"nd = {self.nd[-1]:11.10f}, "
-                        f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
-                        f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
-                    )
+            # Log convergence reason if available
+            if convergence_reason:
+                self.logger.info(convergence_reason)
+                with open(self.file_path, 'a') as f:
+                    f.write(convergence_reason + '\n')
+                
+            # Log final message (only once)
+            final_message = f"Optimization finished after {final_iter+1} iterations"
+            self.logger.info(final_message)
 
-            # Check convergence
-            if self._check_convergence(numdecs, numincs):
-                break
-
-            # Reject outliers if requested
-            if (self.do_reject and self.maxrej > 0 and (
-                    (iter == self.rejstart) or (
-                        ((iter - self.rejstart) % self.rejint == 0) and (numrej < self.maxrej)))):
-                self._reject_outliers()
-                numrej += 1
-
-            # Share components if requested
-            if (self.share_comps and iter >= self.share_start and (iter - self.share_start) % self.share_int == 0):
-                self.comp_list, self.comp_used = identify_shared_components(
-                    self.A, self.W, self.comp_list, self.comp_thresh)
-
-            # Write intermediate results if requested
-            if self.writestep > 0 and iter % self.writestep == 0:
-                self._write_results()
-
-            # Write history if requested
-            if self.do_history and iter % self.histstep == 0:
-                self._write_history()
-
-        self.logger.info(f"Optimization finished after {iter+1} iterations")
-
-    def _check_convergence(self, numdecs: int, numincs: int) -> bool:
+    def _check_convergence(self, numdecs: int, numincs: int) -> Tuple[bool, Optional[str]]:
         """
         Check convergence criteria.
 
@@ -780,23 +863,23 @@ class AMICA:
 
         Returns
         -------
-        bool
+        converged : bool
             True if optimization should stop
+        reason : str or None
+            Reason for convergence if converged, None otherwise
         """
         if self.iter == 0:
-            return False
+            return False, None
 
         # Check for NaN
         if np.isnan(self.ll[-1]):
-            self.logger.warning("NaN encountered in likelihood")
-            return True
+            return True, "NaN encountered in likelihood"
 
         # Check for likelihood decrease
         if self.ll[-1] < self.ll[-2]:
             numdecs += 1
             if self.lrate <= self.minlrate or numdecs >= self.max_decs:
-                self.logger.info("Converged due to likelihood decrease")
-                return True
+                return True, "Converged due to likelihood decrease"
             self.lrate *= self.lratefact
 
         # Check for small likelihood increase
@@ -804,17 +887,15 @@ class AMICA:
             if self.ll[-1] - self.ll[-2] < self.min_dll:
                 numincs += 1
                 if numincs > self.max_decs:
-                    self.logger.info("Converged due to small likelihood increase")
-                    return True
+                    return True, "Converged due to small likelihood increase"
             else:
                 numincs = 0
 
         # Check gradient norm
         if self.use_grad_norm and self.nd[-1] < self.min_grad_norm:
-            self.logger.info("Converged due to small gradient norm")
-            return True
+            return True, "Converged due to small gradient norm"
 
-        return False
+        return False, None
 
     def _reject_outliers(self):
         """Reject outlier data points based on likelihood."""

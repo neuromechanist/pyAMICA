@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
         - paramfile: Path to JSON parameter file
         - outdir: Output directory for results (default: 'output')
         - seed: Random seed for reproducibility (optional)
-        - verbose: Flag for detailed logging output
+        - verbose: Flag for detailed per-line progress output (disables tqdm progress bar)
     """
     parser = argparse.ArgumentParser(
         description='AMICA: Adaptive Mixture ICA'
@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         '--verbose',
-        help='Verbose output',
+        help='Verbose output with detailed per-line progress (disables tqdm progress bar)',
         action='store_true'
     )
 
@@ -134,11 +134,13 @@ def setup_logging(verbose: bool = False):
 
     Sets up logging with appropriate level and format. When verbose is True,
     DEBUG level messages are included, otherwise only INFO and above are shown.
+    The verbose flag also affects the progress display, switching from tqdm
+    progress bar to detailed per-line output.
 
     Parameters
     ----------
     verbose : bool
-        Whether to enable verbose (DEBUG level) logging
+        Whether to enable verbose (DEBUG level) logging and detailed per-line progress
     """
     # Get the root logger and remove any existing handlers
     root = logging.getLogger()
@@ -201,7 +203,9 @@ def main():
     model = AMICA(
         params_file=args.paramfile,
         outdir=str(outdir),
-        seed=args.seed
+        seed=args.seed,
+        use_tqdm=not args.verbose,  # Use tqdm by default, but disable if verbose
+        verbose=args.verbose
     )
 
     # Fit model
