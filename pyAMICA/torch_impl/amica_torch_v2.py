@@ -223,7 +223,7 @@ class AMICATorchV2(nn.Module):
             # Compute mixture log-probabilities
             if self.adaptive_pdf is not None:
                 # Use adaptive PDFs
-                log_pdf, _ = self.adaptive_pdf(
+                log_pdf, _ = self.adaptive_pdf.forward(
                     Y.unsqueeze(0).expand(self.n_mix, -1, -1),
                     self.mu,
                     self.beta,
