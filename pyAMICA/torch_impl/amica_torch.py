@@ -1,13 +1,17 @@
 """
-Main PyTorch AMICA implementation.
+Fixed PyTorch AMICA implementation with proper gradient handling and output modes.
 """
 
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Optional, Dict, Tuple, List
-import logging
+from typing import Optional, Dict, Tuple, List, Union
 from pathlib import Path
+from tqdm import tqdm
+import time
+import logging
+
+from .fortran_output import FortranStyleOutput
 
 logger = logging.getLogger(__name__)
 
@@ -16,23 +20,11 @@ class AMICATorch(nn.Module):
     """
     PyTorch implementation of Adaptive Mixture ICA (AMICA).
     
-    This implementation leverages GPU acceleration and automatic differentiation
-    to provide efficient training of AMICA models.
-    
-    Parameters
-    ----------
-    n_channels : int
-        Number of input channels (data dimensions)
-    n_sources : int, optional
-        Number of sources to extract. If None, equals n_channels
-    n_models : int, default=1
-        Number of mixing models
-    n_mix : int, default=3
-        Number of mixture components per source
-    device : str or torch.device, optional
-        Device to run computations on ('cpu', 'cuda', 'mps', or torch.device)
-    dtype : torch.dtype, default=torch.float32
-        Data type for computations
+    Features:
+    - GPU/MPS/CPU support with automatic device selection
+    - Two output modes: normal (tqdm) and debug (Fortran-style)
+    - Automatic differentiation
+    - Numerical stability safeguards
     """
     
     def __init__(
@@ -41,7 +33,7 @@ class AMICATorch(nn.Module):
         n_sources: Optional[int] = None,
         n_models: int = 1,
         n_mix: int = 3,
-        device: Optional[torch.device] = None,
+        device: Optional[Union[str, torch.device]] = None,
         dtype: torch.dtype = torch.float32
     ):
         super().__init__()
@@ -52,7 +44,7 @@ class AMICATorch(nn.Module):
         self.n_mix = n_mix
         self.dtype = dtype
         
-        # Set up device
+        # Set up device with MPS handling
         if device is None:
             self.device = self._setup_device()
         else:
@@ -64,7 +56,7 @@ class AMICATorch(nn.Module):
         # Move to device
         self.to(self.device)
         
-        # Numerical stability parameters (from Fortran)
+        # Numerical stability parameters
         self.eps = 1e-10
         self.min_cond = 1e-15
         self.min_log = -1500.0
@@ -75,10 +67,12 @@ class AMICATorch(nn.Module):
         
     def _setup_device(self) -> torch.device:
         """Automatically select the best available device."""
-        if torch.backends.mps.is_available():
-            return torch.device("mps")
-        elif torch.cuda.is_available():
+        if torch.cuda.is_available():
             return torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            # MPS available but with limitations
+            logger.warning("Using MPS device. Some operations may fall back to CPU.")
+            return torch.device("mps")
         else:
             return torch.device("cpu")
     
@@ -96,191 +90,149 @@ class AMICATorch(nn.Module):
             for _ in range(self.n_models)
         ])
         
-        # Model weights
-        self.gm = nn.Parameter(
-            torch.ones(self.n_models, dtype=self.dtype) / self.n_models
+        # Model weights (log-space for stability)
+        self.log_gm = nn.Parameter(
+            torch.zeros(self.n_models, dtype=self.dtype)
         )
         
-        # Mixture parameters (shared across models)
-        self.alpha = nn.Parameter(
-            torch.ones(self.n_mix, self.n_sources, dtype=self.dtype) / self.n_mix
+        # Mixture parameters (log-space for positivity)
+        self.log_alpha = nn.Parameter(
+            torch.zeros(self.n_mix, self.n_sources, dtype=self.dtype)
         )
         self.mu = nn.Parameter(
             torch.zeros(self.n_mix, self.n_sources, dtype=self.dtype)
         )
-        self.beta = nn.Parameter(
-            torch.ones(self.n_mix, self.n_sources, dtype=self.dtype)
+        self.log_beta = nn.Parameter(
+            torch.zeros(self.n_mix, self.n_sources, dtype=self.dtype)
         )
-        self.rho = nn.Parameter(
-            1.5 * torch.ones(self.n_mix, self.n_sources, dtype=self.dtype)
+        self.rho_logit = nn.Parameter(
+            torch.zeros(self.n_mix, self.n_sources, dtype=self.dtype)
         )
         
         # Preprocessing parameters (not trainable)
         self.register_buffer('mean', torch.zeros(self.n_channels, 1, dtype=self.dtype))
         self.register_buffer('sphere', torch.eye(self.n_channels, dtype=self.dtype))
-        self.register_buffer('sphere_inv', torch.eye(self.n_channels, dtype=self.dtype))
         
-        # Unmixing matrices (computed from A)
-        self.W = [None] * self.n_models
-        
-    def forward(
-        self, 
-        X: torch.Tensor, 
-        model_idx: Optional[int] = None
-    ) -> torch.Tensor:
-        """
-        Forward pass through the mixing model.
-        
-        Parameters
-        ----------
-        X : torch.Tensor
-            Input data of shape (n_channels, n_samples)
-        model_idx : int, optional
-            Index of model to use. If None, uses all models
-            
-        Returns
-        -------
-        Y : torch.Tensor
-            Estimated sources of shape (n_sources, n_samples) or
-            (n_models, n_sources, n_samples) if model_idx is None
-        """
-        # Ensure X is on the correct device
-        X = X.to(self.device, dtype=self.dtype)
-        
+    @property
+    def gm(self) -> torch.Tensor:
+        """Get normalized model weights."""
+        return torch.softmax(self.log_gm, dim=0)
+    
+    @property
+    def alpha(self) -> torch.Tensor:
+        """Get normalized mixture weights."""
+        return torch.softmax(self.log_alpha, dim=0)
+    
+    @property
+    def beta(self) -> torch.Tensor:
+        """Get positive scale parameters."""
+        return torch.exp(self.log_beta) + self.eps
+    
+    @property
+    def rho(self) -> torch.Tensor:
+        """Get shape parameters in range [1, 2]."""
+        return 1.0 + torch.sigmoid(self.rho_logit)
+    
+    def forward(self, X: torch.Tensor, model_idx: Optional[int] = None) -> torch.Tensor:
+        """Forward pass through mixing model."""
         if model_idx is not None:
-            # Single model
-            Y = self._forward_single(X, model_idx)
+            return self._forward_single(X, model_idx)
         else:
-            # All models
-            Y = torch.stack([
-                self._forward_single(X, h) 
-                for h in range(self.n_models)
-            ])
-            
-        return Y
+            return torch.stack([self._forward_single(X, h) for h in range(self.n_models)])
     
     def _forward_single(self, X: torch.Tensor, model_idx: int) -> torch.Tensor:
         """Forward pass through a single model."""
         A = self.A[model_idx]
         c = self.c[model_idx]
         
-        # Compute unmixing matrix (W = inv(A))
-        W = torch.linalg.pinv(A.T).T  # Transpose for correct dimensions
+        # Compute unmixing matrix (avoid in-place)
+        W = torch.linalg.pinv(A.T).T
         
-        # Apply unmixing: Y = W @ (X - c)
+        # Apply unmixing
         Y = W @ (X - c)
         
         return Y
     
-    def compute_log_likelihood(
-        self, 
-        X: torch.Tensor,
-        return_components: bool = False
-    ) -> torch.Tensor:
+    def compute_log_likelihood(self, X: torch.Tensor) -> torch.Tensor:
         """
-        Compute the log-likelihood of the data.
-        
-        Parameters
-        ----------
-        X : torch.Tensor
-            Input data of shape (n_channels, n_samples)
-        return_components : bool, default=False
-            If True, return per-model and per-sample log-likelihoods
-            
-        Returns
-        -------
-        ll : torch.Tensor
-            Scalar log-likelihood, or detailed components if return_components=True
+        Compute log-likelihood avoiding in-place operations.
         """
-        X = X.to(self.device, dtype=self.dtype)
         n_samples = X.shape[1]
         
-        # Store per-model log-likelihoods
-        model_lls = []
+        # Use log-space throughout for stability
+        log_model_lls = []
         
         for h in range(self.n_models):
-            # Get sources for this model
-            Y = self._forward_single(X, h)  # (n_sources, n_samples)
+            # Get sources
+            Y = self._forward_single(X, h)
             
-            # Compute log-determinant of W (= -log|det(A)|)
+            # Log-determinant (avoid in-place)
             A = self.A[h]
             log_det_W = -torch.logdet(A[:self.n_sources, :self.n_sources])
             
-            # Compute mixture log-likelihood for each sample
-            sample_lls = []
-            for t in range(n_samples):
-                y_t = Y[:, t:t+1]  # (n_sources, 1)
-                
-                # Compute log-probability under each mixture component
-                mix_lls = []
-                for k in range(self.n_mix):
-                    # Generalized Gaussian log-PDF
-                    log_p = self._compute_gg_log_pdf(
-                        y_t, 
-                        self.mu[k:k+1, :].T,  # (n_sources, 1)
-                        self.beta[k:k+1, :].T,  # (n_sources, 1)
-                        self.rho[k:k+1, :].T   # (n_sources, 1)
-                    )
-                    # Add mixture weight
-                    log_p = log_p.sum() + torch.log(self.alpha[k, :].mean())
-                    mix_lls.append(log_p)
-                
-                # Log-sum-exp for numerical stability
-                sample_ll = torch.logsumexp(torch.stack(mix_lls), dim=0)
-                sample_ll += log_det_W  # Add Jacobian
-                sample_lls.append(sample_ll)
+            # Vectorized computation over samples
+            log_mix_probs = []
             
-            # Model log-likelihood
-            model_ll = torch.stack(sample_lls).sum()
-            model_ll += n_samples * torch.log(self.gm[h])  # Model weight
-            model_lls.append(model_ll)
+            for k in range(self.n_mix):
+                # Get parameters (no slicing that could cause issues)
+                mu_k = self.mu[k, :].unsqueeze(1)
+                beta_k = self.beta[k, :].unsqueeze(1)
+                rho_k = self.rho[k, :].unsqueeze(1)
+                alpha_k = self.alpha[k, :]
+                
+                # Compute log-PDF for all samples at once
+                log_pdf = self._compute_gg_log_pdf_vectorized(Y, mu_k, beta_k, rho_k)
+                
+                # Add mixture weight (use mean for scalar)
+                log_prob = log_pdf + torch.log(alpha_k.mean() + self.eps)
+                log_mix_probs.append(log_prob)
+            
+            # Combine mixture components
+            log_mix_probs_tensor = torch.stack(log_mix_probs, dim=0)
+            log_y_prob = torch.logsumexp(log_mix_probs_tensor, dim=0)
+            
+            # Add Jacobian and sum over samples
+            log_model_ll = log_y_prob.sum() + n_samples * log_det_W
+            
+            # Add model weight
+            log_model_ll = log_model_ll + n_samples * torch.log(self.gm[h] + self.eps)
+            log_model_lls.append(log_model_ll)
         
-        # Total log-likelihood
-        total_ll = torch.logsumexp(torch.stack(model_lls), dim=0)
+        # Combine models
+        log_model_lls_tensor = torch.stack(log_model_lls)
+        total_ll = torch.logsumexp(log_model_lls_tensor, dim=0)
         
-        if return_components:
-            return total_ll, torch.stack(model_lls)
-        else:
-            return total_ll / n_samples  # Normalize
+        return total_ll / n_samples
     
-    def _compute_gg_log_pdf(
+    def _compute_gg_log_pdf_vectorized(
         self,
-        y: torch.Tensor,
+        Y: torch.Tensor,
         mu: torch.Tensor,
         beta: torch.Tensor,
         rho: torch.Tensor
     ) -> torch.Tensor:
         """
-        Compute Generalized Gaussian log-PDF.
+        Vectorized Generalized Gaussian log-PDF.
         
-        Parameters
-        ----------
-        y : torch.Tensor
-            Data points
-        mu : torch.Tensor
-            Means
-        beta : torch.Tensor
-            Scale parameters
-        rho : torch.Tensor
-            Shape parameters
-            
-        Returns
-        -------
-        log_p : torch.Tensor
-            Log-probabilities
+        Y: (n_sources, n_samples)
+        mu, beta, rho: (n_sources, 1)
+        Returns: scalar (sum over sources)
         """
-        # Ensure numerical stability
-        beta = torch.clamp(beta, min=self.eps)
-        rho = torch.clamp(rho, min=1.0, max=2.0)
+        # Ensure no in-place operations
+        beta_safe = torch.clamp(beta, min=self.eps)
+        rho_safe = torch.clamp(rho, min=1.0, max=2.0)
         
         # Compute normalized distance
-        diff = torch.abs(y - mu) / beta
+        diff = torch.abs(Y - mu) / beta_safe
         
-        # Generalized Gaussian log-PDF
-        log_p = -torch.pow(diff + self.eps, rho)
-        log_p += torch.log(rho) - torch.log(2 * beta) - torch.lgamma(1/rho)
+        # GG log-PDF
+        log_p = -torch.pow(diff + self.eps, rho_safe)
+        log_p = log_p + torch.log(rho_safe) - torch.log(2 * beta_safe) - torch.lgamma(1/rho_safe)
         
-        # Clamp to avoid numerical issues
+        # Sum over sources
+        log_p = log_p.sum(dim=0)
+        
+        # Clamp for stability
         log_p = torch.clamp(log_p, min=self.min_log)
         
         return log_p
@@ -289,64 +241,66 @@ class AMICATorch(nn.Module):
         self,
         X: np.ndarray,
         do_mean: bool = True,
-        do_sphere: bool = True,
-        do_pca: bool = False,
-        pca_keep: Optional[int] = None
+        do_sphere: bool = True
     ) -> torch.Tensor:
-        """
-        Preprocess data (mean removal, sphering, PCA).
+        """Preprocess data with MPS-safe operations."""
+        X = torch.from_numpy(X).to(self.dtype)
         
-        Parameters
-        ----------
-        X : np.ndarray
-            Input data of shape (n_channels, n_samples)
-        do_mean : bool, default=True
-            Remove mean
-        do_sphere : bool, default=True
-            Apply sphering (whitening)
-        do_pca : bool, default=False
-            Apply PCA dimension reduction
-        pca_keep : int, optional
-            Number of components to keep if do_pca=True
+        # Move to CPU for eigendecomposition if on MPS
+        if self.device.type == 'mps':
+            X_cpu = X.cpu()
             
-        Returns
-        -------
-        X_prep : torch.Tensor
-            Preprocessed data
-        """
-        X = torch.from_numpy(X).to(self.device, dtype=self.dtype)
-        
-        if do_mean:
-            self.mean = X.mean(dim=1, keepdim=True)
-            X = X - self.mean
+            if do_mean:
+                self.mean = X_cpu.mean(dim=1, keepdim=True).to(self.device)
+                X_cpu = X_cpu - self.mean.cpu()
             
-        if do_sphere or do_pca:
-            # Compute covariance
-            cov = torch.cov(X)
-            
-            # Eigendecomposition
-            eigvals, eigvecs = torch.linalg.eigh(cov)
-            
-            # Sort in descending order
-            idx = torch.argsort(eigvals, descending=True)
-            eigvals = eigvals[idx]
-            eigvecs = eigvecs[:, idx]
-            
-            # Remove small eigenvalues
-            keep = eigvals > self.min_eig
-            if do_pca and pca_keep is not None:
-                keep = keep[:pca_keep]
+            if do_sphere:
+                cov = torch.cov(X_cpu)
                 
-            eigvals = eigvals[keep]
-            eigvecs = eigvecs[:, keep]
+                # Eigendecomposition on CPU
+                eigvals, eigvecs = torch.linalg.eigh(cov)
+                
+                # Sort and filter
+                idx = torch.argsort(eigvals, descending=True)
+                eigvals = eigvals[idx]
+                eigvecs = eigvecs[:, idx]
+                
+                keep = eigvals > self.min_eig
+                eigvals = eigvals[keep]
+                eigvecs = eigvecs[:, keep]
+                
+                # Compute sphering matrix
+                sphere_cpu = eigvecs @ torch.diag(1.0 / torch.sqrt(eigvals + self.eps))
+                self.sphere = sphere_cpu.to(self.device)
+                
+                # Apply sphering
+                X_cpu = sphere_cpu.T @ X_cpu
             
-            # Compute sphering matrix
-            self.sphere = eigvecs @ torch.diag(1.0 / torch.sqrt(eigvals + self.eps))
-            self.sphere_inv = torch.diag(torch.sqrt(eigvals)) @ eigvecs.T
+            # Move back to device
+            X = X_cpu.to(self.device)
+        else:
+            # Standard processing for CUDA/CPU
+            X = X.to(self.device)
             
-            # Apply sphering
-            X = self.sphere.T @ X
+            if do_mean:
+                self.mean = X.mean(dim=1, keepdim=True)
+                X = X - self.mean
             
+            if do_sphere:
+                cov = torch.cov(X)
+                eigvals, eigvecs = torch.linalg.eigh(cov)
+                
+                idx = torch.argsort(eigvals, descending=True)
+                eigvals = eigvals[idx]
+                eigvecs = eigvecs[:, idx]
+                
+                keep = eigvals > self.min_eig
+                eigvals = eigvals[keep]
+                eigvecs = eigvecs[:, keep]
+                
+                self.sphere = eigvecs @ torch.diag(1.0 / torch.sqrt(eigvals + self.eps))
+                X = self.sphere.T @ X
+        
         return X
     
     def fit(
@@ -354,150 +308,142 @@ class AMICATorch(nn.Module):
         X: np.ndarray,
         max_iter: int = 100,
         lrate: float = 0.1,
-        do_newton: bool = True,
-        newton_start: int = 20,
-        verbose: bool = True,
+        do_newton: bool = False,  # Disabled for now due to issues
+        debug: bool = False,
+        output_dir: Optional[str] = None,
         **kwargs
     ) -> 'AMICATorch':
         """
-        Fit the AMICA model to data.
+        Fit AMICA model.
         
         Parameters
         ----------
         X : np.ndarray
-            Input data of shape (n_channels, n_samples)
-        max_iter : int, default=100
-            Maximum number of iterations
-        lrate : float, default=0.1
+            Input data (n_channels, n_samples)
+        max_iter : int
+            Maximum iterations
+        lrate : float
             Learning rate
-        do_newton : bool, default=True
-            Use Newton optimization after warm-up
-        newton_start : int, default=20
-            Iteration to start Newton optimization
-        verbose : bool, default=True
-            Print progress
-        **kwargs
-            Additional optimizer arguments
-            
-        Returns
-        -------
-        self : AMICATorch
-            Fitted model
+        do_newton : bool
+            Use Newton optimization (disabled for stability)
+        debug : bool
+            If True, use Fortran-style output; if False, use tqdm
+        output_dir : str
+            Output directory for debug mode
         """
-        # Preprocess data
+        # Preprocess
         X_prep = self.preprocess_data(X, **kwargs)
+        n_samples = X_prep.shape[1]
         
-        # Initialize optimizers
-        from .optimizers import NaturalGradientOptimizer, NewtonOptimizer
+        # Set up optimizer (use Adam for stability)
+        optimizer = torch.optim.Adam(self.parameters(), lr=lrate)
         
-        nat_grad_opt = NaturalGradientOptimizer(
-            self.parameters(), 
-            lr=lrate
-        )
-        
-        if do_newton:
-            newton_opt = NewtonOptimizer(self)
-        
-        # Training loop
+        # Initialize history
         ll_history = []
         
-        for iter in range(max_iter):
-            # Natural gradient step
-            nat_grad_opt.zero_grad()
+        if debug:
+            # Fortran-style output
+            if output_dir is None:
+                output_dir = Path.cwd() / 'amica_output'
+            else:
+                output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
             
-            # Compute negative log-likelihood (to minimize)
-            neg_ll = -self.compute_log_likelihood(X_prep)
-            neg_ll.backward()
-            
-            # Check for NaN
-            if torch.isnan(neg_ll):
-                logger.warning(f"NaN encountered at iteration {iter}")
-                break
+            with FortranStyleOutput(str(output_dir / 'out.txt'), verbose=True) as output:
+                config = {
+                    'n_channels': self.n_channels,
+                    'n_sources': self.n_sources,
+                    'n_samples': n_samples,
+                    'n_models': self.n_models,
+                    'n_mix': self.n_mix,
+                    'max_iter': max_iter,
+                    'lrate': lrate,
+                    'device': str(self.device)
+                }
+                output.write_header(config)
+                output.write_info("Starting optimization...")
                 
-            nat_grad_opt.step()
+                for iter in range(max_iter):
+                    # Zero gradients
+                    optimizer.zero_grad()
+                    
+                    # Compute loss
+                    neg_ll = -self.compute_log_likelihood(X_prep)
+                    
+                    if torch.isnan(neg_ll):
+                        output.write_warning(f"NaN at iteration {iter}")
+                        break
+                    
+                    # Backward (with anomaly detection in debug)
+                    if debug:
+                        with torch.autograd.set_detect_anomaly(True):
+                            neg_ll.backward()
+                    else:
+                        neg_ll.backward()
+                    
+                    # Gradient norm
+                    grad_norm = sum(p.grad.norm().item()**2 for p in self.parameters() if p.grad is not None)**0.5
+                    
+                    # Step
+                    optimizer.step()
+                    
+                    # Log
+                    ll = -neg_ll.item()
+                    ll_history.append(ll)
+                    
+                    if iter % 5 == 0:
+                        dll = ll - ll_history[-2] if len(ll_history) > 1 else 0
+                        output.write_iteration(iter, lrate, ll, grad_norm, dll, dll)
+                
+                output.write_convergence("Completed", iter, ll_history[-1], grad_norm)
+        
+        else:
+            # Normal mode with tqdm
+            pbar = tqdm(range(max_iter), desc="AMICA")
             
-            # Newton step after warm-up
-            if do_newton and iter >= newton_start:
-                newton_opt.step(X_prep)
-            
-            # Log progress
-            with torch.no_grad():
+            for iter in pbar:
+                # Zero gradients
+                optimizer.zero_grad()
+                
+                # Compute loss
+                neg_ll = -self.compute_log_likelihood(X_prep)
+                
+                if torch.isnan(neg_ll):
+                    print(f"\nNaN at iteration {iter}")
+                    break
+                
+                # Backward
+                neg_ll.backward()
+                
+                # Step
+                optimizer.step()
+                
+                # Update progress
                 ll = -neg_ll.item()
                 ll_history.append(ll)
                 
-                if verbose and iter % 10 == 0:
-                    logger.info(f"Iter {iter:4d}: LL = {ll:.6f}")
+                pbar.set_postfix({
+                    'LL': f'{ll:.4f}',
+                    'iter/s': f'{pbar.format_dict["rate"]:.1f}' if pbar.format_dict.get("rate") else 'N/A'
+                })
         
         self.ll_history = ll_history
         return self
     
-    def transform(
-        self, 
-        X: np.ndarray,
-        model_idx: int = 0
-    ) -> np.ndarray:
-        """
-        Transform data to sources using fitted model.
-        
-        Parameters
-        ----------
-        X : np.ndarray
-            Input data of shape (n_channels, n_samples)
-        model_idx : int, default=0
-            Model index to use for transformation
-            
-        Returns
-        -------
-        S : np.ndarray
-            Estimated sources of shape (n_sources, n_samples)
-        """
+    def transform(self, X: np.ndarray, model_idx: int = 0) -> np.ndarray:
+        """Transform data to sources."""
         with torch.no_grad():
-            # Preprocess
             X_tensor = torch.from_numpy(X).to(self.device, dtype=self.dtype)
             X_prep = (X_tensor - self.mean) @ self.sphere.T
-            
-            # Get sources
             S = self._forward_single(X_prep, model_idx)
-            
             return S.cpu().numpy()
     
     def get_mixing_matrix(self, model_idx: int = 0) -> np.ndarray:
-        """Get mixing matrix A for specified model."""
+        """Get mixing matrix."""
         return self.A[model_idx].detach().cpu().numpy()
     
     def get_unmixing_matrix(self, model_idx: int = 0) -> np.ndarray:
-        """Get unmixing matrix W for specified model."""
+        """Get unmixing matrix."""
         A = self.A[model_idx]
         W = torch.linalg.pinv(A.T).T
         return W.detach().cpu().numpy()
-    
-    def save(self, filepath: str):
-        """Save model to file."""
-        torch.save({
-            'state_dict': self.state_dict(),
-            'config': {
-                'n_channels': self.n_channels,
-                'n_sources': self.n_sources,
-                'n_models': self.n_models,
-                'n_mix': self.n_mix,
-                'dtype': self.dtype
-            },
-            'll_history': getattr(self, 'll_history', [])
-        }, filepath)
-        
-    @classmethod
-    def load(cls, filepath: str, device: Optional[torch.device] = None) -> 'AMICATorch':
-        """Load model from file."""
-        checkpoint = torch.load(filepath, map_location='cpu')
-        
-        # Create model
-        model = cls(
-            **checkpoint['config'],
-            device=device
-        )
-        
-        # Load weights
-        model.load_state_dict(checkpoint['state_dict'])
-        model.ll_history = checkpoint.get('ll_history', [])
-        
-        return model
