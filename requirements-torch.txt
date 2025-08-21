@@ -1,0 +1,32 @@
+# PyTorch implementation requirements
+
+# Core dependencies
+torch>=2.0.0
+numpy>=1.20.0
+scipy>=1.7.0
+matplotlib>=3.3.0
+tqdm>=4.60.0
+json5>=0.9.0
+
+# Optional optimization libraries
+# Uncomment if you want to use advanced Newton methods
+# pytorch-minimize @ git+https://github.com/rfeinman/pytorch-minimize.git
+
+# Optional mixture model libraries
+# gmm-torch @ git+https://github.com/ldeecke/gmm-torch.git
+
+# Testing dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-xdist>=3.0.0  # For parallel test execution
+
+# Development dependencies
+ipython>=8.0.0
+jupyter>=1.0.0
+black>=22.0.0
+flake8>=5.0.0
+mypy>=0.990
+
+# Documentation
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.0.0
