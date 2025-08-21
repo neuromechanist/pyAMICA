@@ -6,24 +6,30 @@ algorithm for blind source separation using adaptive mixtures of independent
 component analyzers.
 
 Main Features:
+- GPU acceleration (CUDA/ROCm/MPS)
 - Multiple source models
-- Different PDF types
-- Newton optimization
-- Component sharing
-- Outlier rejection
+- Mixture of Generalized Gaussians
+- Natural gradient optimization
+- Automatic differentiation
 - Data preprocessing (mean removal, sphering)
 """
 
 from .version import __version__
-from .pyAMICA import AMICA
+from .amica import AMICA
+from .torch_impl import AMICATorch
 from . import amica_utils
 from . import amica_data
 from . import amica_newton
 from . import amica_pdf
 from . import amica_viz
 
+# Legacy NumPy implementation (deprecated)
+from .pyAMICA import AMICA as AMICA_NumPy
+
 __all__ = [
     'AMICA',
+    'AMICATorch',
+    'AMICA_NumPy',
     'amica_utils',
     'amica_data',
     'amica_newton',
