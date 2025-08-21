@@ -7,3 +7,11 @@ gen_api/
 
 # Ignore everything in the egg-info directory
 pyAMICA.egg-info/*
+
+# Ignore project documentation files (per CLAUDE.md instructions)
+CLAUDE.md
+plan.md
+research.md
+scratch_notes.md
+ideas.md
+output/
