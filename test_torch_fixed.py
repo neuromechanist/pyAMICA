@@ -48,7 +48,7 @@ def test_normal_mode():
     print("\nRunning optimization...")
     model.fit(
         data,
-        max_iter=20,  # Limited for testing
+        max_iter=50,  # Limited for testing
         lrate=params.get('lrate', 0.05),
         debug=False,  # Normal mode with tqdm
         do_mean=params.get('do_mean', True),
@@ -94,7 +94,7 @@ def test_debug_mode():
     output_dir = Path('pytorch_debug_test')
     model.fit(
         data,
-        max_iter=10,  # Limited for testing
+        max_iter=50,  # Limited for testing
         lrate=params.get('lrate', 0.05),
         debug=True,  # Debug mode with Fortran output
         output_dir=str(output_dir),
