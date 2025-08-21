@@ -122,42 +122,40 @@ class AdaptivePDF(nn.Module):
         for i in range(self.n_sources):
             pdf_type = self.pdf_types[i]
             
+            # Extract data for this source
+            if Y_norm.dim() == 3:
+                # (n_mix, n_sources, n_samples)
+                y_i = Y_norm[:, i, :]  # (n_mix, n_samples)
+                rho_i = self.rho[:, i]  # (n_mix,)
+            else:
+                # (n_sources, n_samples)
+                y_i = Y_norm[i, :].unsqueeze(0)  # (1, n_samples)
+                rho_i = self.rho[:, i].mean().unsqueeze(0)  # (1,)
+            
             if pdf_type == 'gg':
                 log_p, dlog_p = self._generalized_gaussian(
-                    Y_norm[..., i, :] if Y_norm.dim() == 3 else Y_norm[i, :],
-                    self.rho[:, i] if self.rho.dim() == 2 else self.rho[i],
+                    y_i,
+                    rho_i,
                     compute_deriv
                 )
             elif pdf_type == 'logistic':
-                log_p, dlog_p = self._logistic(
-                    Y_norm[..., i, :] if Y_norm.dim() == 3 else Y_norm[i, :],
-                    compute_deriv
-                )
+                log_p, dlog_p = self._logistic(y_i, compute_deriv)
             elif pdf_type == 'student':
-                log_p, dlog_p = self._student_t(
-                    Y_norm[..., i, :] if Y_norm.dim() == 3 else Y_norm[i, :],
-                    self.nu[:, i] if self.nu.dim() == 2 else self.nu[i],
-                    compute_deriv
-                )
+                nu_i = self.nu[:, i] if Y_norm.dim() == 3 else self.nu[:, i].mean().unsqueeze(0)
+                log_p, dlog_p = self._student_t(y_i, nu_i, compute_deriv)
             elif pdf_type == 'laplace':
-                log_p, dlog_p = self._laplace(
-                    Y_norm[..., i, :] if Y_norm.dim() == 3 else Y_norm[i, :],
-                    compute_deriv
-                )
+                log_p, dlog_p = self._laplace(y_i, compute_deriv)
             else:  # uniform
-                log_p, dlog_p = self._uniform(
-                    Y_norm[..., i, :] if Y_norm.dim() == 3 else Y_norm[i, :],
-                    compute_deriv
-                )
+                log_p, dlog_p = self._uniform(y_i, compute_deriv)
             
             if Y_norm.dim() == 3:
                 log_pdf[:, i, :] = log_p
                 if compute_deriv:
                     dlog_pdf[:, i, :] = dlog_p
             else:
-                log_pdf[i, :] = log_p
+                log_pdf[i, :] = log_p.squeeze(0)
                 if compute_deriv:
-                    dlog_pdf[i, :] = dlog_p
+                    dlog_pdf[i, :] = dlog_p.squeeze(0)
         
         # Scale derivatives by beta
         if compute_deriv:
@@ -195,12 +193,33 @@ class AdaptivePDF(nn.Module):
         else:
             # General case
             abs_y = torch.abs(y) + eps
-            log_pdf = -torch.pow(abs_y, rho)
+            # Handle broadcasting for rho
+            if rho.dim() > 0 and rho.shape[0] > 1:
+                # rho is (n_mix,) and y is (n_mix, n_samples) or (n_samples,)
+                if y.dim() == 2:
+                    log_pdf = -torch.pow(abs_y, rho.unsqueeze(1))
+                    log_norm = torch.lgamma(1.0 + 1.0/rho.unsqueeze(1)) + torch.log(torch.tensor(2.0))
+                else:
+                    log_pdf = -torch.pow(abs_y, rho.mean())
+                    log_norm = torch.lgamma(1.0 + 1.0/rho.mean()) + torch.log(torch.tensor(2.0))
+            else:
+                # Scalar rho
+                rho_val = rho.item() if rho.numel() == 1 else rho
+                log_pdf = -torch.pow(abs_y, rho_val)
+                log_norm = torch.lgamma(1.0 + 1.0/rho_val) + torch.log(torch.tensor(2.0))
+            
             # Add normalization constant
-            log_pdf = log_pdf - torch.lgamma(1.0 + 1.0/rho) - torch.log(torch.tensor(2.0))
+            log_pdf = log_pdf - log_norm
             
             if compute_deriv:
-                dlog_pdf = -rho * torch.pow(abs_y, rho - 1) * torch.sign(y)
+                if rho.dim() > 0 and rho.shape[0] > 1:
+                    if y.dim() == 2:
+                        dlog_pdf = -rho.unsqueeze(1) * torch.pow(abs_y, rho.unsqueeze(1) - 1) * torch.sign(y)
+                    else:
+                        dlog_pdf = -rho.mean() * torch.pow(abs_y, rho.mean() - 1) * torch.sign(y)
+                else:
+                    rho_val = rho.item() if rho.numel() == 1 else rho
+                    dlog_pdf = -rho_val * torch.pow(abs_y, rho_val - 1) * torch.sign(y)
             else:
                 dlog_pdf = None
         
@@ -234,6 +253,11 @@ class AdaptivePDF(nn.Module):
         """Student-t PDF."""
         # Ensure nu > 2 for finite variance
         nu = torch.clamp(nu, 2.1, 30.0)
+        
+        # Handle broadcasting
+        if nu.dim() > 0 and nu.shape[0] > 1 and y.dim() == 2:
+            # nu is (n_mix,) and y is (n_mix, n_samples)
+            nu = nu.unsqueeze(1)  # (n_mix, 1)
         
         # Log PDF of Student-t
         log_pdf = -0.5 * (nu + 1) * torch.log(1 + y**2 / nu)
