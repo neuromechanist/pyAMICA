@@ -74,8 +74,54 @@ A normalization/computation difference remains to resolve.
 Mean ~0.46 (best 0.68, worst 0.24) in the analyzed run; target >0.95. Likely causes: initialization
 mismatch, precision, optimization-path divergence, sphering/whitening differences.
 
+## 2026-07-02 design review (torch backend vs Fortran)
+
+Root cause: the default torch backend (`torch_impl/amica_torch.py`, and `amica_torch_v2.py`)
+reframes AMICA as "minimize NLL with Adam over reparameterized tensors," but AMICA is a
+fixed-point EM / natural-gradient method with closed-form sufficient-statistic updates. Adam on
+the reparameterized surface follows a different trajectory and converges to a different fixed
+point, so component correlation with Fortran is essentially coincidental. Decision to rewrite:
+see `.context/decisions/0001-torch-backend-natural-gradient-em.md`. The NumPy `pyAMICA.py` is a
+faithful port and is the spec.
+
+### Concrete bugs (fixable independently of the rewrite)
+1. **Swapped mixture factorization** - `amica_torch.py:176-233`.
+   `_compute_gg_log_pdf_vectorized` sums log-PDF over sources (`.sum(dim=0)`, line 233) *before*
+   the mixture `logsumexp` over k, so all sources are forced to share one mixture label per time
+   point. Correct AMICA is per-source mixture reduction then sum over sources
+   (Fortran `amica17.f90:1313-1360`): `sum_t sum_i log sum_k alpha_{k,i} f_k(y_{i,t})`. The v2
+   adaptive path (`amica_torch_v2.py:236-247`) does it right; the default backend and v2
+   non-adaptive fallback do not.
+2. **alpha collapsed to a scalar** - `amica_torch.py:187`, `amica_torch_v2.py:259`.
+   `torch.log(alpha_k.mean() + eps)` discards the per-source mixture weights `alpha_{k,i}`.
+3. **LL normalization (the "~13x" scale gap)** - Fortran reports
+   `LL = LLtmp2 / (num_samples * nw)` (`amica17.f90:1866`; `nw` = n_sources = 32 for the sample
+   data). Torch divides by `n_samples` only (`amica_torch.py:205`) and additionally adds
+   `n_samples * log_det_W` (line 195), which Fortran omits from the reported LL (the natural
+   gradient's `I - <g y^T>` form already accounts for the Jacobian). Fix: divide by
+   `n_samples * nw`, drop the explicit logdet term.
+4. **Newton double-steps** - `newton_optimizer.py:221-262` mutates `A` in place, then the main
+   loop also calls Adam `optimizer.step()` on the same iteration -> NaN at `newt_start`. Port the
+   NumPy Newton (`pyAMICA.py:666-694`) instead.
+5. **`pinv` in the hot path** - `amica_torch.py:149` recomputes `W = pinv(A.T).T` every forward.
+   Track `W` directly.
+6. **float32 default** - Fortran is double throughout; validate in float64.
+
+### Performance / memory / scaling
+- Python loops over sources/mix/models in the hot path (`adaptive_pdf.py:122,237,349`;
+  `compute_log_likelihood`) serialize into many tiny GPU/MPS kernels. Vectorize with broadcasting
+  over `(model, mix, source, block)`.
+- No sample blocking: the torch path materializes all-sample intermediates and retains the
+  autograd graph, so peak memory grows with recording length (OOM risk on 128-256 ch data).
+  Fortran blocks over samples (`block_size` 128-1024) and accumulates sufficient statistics =
+  O(block) streaming memory.
+- Autograd is unnecessary: every AMICA update is a closed-form function of the responsibilities
+  `z`, `v` and simple moments. Dropping it removes graph-retention memory and enables streaming.
+
 ## Next steps for parity
-1. Match Fortran initialization exactly (seed, sphering, starting matrices).
-2. Step through Fortran likelihood and compare intermediate values.
-3. Add the numerical-stability bounds and epsilon guards.
-4. Complete Newton (line search for stability) and outlier rejection.
+1. Fix the three math bugs above (mixture factorization, per-source alpha, LL normalization).
+2. Match Fortran initialization exactly (seed, sphering, starting matrices) for trajectory parity.
+3. Rewrite the E-step / M-step as vectorized natural-gradient updates with block accumulation
+   (ADR 0001); parameterize `W` directly; validate in float64.
+4. Port Newton verbatim from NumPy (H from sigma2/kappa/lambda); delete the autograd Newton.
+5. Add the numerical-stability bounds and epsilon guards; complete outlier rejection.

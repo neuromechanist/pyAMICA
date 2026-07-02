@@ -15,3 +15,11 @@ enhanced_test_output/
 
 # AGENTS.md, CLAUDE.md, .rules/, and .context/ are tracked in git.
 # Working docs (plan/research/ideas/scratch) now live in .context/.
+
+# Claude epic state (local only)
+.claude/*.local.md
+
+# Coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
