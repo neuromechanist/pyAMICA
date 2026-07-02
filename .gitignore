@@ -8,12 +8,10 @@ gen_api/
 # Ignore everything in the egg-info directory
 pyAMICA.egg-info/*
 
-# Ignore project documentation files (per CLAUDE.md instructions)
-CLAUDE.md
-plan.md
-research.md
-scratch_notes.md
-ideas.md
+# Generated run/validation output
 output/
 validation_output/
 enhanced_test_output/
+
+# AGENTS.md, CLAUDE.md, .rules/, and .context/ are tracked in git.
+# Working docs (plan/research/ideas/scratch) now live in .context/.
