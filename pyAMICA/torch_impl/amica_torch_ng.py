@@ -227,6 +227,7 @@ class AMICATorchNG:
         self.mu = self.alpha = self.beta = self.rho = None
         self.gm = self.comp_list = None
         self.mean = self.sphere = None
+        self.sldet = 0.0
 
     # ------------------------------------------------------------------
     # Preprocessing
@@ -272,11 +273,19 @@ class AMICATorchNG:
                 )
 
             X_cpu = sphere @ X_cpu
+            # Sphering log-determinant term of the data log-likelihood
+            # (Fortran ``sldet``, amica17.f90:474): sum over the kept
+            # eigenvalues of -0.5*log(eval). For the PCA-reduced-rank case
+            # this is a pseudo-determinant, matching Fortran which sums over
+            # numeigs kept eigenvalues regardless of full rank.
+            sldet = float(-0.5 * torch.log(evals[:n_comp]).sum().item())
         else:
             sphere = torch.eye(data_dim, dtype=torch.float64)
+            sldet = 0.0
 
         self.mean = mean.to(device=self.device, dtype=self.dtype)
         self.sphere = sphere.to(device=self.device, dtype=self.dtype)
+        self.sldet = sldet
 
         return X_cpu.to(device=self.device, dtype=self.dtype)
 
@@ -386,7 +395,17 @@ class AMICATorchNG:
             )  # (batch, n_channels) -- per-source log-density
             z = torch.softmax(z0, dim=-1)  # normalized responsibilities
 
-            logV[:, h] = torch.log(self.gm[h]) + ll_i.sum(dim=-1)
+            # Per-model likelihood seed, matching Fortran Ptmp init
+            # (amica17.f90:1273): log(gm) + log|det W(h)| + sldet, i.e. the
+            # unmixing- and sphering-matrix Jacobian log-determinants, added
+            # before the per-source density sum. Required for the reported LL
+            # to match Fortran's printed value (does not change the natural-
+            # gradient parameter trajectory, which handles log|det W| via the
+            # I - <g y^T> update).
+            logdet_W = torch.linalg.slogdet(self.W[:, :, h])[1]
+            logV[:, h] = (
+                torch.log(self.gm[h]) + logdet_W + self.sldet + ll_i.sum(dim=-1)
+            )
 
             b_list.append(b)
             z_list.append(z)
@@ -578,6 +597,16 @@ class AMICATorchNG:
                 logger.warning("NaN log-likelihood at iteration %d; stopping.", it)
                 break
             self.ll_history.append(ll)
+
+            # Adaptive learning-rate backtracking, matching the Fortran/NumPy
+            # convergence guard (pyAMICA.AMICA._check_convergence): natural-
+            # gradient ascent is not monotonic at a fixed lrate, so when the
+            # data log-likelihood decreases we halve lrate (lratefact) for
+            # subsequent iterations. Without this the fixed/ramped lrate
+            # overshoots and the LL drifts down instead of converging.
+            if len(self.ll_history) > 1 and ll < self.ll_history[-2]:
+                self.lrate = max(self.minlrate, self.lrate * self.lratefact)
+
             iterator.set_postfix({"LL": f"{ll:.4f}", "lrate": f"{self.lrate:.4g}"})
 
         return self
