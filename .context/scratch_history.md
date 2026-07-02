@@ -17,7 +17,7 @@ Debugging notes, failed attempts, and lessons. Prevents repeating dead ends.
 ### Fortran structure references
 - `get_updates_and_likelihood` (~line 1174), `accum_updates_and_likelihood` (~line 1671),
   `update_params` (~line 1878). Fortran separates accumulation; Python merged it.
-- PDFs live in `funmod2.f90`; Fortran uses fast approximations (fastlog/fastexp/fastpow).
+- `funmod2.f90` holds special-function helpers (gamln/psifun/etc.), not the PDFs; PDF computation is inline in `amica17.f90`. (`fastlog/fastexp/fastpow` are declared but unused stubs in `amica17_header.f90`.)
 
 ## Known differences to watch
 - Data layout: Fortran column-major vs Python row-major default (handled; verify edge cases).

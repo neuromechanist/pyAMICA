@@ -14,25 +14,27 @@ Fortran-vs-Python parity analysis. Fortran reference: `amica17.f90` (~3900 lines
 | alpha, mu, sbeta, rho | `self.alpha`, `self.mu`, `self.beta`, `self.rho` | done |
 | comp_list, LL, nd | `self.comp_list`, `self.ll`, `self.nd` | done |
 | lambda, kappa, sigma2 (Newton) | `compute_newton_direction()` | partial |
-| baralpha (Newton) | not found | missing |
+| baralpha (Newton) | `self.baralpha` in legacy `pyAMICA.py` | done in NumPy; missing in torch backend |
 
 ## Core Subroutines (Fortran -> Python)
 | Fortran | Python | Status |
 |---|---|---|
 | get_data | `load_data_file()`, `preprocess_data()` | done |
-| get_updates_and_likelihood | `_compute_updates()` | partial |
-| accum_updates_and_likelihood | merged into `_compute_updates()` | merged |
+| get_updates_and_likelihood | `_get_updates_and_likelihood()` | partial |
+| accum_updates_and_likelihood | merged into `_get_updates_and_likelihood()` | merged |
 | update_params | `_update_parameters()` | done |
 | get_unmixing_matrices | `get_unmixing_matrices()` | done |
 | identify_shared_comps | `identify_shared_components()` | done |
-| reject_data | not found | missing |
+| reject_data | `_reject_outliers()` in legacy `pyAMICA.py` | done in NumPy; missing in torch backend |
 | determine_block_size | `determine_block_size()` | done |
 | write_output / write_history | `save_results()` | done / partial |
 
-## Missing / incomplete features
-1. Outlier rejection (`do_reject`, `reject_data`).
-2. Adaptive PDF selection (`do_choose_pdfs`) - partial.
-3. Full Newton (`baralpha`, complete Hessian).
+## Missing / incomplete in the PyTorch backend
+The legacy NumPy `pyAMICA.py` implements outlier rejection, `baralpha`, and Newton; the PyTorch
+backend (the parity-focused path) does not yet. Items below refer to the torch backend.
+1. Outlier rejection (`do_reject`, `reject_data`) - present in NumPy, absent in torch.
+2. Adaptive PDF selection (`do_choose_pdfs`) - partial, in `amica_torch_v2.py`, not wired into the default interface.
+3. Full Newton (`baralpha`, complete Hessian) - present in NumPy; torch Newton (`amica_torch_v2.py`) is unstable and not wired into the default interface.
 4. Parallel processing (Fortran uses OpenMP).
 5. Numerical-stability safeguards (eigenvalue/condition bounds, overflow/underflow protection).
 
@@ -64,8 +66,9 @@ Fixes applied: Fortran-matched ramp, off-by-one iteration-counter fix, gradient 
 the enhanced model may still produce positive LL; both need revalidation after the latest fixes.
 
 ### Observed LL scale (per sample)
-Fortran -3.41, PyTorch basic -44.56, PyTorch enhanced (post-fix) -114.58 — roughly a 13x factor
-vs Fortran, suggesting a normalization/computation difference still to resolve.
+Fortran -3.41, PyTorch basic -44.56 (~13x vs Fortran), PyTorch enhanced post-fix -114.58 (~34x).
+The "~13x" figure quoted elsewhere refers to the basic backend; the enhanced model diverges further.
+A normalization/computation difference remains to resolve.
 
 ### Component correlation
 Mean ~0.46 (best 0.68, worst 0.24) in the analyzed run; target >0.95. Likely causes: initialization

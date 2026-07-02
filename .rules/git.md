@@ -35,10 +35,10 @@
    - Description with "Fixes #123"
    - Test results summary
 6. Run `/review-pr` and address ALL findings
-7. Squash merge to keep history clean
+7. Merge with a regular merge commit to preserve history (squash only for epic sub-phase PRs)
 
 ## Merge Strategy
-- **Squash merge** for feature branches (clean history)
+- **Regular merge commits** by default to preserve history; squash only when explicitly requested (e.g. epic sub-phase PRs)
 - **Rebase** to update feature branches from base (`git rebase origin/main`)
 - **Never force-push** to shared branches (main, develop)
 - **Delete branch** after merge

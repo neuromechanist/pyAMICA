@@ -1,7 +1,7 @@
 # Python Development Standards
 
 ## Version & Environment
-- **Python 3.11+** minimum (use latest stable)
+- **Python 3.12+** minimum (use latest stable)
 - **Package Manager:** UV only (not pip, conda, or virtualenv)
 - **Virtual Environment:** Managed by UV (`uv venv`, `uv sync`)
 - **Project Config:** `pyproject.toml` (no requirements.txt)

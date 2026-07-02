@@ -2,8 +2,8 @@
 
 ## Project Context
 **Purpose:** Python implementation of AMICA (Adaptive Mixture Independent Component Analysis) that reproduces the results of the reference Fortran binary. Targets EEG/EMG source separation with GPU/MPS/CPU support.
-**Tech Stack:** Python 3.10+, PyTorch (primary backend, MPS/CUDA/CPU), NumPy/SciPy (legacy backend), matplotlib. Reference implementation is Fortran (`amica17.f90`, `funmod2.f90`).
-**Architecture:** Two coexisting backends. The PyTorch backend (`pyAMICA/torch_impl/`) is the default and is exposed through a scikit-learn-style `AMICA` interface; the legacy NumPy implementation is retained as `AMICA_NumPy`. Correctness is defined by parity with the Fortran binary, validated by `validate_implementations.py`.
+**Tech Stack:** Python 3.12+, PyTorch (primary backend, MPS/CUDA/CPU), NumPy/SciPy (legacy backend), matplotlib. Reference implementation is Fortran (`amica17.f90`, `funmod2.f90`).
+**Architecture:** Two coexisting backends. The default scikit-learn-style `AMICA` interface wraps the basic `AMICATorch` (`torch_impl/amica_torch.py`), which currently has Newton disabled and no adaptive PDF. An enhanced `AMICATorchV2` (`torch_impl/amica_torch_v2.py`) adds Newton, adaptive PDF, and multi-model support but is experimental and NOT yet wired into the public interface. The legacy NumPy implementation (`pyAMICA.py`, retained as `AMICA_NumPy`) has the fuller feature set (Newton, baralpha, outlier rejection). Correctness is defined by parity with the Fortran binary, validated by `validate_implementations.py`.
 
 ## Architecture Map
 ```
@@ -11,8 +11,8 @@ pyAMICA/
 ├── amica.py                 # Main scikit-learn-style AMICA interface (PyTorch-backed)
 ├── __init__.py              # Exposes AMICA (PyTorch) and AMICA_NumPy (legacy)
 ├── torch_impl/              # PyTorch backend (default)
-│   ├── amica_torch.py       #   Core AMICA module
-│   ├── amica_torch_v2.py    #   Enhanced model (Newton + adaptive PDF + multi-model)
+│   ├── amica_torch.py       #   Core AMICA module (basic; Newton disabled) - backs the default AMICA
+│   ├── amica_torch_v2.py    #   Enhanced model (Newton + adaptive PDF + multi-model); experimental, NOT wired into default AMICA
 │   ├── adaptive_pdf.py      #   Adaptive PDF selection (Laplace/Student-t/GG)
 │   ├── newton_optimizer.py  #   Newton optimization with Fortran-style ramping
 │   ├── mixture_models.py    #   Mixture-of-densities components
@@ -40,7 +40,7 @@ MPS note: run with `PYTORCH_ENABLE_MPS_FALLBACK=1` for ops MPS does not yet supp
 
 ## Key Files
 - **Main interface:** `pyAMICA/amica.py`
-- **Default backend:** `pyAMICA/torch_impl/amica_torch.py` (and `amica_torch_v2.py` for the enhanced model)
+- **Default backend:** `pyAMICA/torch_impl/amica_torch.py` (`AMICATorch`, Newton disabled). Enhanced but not-yet-wired: `amica_torch_v2.py` (`AMICATorchV2`)
 - **Validation harness:** `validate_implementations.py`
 - **Fortran reference binary:** `pyAMICA/sample_data/amica15mac`
 - **Sample data:** `pyAMICA/sample_data/`
@@ -48,16 +48,17 @@ MPS note: run with `PYTORCH_ENABLE_MPS_FALLBACK=1` for ops MPS does not yet supp
 ## Current Status
 - PyTorch backend with GPU/MPS/CPU support and basic AMICA converges.
 - Validation harness runs both backends and matches components via the Hungarian algorithm.
-- Newton optimization, adaptive PDF selection, and multi-model support are partially implemented.
+- Newton, adaptive PDF, and multi-model exist only in the experimental `AMICATorchV2` (not wired into the default `AMICA`); the legacy NumPy `pyAMICA.py` implements Newton, baralpha, and outlier rejection.
 - See `FEATURE_PARITY.md`, `MIGRATION_PLAN.md`, and `PROGRESS_SUMMARY.md` for detailed roadmaps.
 
 ## Known Issues (parity blockers)
-1. Component correlation with Fortran ~0.7-0.9 (target: >0.95).
-2. Log-likelihood scaling differs from Fortran (~13x factor); enhanced model has produced
-   positive LLs (addressed by the GG normalization fix, needs revalidation).
-3. Newton method unstable, NaN at the Newton-start iteration (gradient clipping + Fortran-matched
-   ramp added, needs revalidation).
-4. Missing adaptive/outlier-rejection features reduce separation quality.
+1. Component correlation with Fortran ~0.46-0.9 (run-dependent; target: >0.95).
+2. Log-likelihood scaling differs from Fortran (~13x for the basic backend, more for enhanced);
+   the enhanced model produced positive LLs (addressed by the GG normalization fix, needs revalidation).
+3. Newton (in `AMICATorchV2`) is unstable, NaN at the Newton-start iteration (gradient clipping +
+   Fortran-matched ramp added in commit 2ccbae6, needs revalidation).
+4. The default torch backend lacks adaptive-PDF and outlier rejection (present in legacy NumPy),
+   reducing separation quality.
 
 ## Development Workflow
 1. **Check context:** `.context/plan.md` for current tasks and priorities.

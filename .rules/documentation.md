@@ -16,7 +16,7 @@ bun add -D typedoc
 
 ## Minimal mkdocs.yml
 ```yaml
-site_name: {{PROJECT_NAME}}
+site_name: pyAMICA
 site_url: https://example.com
 repo_url: https://github.com/user/repo
 

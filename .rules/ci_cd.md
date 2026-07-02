@@ -43,7 +43,7 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     strategy:
-      matrix: { python-version: ['3.11', '3.12', '3.13'] }
+      matrix: { python-version: ['3.12', '3.13'] }
     steps:
     - uses: actions/checkout@v4
     - uses: astral-sh/setup-uv@v4
