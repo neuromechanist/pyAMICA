@@ -158,9 +158,40 @@ class AMICATorch(nn.Module):
 
         return Y
 
-    def compute_log_likelihood(self, X: torch.Tensor) -> torch.Tensor:
+    def compute_log_likelihood(
+        self, X: torch.Tensor, for_training: bool = False
+    ) -> torch.Tensor:
         """
-        Compute log-likelihood avoiding in-place operations.
+        Compute the per-sample-per-source log-likelihood.
+
+        Mixture reduction is per-source, matching Fortran (amica17.f90:1313-1360):
+        for each source i, logsumexp over the k mixture components using that
+        source's own alpha[k, i], THEN sum over sources. Summing sources before
+        the mixture logsumexp would force every source to share one mixture
+        label per time point, which is not the AMICA model.
+
+        The log|det W| Jacobian term is intentionally not part of the
+        reported value (`for_training=False`, the default). Fortran's
+        reported LL never includes it (amica17.f90:1866 computes
+        `LL = LLtmp2 / (num_samples * nw)` directly from the mixture
+        log-densities); the natural-gradient update rule accounts for the
+        Jacobian through how A/W are updated rather than through the reported
+        LL. Normalizing by `n_samples * n_sources` (nw) matches Fortran's
+        convention so the reported value is directly comparable.
+
+        `for_training=True` adds the Jacobian term back in for use as the
+        Adam optimization objective only. Empirically (validate_implementations.py
+        on the real sample data), dropping the Jacobian entirely destabilizes
+        this Adam-based backend: nothing in the reparameterized-Adam
+        objective (unlike Fortran's natural-gradient update, which keeps A's
+        columns normalized each iteration) constrains beta/A from drifting
+        into a degenerate region that inflates the mixture log-density
+        without bound, observed as the reported LL going positive and the
+        mixing-matrix relative error exploding by 100 iterations. Fortran
+        avoids this because the Jacobian is implicitly accounted for by its
+        update rule, not because it is missing from the objective, so this
+        backend still needs an explicit Jacobian term in its *training*
+        objective even though it is excluded from the *reported* value.
         """
         n_samples = X.shape[1]
 
@@ -171,10 +202,6 @@ class AMICATorch(nn.Module):
             # Get sources
             Y = self._forward_single(X, h)
 
-            # Log-determinant (avoid in-place)
-            A = self.A[h]
-            log_det_W = -torch.logdet(A[: self.n_sources, : self.n_sources])
-
             # Vectorized computation over samples
             log_mix_probs = []
 
@@ -183,21 +210,27 @@ class AMICATorch(nn.Module):
                 mu_k = self.mu[k, :].unsqueeze(1)
                 beta_k = self.beta[k, :].unsqueeze(1)
                 rho_k = self.rho[k, :].unsqueeze(1)
-                alpha_k = self.alpha[k, :]
+                alpha_k = self.alpha[k, :].unsqueeze(1)
 
-                # Compute log-PDF for all samples at once
+                # Compute log-PDF for all samples at once, per source
                 log_pdf = self._compute_gg_log_pdf_vectorized(Y, mu_k, beta_k, rho_k)
 
-                # Add mixture weight (use mean for scalar)
-                log_prob = log_pdf + torch.log(alpha_k.mean() + self.eps)
+                # Add this source's own mixture weight (not meaned across sources)
+                log_prob = log_pdf + torch.log(alpha_k + self.eps)
                 log_mix_probs.append(log_prob)
 
-            # Combine mixture components
+            # Combine mixture components per source: (n_mix, n_sources, n_samples)
             log_mix_probs_tensor = torch.stack(log_mix_probs, dim=0)
-            log_y_prob = torch.logsumexp(log_mix_probs_tensor, dim=0)
+            # Per-source mixture reduction (logsumexp over k for each source)
+            log_source_probs = torch.logsumexp(log_mix_probs_tensor, dim=0)
 
-            # Add Jacobian and sum over samples
-            log_model_ll = log_y_prob.sum() + n_samples * log_det_W
+            # Sum over sources and samples (Fortran sums per-source LL into Ptmp(h))
+            log_model_ll = log_source_probs.sum()
+
+            if for_training:
+                A = self.A[h]
+                log_det_W = -torch.logdet(A[: self.n_sources, : self.n_sources])
+                log_model_ll = log_model_ll + n_samples * log_det_W
 
             # Add model weight
             log_model_ll = log_model_ll + n_samples * torch.log(self.gm[h] + self.eps)
@@ -207,7 +240,7 @@ class AMICATorch(nn.Module):
         log_model_lls_tensor = torch.stack(log_model_lls)
         total_ll = torch.logsumexp(log_model_lls_tensor, dim=0)
 
-        return total_ll / n_samples
+        return total_ll / (n_samples * self.n_sources)
 
     def _compute_gg_log_pdf_vectorized(
         self, Y: torch.Tensor, mu: torch.Tensor, beta: torch.Tensor, rho: torch.Tensor
@@ -217,7 +250,9 @@ class AMICATorch(nn.Module):
 
         Y: (n_sources, n_samples)
         mu, beta, rho: (n_sources, 1)
-        Returns: scalar (sum over sources)
+        Returns: (n_sources, n_samples), per-source log-density (NOT summed
+        over sources -- the mixture reduction over k must happen per-source
+        before sources are combined; see compute_log_likelihood).
         """
         # Ensure no in-place operations
         beta_safe = torch.clamp(beta, min=self.eps)
@@ -234,9 +269,6 @@ class AMICATorch(nn.Module):
             - torch.log(2 * beta_safe)
             - torch.lgamma(1 / rho_safe)
         )
-
-        # Sum over sources
-        log_p = log_p.sum(dim=0)
 
         # Clamp for stability
         log_p = torch.clamp(log_p, min=self.min_log)
@@ -380,8 +412,11 @@ class AMICATorch(nn.Module):
                     # Zero gradients
                     optimizer.zero_grad()
 
-                    # Compute loss
-                    neg_ll = -self.compute_log_likelihood(X_prep)
+                    # Compute training loss (Jacobian included -- see
+                    # compute_log_likelihood docstring for why the plain
+                    # Fortran-parity objective destabilizes this Adam-based
+                    # backend)
+                    neg_ll = -self.compute_log_likelihood(X_prep, for_training=True)
 
                     if torch.isnan(neg_ll):
                         output.write_warning(f"NaN at iteration {iter}")
@@ -407,8 +442,12 @@ class AMICATorch(nn.Module):
                     # Step
                     optimizer.step()
 
-                    # Log
-                    ll = -neg_ll.item()
+                    # Log the Fortran-parity reported LL (no Jacobian term),
+                    # not the training objective
+                    with torch.no_grad():
+                        ll = self.compute_log_likelihood(
+                            X_prep, for_training=False
+                        ).item()
                     ll_history.append(ll)
 
                     if iter % 5 == 0:
@@ -425,8 +464,11 @@ class AMICATorch(nn.Module):
                 # Zero gradients
                 optimizer.zero_grad()
 
-                # Compute loss
-                neg_ll = -self.compute_log_likelihood(X_prep)
+                # Compute training loss (Jacobian included -- see
+                # compute_log_likelihood docstring for why the plain
+                # Fortran-parity objective destabilizes this Adam-based
+                # backend)
+                neg_ll = -self.compute_log_likelihood(X_prep, for_training=True)
 
                 if torch.isnan(neg_ll):
                     print(f"\nNaN at iteration {iter}")
@@ -438,8 +480,10 @@ class AMICATorch(nn.Module):
                 # Step
                 optimizer.step()
 
-                # Update progress
-                ll = -neg_ll.item()
+                # Log the Fortran-parity reported LL (no Jacobian term), not
+                # the training objective
+                with torch.no_grad():
+                    ll = self.compute_log_likelihood(X_prep, for_training=False).item()
                 ll_history.append(ll)
 
                 pbar.set_postfix(
