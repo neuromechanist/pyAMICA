@@ -351,6 +351,20 @@ class AMICA:
                     "No data provided and no 'files' configured in params_file; "
                     "either pass data explicitly or set 'files'/'data_dim'/'field_dim'."
                 )
+            if self._config_data_dim is None or self._config_field_dim is None:
+                raise ValueError(
+                    "No data provided and 'data_dim'/'field_dim' are not both "
+                    "configured in params_file; either pass data explicitly or "
+                    "set 'files'/'data_dim'/'field_dim'."
+                )
+            if len(self._config_files) != len(self._config_field_dim):
+                raise ValueError(
+                    f"'files' has {len(self._config_files)} entries but "
+                    f"'field_dim' has {len(self._config_field_dim)}; "
+                    "load_multiple_files() requires one field_dim per file "
+                    "(a length mismatch would silently truncate to the "
+                    "shorter list via zip())."
+                )
             from .amica_data import load_multiple_files
 
             data = load_multiple_files(
