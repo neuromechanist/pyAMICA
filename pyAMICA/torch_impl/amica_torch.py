@@ -115,6 +115,9 @@ class AMICATorch(nn.Module):
         # Preprocessing parameters (not trainable)
         self.register_buffer("mean", torch.zeros(self.n_channels, 1, dtype=self.dtype))
         self.register_buffer("sphere", torch.eye(self.n_channels, dtype=self.dtype))
+        # log|det(sphere)|, set by preprocess_data (amica17.f90 "sldet"); 0.0
+        # (log|det(I)|) until preprocessing runs or when do_sphere=False.
+        self.register_buffer("sldet", torch.tensor(0.0, dtype=self.dtype))
 
     @property
     def gm(self) -> torch.Tensor:
@@ -158,9 +161,7 @@ class AMICATorch(nn.Module):
 
         return Y
 
-    def compute_log_likelihood(
-        self, X: torch.Tensor, for_training: bool = False
-    ) -> torch.Tensor:
+    def compute_log_likelihood(self, X: torch.Tensor) -> torch.Tensor:
         """
         Compute the per-sample-per-source log-likelihood.
 
@@ -170,28 +171,22 @@ class AMICATorch(nn.Module):
         the mixture logsumexp would force every source to share one mixture
         label per time point, which is not the AMICA model.
 
-        The log|det W| Jacobian term is intentionally not part of the
-        reported value (`for_training=False`, the default). Fortran's
-        reported LL never includes it (amica17.f90:1866 computes
-        `LL = LLtmp2 / (num_samples * nw)` directly from the mixture
-        log-densities); the natural-gradient update rule accounts for the
-        Jacobian through how A/W are updated rather than through the reported
-        LL. Normalizing by `n_samples * n_sources` (nw) matches Fortran's
-        convention so the reported value is directly comparable.
-
-        `for_training=True` adds the Jacobian term back in for use as the
-        Adam optimization objective only. Empirically (validate_implementations.py
-        on the real sample data), dropping the Jacobian entirely destabilizes
-        this Adam-based backend: nothing in the reparameterized-Adam
-        objective (unlike Fortran's natural-gradient update, which keeps A's
-        columns normalized each iteration) constrains beta/A from drifting
-        into a degenerate region that inflates the mixture log-density
-        without bound, observed as the reported LL going positive and the
-        mixing-matrix relative error exploding by 100 iterations. Fortran
-        avoids this because the Jacobian is implicitly accounted for by its
-        update rule, not because it is missing from the objective, so this
-        backend still needs an explicit Jacobian term in its *training*
-        objective even though it is excluded from the *reported* value.
+        The log|det W| Jacobian term (`log_det_W` below) and the sphering
+        log-determinant (`self.sldet`) ARE both part of Fortran's reported
+        LL, and so are included here unconditionally. Fortran computes
+        `Dtemp(h) = log|det W(h)|` via QR of W (amica17.f90:975-980) and
+        seeds `Ptmp(:, h) = Dsum(h) + log(gm(h)) + sldet` before the
+        per-sample mixture-density loop even starts (amica17.f90:1273),
+        i.e. before the `LL = LLtmp2 / (num_samples * nw)` normalization at
+        amica17.f90:1866. `sldet` is the log|det| of the sphering/whitening
+        transform applied in preprocess_data (amica17.f90's `sldet`,
+        computed there as `sum(-0.5 * log(kept eigenvalues))`; see
+        preprocess_data for the matching computation here). Both terms are
+        also needed for training stability: nothing else in this
+        Adam-over-reparameterized-tensors objective (unlike Fortran's
+        natural-gradient update, which keeps A's columns normalized every
+        iteration) constrains beta/A from drifting into a degenerate region
+        that inflates the mixture log-density without bound.
         """
         n_samples = X.shape[1]
 
@@ -227,10 +222,17 @@ class AMICATorch(nn.Module):
             # Sum over sources and samples (Fortran sums per-source LL into Ptmp(h))
             log_model_ll = log_source_probs.sum()
 
-            if for_training:
-                A = self.A[h]
-                log_det_W = -torch.logdet(A[: self.n_sources, : self.n_sources])
-                log_model_ll = log_model_ll + n_samples * log_det_W
+            # Jacobian of the unmixing transform: log|det W| = -log|det A|
+            # for square invertible A (Fortran computes this directly from W
+            # via QR; slogdet's log-ABSOLUTE-determinant matches Fortran's
+            # own `log(abs(Wtmp(i,i)))`, unlike plain logdet which NaNs on a
+            # negative determinant)
+            A = self.A[h]
+            _, log_abs_det_A = torch.linalg.slogdet(
+                A[: self.n_sources, : self.n_sources]
+            )
+            log_det_W = -log_abs_det_A
+            log_model_ll = log_model_ll + n_samples * log_det_W
 
             # Add model weight
             log_model_ll = log_model_ll + n_samples * torch.log(self.gm[h] + self.eps)
@@ -239,6 +241,11 @@ class AMICATorch(nn.Module):
         # Combine models
         log_model_lls_tensor = torch.stack(log_model_lls)
         total_ll = torch.logsumexp(log_model_lls_tensor, dim=0)
+
+        # Sphering log-determinant (constant across models/samples, so it
+        # factors out of the logsumexp over h the same way it would if added
+        # per-model as Fortran does at amica17.f90:1273)
+        total_ll = total_ll + n_samples * self.sldet
 
         return total_ll / (n_samples * self.n_sources)
 
@@ -281,6 +288,10 @@ class AMICATorch(nn.Module):
         """Preprocess data with MPS-safe operations."""
         X = torch.from_numpy(X).to(self.dtype)
 
+        # log|det(sphere)|; only nonzero when do_sphere actually builds a
+        # non-identity transform below (amica17.f90 "sldet").
+        self.sldet = torch.tensor(0.0, dtype=self.dtype, device=self.device)
+
         # Move to CPU for eigendecomposition if on MPS
         if self.device.type == "mps":
             X_cpu = X.cpu()
@@ -307,6 +318,15 @@ class AMICATorch(nn.Module):
                 # Compute sphering matrix
                 sphere_cpu = eigvecs @ torch.diag(1.0 / torch.sqrt(eigvals + self.eps))
                 self.sphere = sphere_cpu.to(self.device)
+                # log|det(sphere)| = log|det(eigvecs)| + sum(-0.5*log(eigvals))
+                # = sum(-0.5*log(eigvals)) since eigvecs is orthonormal
+                # (amica17.f90:474 computes this same per-eigenvalue sum,
+                # including in the PCA-reduced-rank case where the
+                # transform isn't square and a literal determinant isn't
+                # otherwise well-defined)
+                self.sldet = (
+                    (-0.5 * torch.log(eigvals + self.eps)).sum().to(self.device)
+                )
 
                 # Apply sphering
                 X_cpu = sphere_cpu.T @ X_cpu
@@ -334,6 +354,7 @@ class AMICATorch(nn.Module):
                 eigvecs = eigvecs[:, keep]
 
                 self.sphere = eigvecs @ torch.diag(1.0 / torch.sqrt(eigvals + self.eps))
+                self.sldet = (-0.5 * torch.log(eigvals + self.eps)).sum()
                 X = self.sphere.T @ X
 
         return X
@@ -412,11 +433,9 @@ class AMICATorch(nn.Module):
                     # Zero gradients
                     optimizer.zero_grad()
 
-                    # Compute training loss (Jacobian included -- see
-                    # compute_log_likelihood docstring for why the plain
-                    # Fortran-parity objective destabilizes this Adam-based
-                    # backend)
-                    neg_ll = -self.compute_log_likelihood(X_prep, for_training=True)
+                    # Compute loss (Fortran-parity LL, Jacobian included --
+                    # see compute_log_likelihood docstring)
+                    neg_ll = -self.compute_log_likelihood(X_prep)
 
                     if torch.isnan(neg_ll):
                         output.write_warning(f"NaN at iteration {iter}")
@@ -442,12 +461,8 @@ class AMICATorch(nn.Module):
                     # Step
                     optimizer.step()
 
-                    # Log the Fortran-parity reported LL (no Jacobian term),
-                    # not the training objective
-                    with torch.no_grad():
-                        ll = self.compute_log_likelihood(
-                            X_prep, for_training=False
-                        ).item()
+                    # Log
+                    ll = -neg_ll.item()
                     ll_history.append(ll)
 
                     if iter % 5 == 0:
@@ -464,11 +479,9 @@ class AMICATorch(nn.Module):
                 # Zero gradients
                 optimizer.zero_grad()
 
-                # Compute training loss (Jacobian included -- see
-                # compute_log_likelihood docstring for why the plain
-                # Fortran-parity objective destabilizes this Adam-based
-                # backend)
-                neg_ll = -self.compute_log_likelihood(X_prep, for_training=True)
+                # Compute loss (Fortran-parity LL, Jacobian included -- see
+                # compute_log_likelihood docstring)
+                neg_ll = -self.compute_log_likelihood(X_prep)
 
                 if torch.isnan(neg_ll):
                     print(f"\nNaN at iteration {iter}")
@@ -480,10 +493,8 @@ class AMICATorch(nn.Module):
                 # Step
                 optimizer.step()
 
-                # Log the Fortran-parity reported LL (no Jacobian term), not
-                # the training objective
-                with torch.no_grad():
-                    ll = self.compute_log_likelihood(X_prep, for_training=False).item()
+                # Update progress
+                ll = -neg_ll.item()
                 ll_history.append(ll)
 
                 pbar.set_postfix(
