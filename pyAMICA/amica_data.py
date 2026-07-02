@@ -25,10 +25,7 @@ from typing import List, Tuple, Optional
 
 
 def load_data_file(
-    filepath: str,
-    data_dim: int,
-    field_dim: int,
-    dtype: np.dtype = np.float64
+    filepath: str, data_dim: int, field_dim: int, dtype: np.dtype = np.float64
 ) -> np.ndarray:
     """
     Load data from binary file in Fortran format.
@@ -50,12 +47,15 @@ def load_data_file(
         Loaded data array of shape (data_dim, field_dim)
     """
     # Read entire file at once
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         # Read all data and reshape considering Fortran order
         data = np.fromfile(f, dtype=dtype)
-        # Reshape to (field_dim, data_dim) and transpose to get (data_dim, field_dim)
-        # Using Fortran order 'F' since data is stored in column-major format
-        data = data.reshape((field_dim, data_dim), order='F').T
+        # The file stores a (data_dim, field_dim) array in column-major
+        # (Fortran) order, i.e. channel-fastest within each sample. Reshape
+        # directly to (data_dim, field_dim) with order='F'; no transpose is
+        # needed (transposing after a (field_dim, data_dim) reshape reads
+        # the wrong elements for any non-square data_dim != field_dim).
+        data = data.reshape((data_dim, field_dim), order="F")
 
     return data
 
@@ -64,7 +64,7 @@ def load_multiple_files(
     filepaths: List[str],
     data_dim: int,
     field_dims: List[int],
-    dtype: np.dtype = np.float32
+    dtype: np.dtype = np.float32,
 ) -> np.ndarray:
     """
     Load and concatenate data from multiple binary files.
@@ -95,7 +95,7 @@ def load_multiple_files(
     idx = 0
     for filepath, field_dim in zip(filepaths, field_dims):
         file_data = load_data_file(filepath, data_dim, field_dim, dtype)
-        data[:, idx:idx + field_dim] = file_data
+        data[:, idx : idx + field_dim] = file_data
         idx += field_dim
 
     return data
@@ -107,7 +107,7 @@ def preprocess_data(
     do_sphere: bool = True,
     do_approx_sphere: bool = True,
     pcakeep: Optional[int] = None,
-    pcadb: Optional[float] = None
+    pcadb: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Preprocess data by removing mean and applying sphering transformation.
@@ -181,14 +181,12 @@ def preprocess_data(
         # Create sphering matrix
         if do_approx_sphere:
             # Approximate sphering (faster but less accurate)
-            sphere = np.dot(
-                np.diag(1.0 / np.sqrt(evals[:n_comp])),
-                evecs[:, :n_comp].T)
+            sphere = np.dot(np.diag(1.0 / np.sqrt(evals[:n_comp])), evecs[:, :n_comp].T)
         else:
             # Exact sphering
             sphere = np.linalg.inv(
-                np.dot(np.diag(np.sqrt(evals[:n_comp])),
-                       evecs[:, :n_comp].T))
+                np.dot(np.diag(np.sqrt(evals[:n_comp])), evecs[:, :n_comp].T)
+            )
 
         # Apply sphering
         data = np.dot(sphere, data)
@@ -213,7 +211,7 @@ def save_results(
     comp_list: np.ndarray,
     ll: List[float],
     nd: Optional[List[float]] = None,
-    compress: bool = False
+    compress: bool = False,
 ):
     """
     Save AMICA results to disk.
@@ -257,17 +255,17 @@ def save_results(
 
     # Save parameters
     params = {
-        'A': A,
-        'W': W,
-        'c': c,
-        'mu': mu,
-        'alpha': alpha,
-        'beta': beta,
-        'rho': rho,
-        'gm': gm,
-        'mean': mean,
-        'sphere': sphere,
-        'comp_list': comp_list
+        "A": A,
+        "W": W,
+        "c": c,
+        "mu": mu,
+        "alpha": alpha,
+        "beta": beta,
+        "rho": rho,
+        "gm": gm,
+        "mean": mean,
+        "sphere": sphere,
+        "comp_list": comp_list,
     }
 
     for name, param in params.items():
@@ -277,11 +275,9 @@ def save_results(
             np.save(outdir / f"{name}.npy", param)
 
     # Save optimization history
-    history = {
-        'll': np.array(ll)
-    }
+    history = {"ll": np.array(ll)}
     if nd is not None:
-        history['nd'] = np.array(nd)
+        history["nd"] = np.array(nd)
 
     for name, hist in history.items():
         if compress:
@@ -290,10 +286,7 @@ def save_results(
             np.save(outdir / f"{name}.npy", hist)
 
 
-def load_results(
-    indir: str,
-    compressed: bool = False
-) -> dict:
+def load_results(indir: str, compressed: bool = False) -> dict:
     """
     Load saved AMICA results from disk.
 
@@ -314,8 +307,19 @@ def load_results(
 
     # Parameter names to load
     param_names = [
-        'A', 'W', 'c', 'mu', 'alpha', 'beta', 'rho', 'gm',
-        'mean', 'sphere', 'comp_list', 'll', 'nd'
+        "A",
+        "W",
+        "c",
+        "mu",
+        "alpha",
+        "beta",
+        "rho",
+        "gm",
+        "mean",
+        "sphere",
+        "comp_list",
+        "ll",
+        "nd",
     ]
 
     # Load each parameter
@@ -323,7 +327,7 @@ def load_results(
         filepath = indir / f"{name}.{'npz' if compressed else 'npy'}"
         if filepath.exists():
             if compressed:
-                results[name] = np.load(filepath)['arr_0']
+                results[name] = np.load(filepath)["arr_0"]
             else:
                 results[name] = np.load(filepath)
 
