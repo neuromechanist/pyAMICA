@@ -1,0 +1,110 @@
+# pyAMICA Instructions
+
+## Project Context
+**Purpose:** Python implementation of AMICA (Adaptive Mixture Independent Component Analysis) that reproduces the results of the reference Fortran binary. Targets EEG/EMG source separation with GPU/MPS/CPU support.
+**Tech Stack:** Python 3.10+, PyTorch (primary backend, MPS/CUDA/CPU), NumPy/SciPy (legacy backend), matplotlib. Reference implementation is Fortran (`amica17.f90`, `funmod2.f90`).
+**Architecture:** Two coexisting backends. The PyTorch backend (`pyAMICA/torch_impl/`) is the default and is exposed through a scikit-learn-style `AMICA` interface; the legacy NumPy implementation is retained as `AMICA_NumPy`. Correctness is defined by parity with the Fortran binary, validated by `validate_implementations.py`.
+
+## Architecture Map
+```
+pyAMICA/
+├── amica.py                 # Main scikit-learn-style AMICA interface (PyTorch-backed)
+├── __init__.py              # Exposes AMICA (PyTorch) and AMICA_NumPy (legacy)
+├── torch_impl/              # PyTorch backend (default)
+│   ├── amica_torch.py       #   Core AMICA module
+│   ├── amica_torch_v2.py    #   Enhanced model (Newton + adaptive PDF + multi-model)
+│   ├── adaptive_pdf.py      #   Adaptive PDF selection (Laplace/Student-t/GG)
+│   ├── newton_optimizer.py  #   Newton optimization with Fortran-style ramping
+│   ├── mixture_models.py    #   Mixture-of-densities components
+│   ├── optimizers.py        #   Natural-gradient / optimizer utilities
+│   ├── fortran_output.py    #   Fortran-style debug/log output
+│   └── utils.py             #   Preprocessing (sphering, PCA), device selection
+├── pyAMICA.py, amica_*.py   # Legacy NumPy implementation + CLI/data/viz/pdf/newton
+├── amica17.f90, funmod2.f90 # Fortran reference source (read-only, for parity)
+├── sample_data/             # Sample EEG data + Fortran binary (amica15mac)
+└── tests/                   # Tests, incl. tests/torch_tests/ (vs-Fortran parity)
+
+validate_implementations.py  # Runs both backends, Hungarian component matching, reports
+```
+
+## Environment Setup
+Canonical environment is **UV** (per global standards). Migration from the legacy conda env
+(`torch-312`) to a UV-managed environment is tracked in `.context/plan.md` and not yet complete;
+until it lands, `requirements-torch.txt` documents the PyTorch dependency set.
+```bash
+uv sync                          # Install dependencies (once pyproject declares the torch stack)
+uv run pytest                    # Run tests
+uv run ruff check --fix . && uv run ruff format .
+```
+MPS note: run with `PYTORCH_ENABLE_MPS_FALLBACK=1` for ops MPS does not yet support.
+
+## Key Files
+- **Main interface:** `pyAMICA/amica.py`
+- **Default backend:** `pyAMICA/torch_impl/amica_torch.py` (and `amica_torch_v2.py` for the enhanced model)
+- **Validation harness:** `validate_implementations.py`
+- **Fortran reference binary:** `pyAMICA/sample_data/amica15mac`
+- **Sample data:** `pyAMICA/sample_data/`
+
+## Current Status
+- PyTorch backend with GPU/MPS/CPU support and basic AMICA converges.
+- Validation harness runs both backends and matches components via the Hungarian algorithm.
+- Newton optimization, adaptive PDF selection, and multi-model support are partially implemented.
+- See `FEATURE_PARITY.md`, `MIGRATION_PLAN.md`, and `PROGRESS_SUMMARY.md` for detailed roadmaps.
+
+## Known Issues (parity blockers)
+1. Component correlation with Fortran ~0.7-0.9 (target: >0.95).
+2. Log-likelihood scaling differs from Fortran (~13x factor); enhanced model has produced
+   positive LLs (addressed by the GG normalization fix, needs revalidation).
+3. Newton method unstable, NaN at the Newton-start iteration (gradient clipping + Fortran-matched
+   ramp added, needs revalidation).
+4. Missing adaptive/outlier-rejection features reduce separation quality.
+
+## Development Workflow
+1. **Check context:** `.context/plan.md` for current tasks and priorities.
+2. **Understand deeply:** `.context/ideas.md` (design), `.context/research.md` (Fortran-vs-Python parity).
+3. **Branch:** `gh issue develop <issue-number>` (create an issue first, except minor fixes).
+4. **Code:** Follow patterns in `.rules/`.
+5. **Test:** Real data only (sample EEG + Fortran binary); see `.rules/testing.md`.
+6. **Document failures:** Log dead ends in `.context/scratch_history.md`.
+7. **Commit:** Atomic, <50 chars, no emojis, no AI attribution.
+8. **PR + review:** Run `/review-pr` and address all findings (`.rules/code_review.md`).
+
+## [CRITICAL] Core Principles
+- **NO MOCKS:** Validate against real sample data and the Fortran binary, never fabricated data. Details: `.rules/testing.md`.
+- **No technical debt carried forward:** Address ALL PR review findings; replace, don't deprecate. Details: `.rules/code_review.md`.
+- **Numerical parity is the spec:** Correctness means matching Fortran output within tolerance, not merely "converging".
+
+## [NEVER DO THIS]
+- Never use mocks, stubs, or fake/synthetic data as the basis for correctness tests.
+- Never use `pip`, `conda`, or `virtualenv`; use UV for Python.
+- Never commit secrets, `.env` files, or credentials.
+- Never leave empty catch blocks or silent failures (this codebase already has NaN-suppression risks).
+- Never add backward-compatibility shims; replace directly.
+- Never add a TODO without a linked issue.
+- Never use emojis in commits, PRs, or code.
+
+## [REFERENCE] Rules Directory
+- `.rules/testing.md` - NO MOCK policy, coverage
+- `.rules/python.md` - UV, ruff, ty
+- `.rules/git.md` - Commit/branch conventions
+- `.rules/code_review.md` - PR review toolkit and checklist
+- `.rules/ci_cd.md` - GitHub Actions setup
+- `.rules/documentation.md` - Docs conventions
+- `.rules/self_improve.md` - Learning/pattern extraction
+- `.rules/serena_mcp.md` - Serena MCP code intelligence (when available)
+
+## Context Files
+- `.context/plan.md` - Current tasks, phases, priorities
+- `.context/research.md` - Fortran-vs-Python parity analysis (data structures, subroutines, divergence causes)
+- `.context/ideas.md` - PyTorch design decisions and library options
+- `.context/scratch_history.md` - Debugging notes, failed attempts, lessons
+- `.context/decisions/` - Architecture Decision Records (copy `0000-template.md` to start one)
+
+## Project Docs (top-level)
+- `FEATURE_PARITY.md` - Feature comparison and implementation roadmap
+- `MIGRATION_PLAN.md` - NumPy to PyTorch migration timeline
+- `PROGRESS_SUMMARY.md` - Achievements and validation metrics snapshot
+- `README.md` - Overview and quick start
+
+---
+Remember: parity with the Fortran reference is the definition of done. Check `.rules/` for detailed guidance.
