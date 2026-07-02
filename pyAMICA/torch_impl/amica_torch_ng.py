@@ -435,7 +435,13 @@ class AMICATorchNG:
             rho_h_col = self.rho[:, idx].T  # (n_channels, num_mix)
             rho_mask = (rho_h_col != 1.0) & (rho_h_col != 2.0)
             abs_y = y.abs()
-            drho_term = abs_y.pow(rho_h_col.unsqueeze(0)) * torch.log(abs_y)
+            # log(abs_y) is -inf at abs_y == 0, and abs_y.pow(rho) is exactly 0
+            # there (rho > 0), so the unguarded product is 0 * -inf = NaN. Fortran
+            # hits the identical term (amica17.f90:1559-1572, tmpy**rho * log(tmpy))
+            # and guards it the same way: clamp the log input so the product
+            # collapses to the analytically-correct 0 instead of NaN.
+            safe_log_abs_y = torch.log(abs_y.clamp_min(torch.finfo(self.dtype).tiny))
+            drho_term = abs_y.pow(rho_h_col.unsqueeze(0)) * safe_log_abs_y
             drho_term = torch.where(
                 rho_mask.unsqueeze(0), drho_term, torch.zeros_like(drho_term)
             )
