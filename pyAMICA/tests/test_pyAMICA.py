@@ -100,7 +100,9 @@ def test_data_loading(temp_dir):
 
 
 @pytest.mark.xfail(
-    reason="legacy NumPy Newton optimization hits NaN likelihood (parity gated by epic #9)",
+    reason="legacy NumPy Newton optimization no longer NaNs (issue #11 epsilon "
+    "floor on dalpha), but source separation quality is still too low to "
+    "pass (corr ~0.19 vs required >0.8); parity gated by epic #9",
     strict=True,
     raises=AssertionError,
 )

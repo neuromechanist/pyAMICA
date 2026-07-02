@@ -757,18 +757,27 @@ class AMICA:
         # Update mixture weights
         self.alpha = updates["dalpha"] / np.sum(updates["dalpha"], axis=0)
 
+        # dalpha is the per-component responsibility mass and is also used
+        # below as the divisor for dmu/dbeta/drho. When a mixture component's
+        # responsibility collapses to (near) zero -- e.g. an outlier
+        # component with no assigned samples -- dividing by it directly
+        # produces NaN and poisons mu/beta/rho for that component. Floor it
+        # with a small epsilon, matching the epsilon-floor pattern used
+        # elsewhere in this codebase (e.g. invsigmin/invsigmax clipping).
+        dalpha_safe = np.maximum(updates["dalpha"], 1e-10)
+
         # Update component means
-        dmu = updates["dmu"] / updates["dalpha"]
+        dmu = updates["dmu"] / dalpha_safe
         self.mu += self.lrate * dmu
 
         # Update scale parameters
-        dbeta = updates["dbeta"] / updates["dalpha"]
+        dbeta = updates["dbeta"] / dalpha_safe
         self.beta *= np.sqrt(1 + self.lrate * dbeta)
         self.beta = np.clip(self.beta, self.invsigmin, self.invsigmax)
 
         # Update shape parameters
         if not np.all(self.rho == 1.0) and not np.all(self.rho == 2.0):
-            drho = updates["drho"] / updates["dalpha"]
+            drho = updates["drho"] / dalpha_safe
             self.rho += self.rholrate * (1 - self.rho * drho)
             self.rho = np.clip(self.rho, self.minrho, self.maxrho)
 
