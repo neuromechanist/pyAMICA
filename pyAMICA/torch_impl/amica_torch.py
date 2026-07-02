@@ -317,7 +317,6 @@ class AMICATorch(nn.Module):
         do_mean: bool = True,
         do_sphere: bool = True,
         verbose: bool = True,
-        **kwargs,
     ) -> "AMICATorch":
         """
         Fit AMICA model.
