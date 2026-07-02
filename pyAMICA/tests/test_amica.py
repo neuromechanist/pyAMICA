@@ -107,8 +107,10 @@ class TestAMICA(unittest.TestCase):
     def test_full_amica(self):
         """Test full AMICA optimization.
 
-        Currently fails: legacy NumPy Newton optimization hits NaN
-        likelihood (parity gated by epic #9); not fixed in Phase 1.
+        Currently fails: legacy NumPy Newton optimization no longer NaNs
+        (issue #11 epsilon floor on dalpha), but source separation quality
+        is still too low to pass (corr ~0.19 vs required >0.9); parity
+        gated by epic #9.
         """
         # Create simple test case
         rng = np.random.RandomState(42)
