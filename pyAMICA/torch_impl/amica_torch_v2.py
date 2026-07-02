@@ -231,8 +231,20 @@ class AMICATorchV2(nn.Module):
                 )
                 
                 # Combine with mixture weights
-                log_mix_probs = log_pdf + torch.log(self.alpha.unsqueeze(-1) + self.eps)
-                log_y_prob = torch.logsumexp(log_mix_probs, dim=0).sum()
+                # log_pdf is (n_mix, n_sources, n_samples)
+                # We need to sum log probabilities for each source independently
+                log_probs_per_source = []
+                for i in range(self.n_sources):
+                    # Get log PDF for this source across all mixtures
+                    log_pdf_i = log_pdf[:, i, :]  # (n_mix, n_samples)
+                    # Add mixture weights for this source
+                    log_mix_probs_i = log_pdf_i + torch.log(self.alpha[:, i].unsqueeze(-1) + self.eps)
+                    # Combine mixtures for this source
+                    log_prob_i = torch.logsumexp(log_mix_probs_i, dim=0)  # (n_samples,)
+                    log_probs_per_source.append(log_prob_i)
+                
+                # Sum log probabilities across sources and samples
+                log_y_prob = torch.stack(log_probs_per_source).sum()
             else:
                 # Use fixed Generalized Gaussian
                 log_mix_probs = []
@@ -251,11 +263,12 @@ class AMICATorchV2(nn.Module):
                 log_y_prob = torch.logsumexp(log_mix_probs_tensor, dim=0).sum()
             
             # Add Jacobian and model weight
-            log_model_ll = log_y_prob + n_samples * (log_det_W + torch.log(self.gm[h] + self.eps))
+            log_model_ll = log_y_prob + n_samples * log_det_W
             log_model_lls.append(log_model_ll)
         
-        # Combine models
-        log_model_lls_tensor = torch.stack(log_model_lls)
+        # Combine models with model weights
+        log_model_weights = torch.log(self.gm + self.eps)
+        log_model_lls_tensor = torch.stack(log_model_lls) + n_samples * log_model_weights
         total_ll = torch.logsumexp(log_model_lls_tensor, dim=0)
         
         return total_ll / n_samples
@@ -419,7 +432,7 @@ class AMICATorchV2(nn.Module):
                 for iter in range(max_iter):
                     # Get Newton-ramped learning rate
                     current_lrate, is_newton = self.newton_optimizer.step(
-                        X_prep, lrate, do_newton
+                        X_prep, lrate, do_newton, current_iter=iter
                     )
                     
                     # Zero gradients
@@ -434,6 +447,10 @@ class AMICATorchV2(nn.Module):
                     
                     # Backward
                     neg_ll.backward()
+                    
+                    # Gradient clipping for stability
+                    max_norm = 5.0 if is_newton else 10.0
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=max_norm)
                     
                     # Apply Newton direction if active
                     if is_newton:
@@ -468,7 +485,7 @@ class AMICATorchV2(nn.Module):
             for iter in pbar:
                 # Get Newton-ramped learning rate
                 current_lrate, is_newton = self.newton_optimizer.step(
-                    X_prep, lrate, do_newton
+                    X_prep, lrate, do_newton, current_iter=iter
                 )
                 
                 # Zero gradients
@@ -483,6 +500,10 @@ class AMICATorchV2(nn.Module):
                 
                 # Backward
                 neg_ll.backward()
+                
+                # Gradient clipping for stability
+                max_norm = 5.0 if is_newton else 10.0
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=max_norm)
                 
                 # Step
                 optimizer.step()

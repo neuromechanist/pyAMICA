@@ -79,8 +79,8 @@ class FortranStyleOutput:
         header.append(f"Newton optimization: {config.get('do_newton', False)}\n")
         
         if config.get('do_newton', False):
-            header.append(f"Newton start: {config.get('newton_start', 20)}\n")
-            header.append(f"Newton ramp: {config.get('newton_ramp', 10)}\n")
+            header.append(f"Newton start: {config.get('newt_start', 50)}\n")
+            header.append(f"Newton ramp: {config.get('newt_ramp', 10)}\n")
             
         header.append(f"Device: {config.get('device', 'cpu')}\n")
         header.append("-" * 70 + "\n")

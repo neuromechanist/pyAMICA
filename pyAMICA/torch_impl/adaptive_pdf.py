@@ -198,17 +198,20 @@ class AdaptivePDF(nn.Module):
                 # rho is (n_mix,) and y is (n_mix, n_samples) or (n_samples,)
                 if y.dim() == 2:
                     log_pdf = -torch.pow(abs_y, rho.unsqueeze(1))
-                    log_norm = torch.lgamma(1.0 + 1.0/rho.unsqueeze(1)) + torch.log(torch.tensor(2.0))
+                    # Correct normalization: log(rho/(2*Gamma(1/rho)))
+                    log_norm = torch.log(torch.tensor(2.0)) + torch.lgamma(1.0/rho.unsqueeze(1)) - torch.log(rho.unsqueeze(1))
                 else:
                     log_pdf = -torch.pow(abs_y, rho.mean())
-                    log_norm = torch.lgamma(1.0 + 1.0/rho.mean()) + torch.log(torch.tensor(2.0))
+                    # Correct normalization: log(rho/(2*Gamma(1/rho)))
+                    log_norm = torch.log(torch.tensor(2.0)) + torch.lgamma(1.0/rho.mean()) - torch.log(rho.mean())
             else:
                 # Scalar rho
                 rho_val = rho.item() if rho.numel() == 1 else rho
                 log_pdf = -torch.pow(abs_y, rho_val)
-                log_norm = torch.lgamma(1.0 + 1.0/rho_val) + torch.log(torch.tensor(2.0))
+                # Correct normalization: log(rho/(2*Gamma(1/rho)))
+                log_norm = torch.log(torch.tensor(2.0)) + torch.lgamma(1.0/rho_val) - torch.log(rho_val)
             
-            # Add normalization constant
+            # Subtract normalization constant to get log(pdf)
             log_pdf = log_pdf - log_norm
             
             if compute_deriv:

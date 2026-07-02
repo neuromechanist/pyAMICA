@@ -57,19 +57,25 @@ class AMICANewtonOptimizer:
             except ImportError:
                 logger.warning("pytorch-minimize not available, using custom implementation")
     
-    def get_learning_rate(self, base_lrate: float = 0.05) -> float:
+    def get_learning_rate(self, base_lrate: float = 0.05, newtrate: float = 0.5) -> float:
         """
         Get learning rate with Newton ramping like Fortran.
         
         Fortran behavior:
-        - Before newt_start: use base_lrate
-        - During ramping: gradually increase to 1.0
-        - After ramping: use 1.0 (full Newton)
+        - Before newt_start: use base_lrate  
+        - During ramping: double each iteration, cap at newtrate
+        - After ramping: use newtrate
+        
+        The Fortran code does:
+        lrate = min(newtrate, lrate + min(1/newt_ramp, lrate))
+        This effectively doubles lrate each iteration during ramping.
         
         Parameters
         ----------
         base_lrate : float
             Base learning rate for natural gradient
+        newtrate : float
+            Maximum Newton learning rate (default 0.5)
             
         Returns
         -------
@@ -79,14 +85,20 @@ class AMICANewtonOptimizer:
         if self.current_iter < self.newt_start:
             # Natural gradient phase
             return base_lrate
-        elif self.current_iter < self.newt_start + self.newt_ramp:
-            # Ramping phase
-            ramp_progress = (self.current_iter - self.newt_start) / self.newt_ramp
-            # Linear interpolation from base_lrate to 1.0
-            return base_lrate + (1.0 - base_lrate) * ramp_progress
         else:
-            # Full Newton phase
-            return 1.0
+            # Newton phase - compute how many iterations into Newton we are
+            newton_iter = self.current_iter - self.newt_start
+            
+            # Start with base learning rate
+            lrate = base_lrate
+            
+            # Double the learning rate for each Newton iteration (up to newt_ramp iterations)
+            for _ in range(min(newton_iter + 1, self.newt_ramp)):
+                # Fortran: lrate = min(newtrate, lrate + min(1/newt_ramp, lrate))
+                increment = min(1.0 / self.newt_ramp, lrate)
+                lrate = min(newtrate, lrate + increment)
+            
+            return lrate
     
     def compute_newton_direction(
         self,
@@ -158,7 +170,8 @@ class AMICANewtonOptimizer:
         self,
         X: torch.Tensor,
         base_lrate: float = 0.05,
-        use_newton: bool = True
+        use_newton: bool = True,
+        current_iter: int = None
     ) -> Tuple[float, bool]:
         """
         Perform optimization step with automatic Newton ramping.
@@ -171,6 +184,8 @@ class AMICANewtonOptimizer:
             Base learning rate
         use_newton : bool
             Whether to use Newton (will auto-enable based on iteration)
+        current_iter : int, optional
+            Current iteration number (if None, uses internal counter)
             
         Returns
         -------
@@ -179,7 +194,11 @@ class AMICANewtonOptimizer:
         is_newton : bool
             Whether Newton method was used
         """
-        self.current_iter += 1
+        # Use provided iteration or increment internal counter
+        if current_iter is not None:
+            self.current_iter = current_iter
+        else:
+            self.current_iter += 1
         
         # Determine if we should use Newton based on iteration
         is_newton = use_newton and (self.current_iter >= self.newt_start)
