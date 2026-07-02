@@ -79,8 +79,10 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from tqdm import tqdm
 from .amica_utils import (
-    gammaln, determine_block_size, identify_shared_components,
-    get_unmixing_matrices
+    gammaln,
+    determine_block_size,
+    identify_shared_components,
+    get_unmixing_matrices,
 )
 
 
@@ -99,13 +101,13 @@ def load_default_params(params_file: Optional[str] = None) -> Dict:
         Dictionary of default parameters
     """
     if params_file is None:
-        params_file = Path(__file__).parent / 'params.json'
+        params_file = Path(__file__).parent / "params.json"
 
     with open(params_file) as f:
         params = json.load(f)
 
     # Remove data-specific parameters
-    data_params = {'files', 'num_samples', 'data_dim', 'field_dim'}
+    data_params = {"files", "num_samples", "data_dim", "field_dim"}
     return {k: v for k, v in params.items() if k not in data_params}
 
 
@@ -127,7 +129,7 @@ class AMICA:
         params_file: Optional[str] = None,
         use_tqdm: bool = True,
         verbose: bool = False,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize AMICA with parameters.
@@ -153,60 +155,78 @@ class AMICA:
         params.update(kwargs)
 
         # Store parameters
-        self.num_models = params.get('num_models', 1)
-        self.num_mix = params.get('num_mix', 3)
-        self.max_iter = params.get('max_iter', 2000)
-        self.do_newton = params.get('do_newton', False)
-        self.newt_start = params.get('newt_start', 20)
-        self.newt_ramp = params.get('newt_ramp', 10)
-        self.newtrate = params.get('newtrate', 0.5)
-        self.do_reject = params.get('do_reject', False)
-        self.rejsig = params.get('rejsig', 3.0)
-        self.rejstart = params.get('rejstart', 2)
-        self.rejint = params.get('rejint', 3)
-        self.maxrej = params.get('maxrej', 1)
-        self.num_comps = params.get('num_comps', -1)
-        self.lrate = params.get('lrate', 0.1)
+        self.num_models = params.get("num_models", 1)
+        if self.num_models < 1:
+            raise ValueError(f"num_models must be >= 1, got {self.num_models}")
+        self.num_mix = params.get("num_mix", 3)
+        self.max_iter = params.get("max_iter", 2000)
+        if self.max_iter < 1:
+            raise ValueError(f"max_iter must be >= 1, got {self.max_iter}")
+        self.do_newton = params.get("do_newton", False)
+        self.newt_start = params.get("newt_start", 20)
+        self.newt_ramp = params.get("newt_ramp", 10)
+        self.newtrate = params.get("newtrate", 0.5)
+        self.do_reject = params.get("do_reject", False)
+        self.rejsig = params.get("rejsig", 3.0)
+        self.rejstart = params.get("rejstart", 2)
+        self.rejint = params.get("rejint", 3)
+        self.maxrej = params.get("maxrej", 1)
+        self.num_comps = params.get("num_comps", -1)
+        self.lrate = params.get("lrate", 0.1)
         self.lrate0 = self.lrate
-        self.minlrate = params.get('minlrate', 1e-12)
-        self.lratefact = params.get('lratefact', 0.5)
-        self.rho0 = params.get('rho0', 1.5)
-        self.minrho = params.get('minrho', 1.0)
-        self.maxrho = params.get('maxrho', 2.0)
-        self.rholrate = params.get('rholrate', 0.05)
+        self.minlrate = params.get("minlrate", 1e-12)
+        self.lratefact = params.get("lratefact", 0.5)
+        self.rho0 = params.get("rho0", 1.5)
+        self.minrho = params.get("minrho", 1.0)
+        self.maxrho = params.get("maxrho", 2.0)
+        self.rholrate = params.get("rholrate", 0.05)
         self.rholrate0 = self.rholrate
-        self.rholratefact = params.get('rholratefact', 0.1)
-        self.invsigmax = params.get('invsigmax', 1000.0)
-        self.invsigmin = params.get('invsigmin', 1e-4)
-        self.do_history = params.get('do_history', False)
-        self.histstep = params.get('histstep', 10)
-        self.do_opt_block = params.get('do_opt_block', True)
-        self.block_size = params.get('block_size', 128)
-        self.blk_min = params.get('blk_min', 128)
-        self.blk_max = params.get('blk_max', 1024)
-        self.blk_step = params.get('blk_step', 128)
-        self.share_comps = params.get('share_comps', False)
-        self.comp_thresh = params.get('comp_thresh', 0.99)
-        self.share_start = params.get('share_start', 100)
-        self.share_int = params.get('share_int', 100)
-        self.doscaling = params.get('doscaling', True)
-        self.scalestep = params.get('scalestep', 1)
-        self.do_sphere = params.get('do_sphere', True)
-        self.do_mean = params.get('do_mean', True)
-        self.do_approx_sphere = params.get('do_approx_sphere', True)
-        self.pcakeep = params.get('pcakeep')
-        self.pcadb = params.get('pcadb')
-        self.writestep = params.get('writestep', 100)
-        self.max_decs = params.get('max_decs', 5)
-        self.min_dll = params.get('min_dll', 1e-9)
-        self.min_grad_norm = params.get('min_grad_norm', 1e-7)
-        self.use_min_dll = params.get('use_min_dll', True)
-        self.use_grad_norm = params.get('use_grad_norm', True)
-        self.pdftype = params.get('pdftype', 1)
-        self.outdir = Path(params.get('outdir', 'output'))
+        self.rholratefact = params.get("rholratefact", 0.1)
+        self.invsigmax = params.get("invsigmax", 1000.0)
+        self.invsigmin = params.get("invsigmin", 1e-4)
+        self.do_history = params.get("do_history", False)
+        self.histstep = params.get("histstep", 10)
+        self.do_opt_block = params.get("do_opt_block", True)
+        self.block_size = params.get("block_size", 128)
+        self.blk_min = params.get("blk_min", 128)
+        self.blk_max = params.get("blk_max", 1024)
+        self.blk_step = params.get("blk_step", 128)
+        self.share_comps = params.get("share_comps", False)
+        self.comp_thresh = params.get("comp_thresh", 0.99)
+        self.share_start = params.get("share_start", 100)
+        self.share_int = params.get("share_int", 100)
+        self.doscaling = params.get("doscaling", True)
+        self.scalestep = params.get("scalestep", 1)
+        self.do_sphere = params.get("do_sphere", True)
+        self.do_mean = params.get("do_mean", True)
+        self.do_approx_sphere = params.get("do_approx_sphere", True)
+        self.pcakeep = params.get("pcakeep")
+        self.pcadb = params.get("pcadb")
+        self.writestep = params.get("writestep", 100)
+        self.max_decs = params.get("max_decs", 5)
+        self.min_dll = params.get("min_dll", 1e-9)
+        self.min_grad_norm = params.get("min_grad_norm", 1e-7)
+        self.use_min_dll = params.get("use_min_dll", True)
+        self.use_grad_norm = params.get("use_grad_norm", True)
+        self.pdftype = params.get("pdftype", 1)
+        self.outdir = Path(params.get("outdir", "output"))
+
+        # Data-source config (used by fit() when called without explicit
+        # data). load_default_params() strips 'files'/'data_dim'/'field_dim'
+        # from `params` (they are data-specific, not hyperparameters), so
+        # read them directly from the raw params_file JSON instead.
+        self._config_files = None
+        self._config_data_dim = None
+        self._config_field_dim = None
+        if params_file is not None:
+            with open(params_file) as f:
+                raw_params = json.load(f)
+            self._config_files = raw_params.get("files")
+            self._config_data_dim = raw_params.get("data_dim")
+            self._config_field_dim = raw_params.get("field_dim")
 
         # Initialize random state
-        self.rng = np.random.RandomState(params.get('seed'))
+        self.rng = np.random.RandomState(params.get("seed"))
 
         # Initialize model parameters
         self.A = None  # Mixing matrix
@@ -246,46 +266,118 @@ class AMICA:
         # Create main logger
         self.logger = logging.getLogger("AMICA")
         self.logger.setLevel(logging.INFO)
-        
+
         # Ensure output directory exists
         self.outdir = Path(self.outdir)
         if not self.outdir.exists():
             self.outdir.mkdir(parents=True)
-        
+
         # Remove any existing handlers
         for handler in self.logger.handlers[:]:
             self.logger.removeHandler(handler)
-        
+
         # Add console handler for stdout
         console_handler = logging.StreamHandler()
-        console_formatter = logging.Formatter('%(message)s')
+        console_formatter = logging.Formatter("%(message)s")
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)
-        
+
         # Add file handler for out.txt
-        self.file_path = self.outdir / 'out.txt'
-        file_handler = logging.FileHandler(self.file_path, mode='w')
-        file_formatter = logging.Formatter('%(message)s')
+        self.file_path = self.outdir / "out.txt"
+        file_handler = logging.FileHandler(self.file_path, mode="w")
+        file_formatter = logging.Formatter("%(message)s")
         file_handler.setFormatter(file_formatter)
         self.logger.addHandler(file_handler)
-        
+
         # Prevent propagation to avoid duplicate logging
         self.logger.propagate = False
 
-    def fit(self, data: np.ndarray) -> "AMICA":
+    @classmethod
+    def from_json_file(cls, params_file: str, **kwargs) -> "AMICA":
+        """
+        Construct an AMICA model from a JSON parameter file.
+
+        Equivalent to ``AMICA(params_file=params_file, **kwargs)``. If the
+        parameter file defines ``files``/``data_dim``/``field_dim``, a
+        subsequent call to :meth:`fit` with no arguments will load the data
+        described there (see :meth:`fit`).
+
+        Parameters
+        ----------
+        params_file : str
+            Path to JSON parameter file.
+        **kwargs
+            Additional overrides passed through to the constructor.
+
+        Returns
+        -------
+        model : AMICA
+            An unfitted model configured from the parameter file.
+        """
+        return cls(params_file=params_file, **kwargs)
+
+    def get_weights(self) -> np.ndarray:
+        """
+        Return the learned unmixing matrix for the first model.
+
+        Returns
+        -------
+        W : ndarray of shape (n_components, n_components)
+            Unmixing matrix for model 0.
+        """
+        if self.W is None:
+            raise RuntimeError("Model has not been fitted yet; call fit() first.")
+        return self.W[:, :, 0]
+
+    def fit(self, data: Optional[np.ndarray] = None) -> "AMICA":
         """
         Fit the AMICA model to the data.
 
         Parameters
         ----------
-        data : ndarray of shape (n_channels, n_samples)
-            The input data to fit the model to.
+        data : ndarray of shape (n_channels, n_samples), optional
+            The input data to fit the model to. If omitted, the data is
+            loaded from the ``files``/``data_dim``/``field_dim`` parameters
+            supplied via ``params_file`` (see :meth:`from_json_file`).
 
         Returns
         -------
         self : AMICA
             The fitted model.
         """
+        if data is None:
+            if not self._config_files:
+                raise ValueError(
+                    "No data provided and no 'files' configured in params_file; "
+                    "either pass data explicitly or set 'files'/'data_dim'/'field_dim'."
+                )
+            if self._config_data_dim is None or self._config_field_dim is None:
+                raise ValueError(
+                    "No data provided and 'data_dim'/'field_dim' are not both "
+                    "configured in params_file; either pass data explicitly or "
+                    "set 'files'/'data_dim'/'field_dim'."
+                )
+            if len(self._config_files) != len(self._config_field_dim):
+                raise ValueError(
+                    f"'files' has {len(self._config_files)} entries but "
+                    f"'field_dim' has {len(self._config_field_dim)}; "
+                    "load_multiple_files() requires one field_dim per file "
+                    "(a length mismatch would silently truncate to the "
+                    "shorter list via zip())."
+                )
+            from .amica_data import load_multiple_files
+
+            data = load_multiple_files(
+                self._config_files, self._config_data_dim, self._config_field_dim
+            )
+
+        if data.ndim != 2:
+            raise ValueError(
+                f"data must be a 2D array (n_channels, n_samples), got shape {data.shape}"
+            )
+        if data.size == 0:
+            raise ValueError("data must not be empty")
+
         # Log initial message
         self.logger.info("Starting AMICA fitting...")
 
@@ -305,7 +397,8 @@ class AMICA:
         # Optimize block size if requested
         if self.do_opt_block:
             self.block_size = determine_block_size(
-                self.data, self.blk_min, self.blk_max, self.blk_step)
+                self.data, self.blk_min, self.blk_max, self.blk_step
+            )
             self.logger.info(f"Optimal block size: {self.block_size}")
 
         # Main optimization loop
@@ -348,13 +441,13 @@ class AMICA:
             if self.do_approx_sphere:
                 # Approximate sphering (faster but less accurate)
                 self.sphere = np.dot(
-                    np.diag(1.0 / np.sqrt(evals[:n_comp])),
-                    evecs[:, :n_comp].T)
+                    np.diag(1.0 / np.sqrt(evals[:n_comp])), evecs[:, :n_comp].T
+                )
             else:
                 # Exact sphering
                 self.sphere = linalg.inv(
-                    np.dot(np.diag(np.sqrt(evals[:n_comp])),
-                           evecs[:, :n_comp].T))
+                    np.dot(np.diag(np.sqrt(evals[:n_comp])), evecs[:, :n_comp].T)
+                )
 
             # Apply sphering
             data = np.dot(self.sphere, data)
@@ -369,13 +462,14 @@ class AMICA:
         if self.A is None:
             self.A = np.zeros((self.data_dim, self.num_comps))
             for h in range(self.num_models):
-                if not hasattr(self, 'fix_init') or not self.fix_init:
-                    self.A[:, h * self.data_dim:(h + 1) * self.data_dim] = (
-                        np.eye(self.data_dim) + 0.01 * (
-                            0.5 - self.rng.rand(self.data_dim, self.data_dim))
-                    )
+                if not hasattr(self, "fix_init") or not self.fix_init:
+                    self.A[:, h * self.data_dim : (h + 1) * self.data_dim] = np.eye(
+                        self.data_dim
+                    ) + 0.01 * (0.5 - self.rng.rand(self.data_dim, self.data_dim))
                 else:
-                    self.A[:, h * self.data_dim:(h + 1) * self.data_dim] = np.eye(self.data_dim)
+                    self.A[:, h * self.data_dim : (h + 1) * self.data_dim] = np.eye(
+                        self.data_dim
+                    )
 
         # Initialize component assignments
         self.comp_list = np.zeros((self.data_dim, self.num_models), dtype=int)
@@ -388,7 +482,7 @@ class AMICA:
             self.mu = np.zeros((self.num_mix, self.num_comps))
             for k in range(self.num_comps):
                 self.mu[:, k] = np.linspace(-1, 1, self.num_mix)
-                if not hasattr(self, 'fix_init') or not self.fix_init:
+                if not hasattr(self, "fix_init") or not self.fix_init:
                     self.mu[:, k] += 0.05 * (1 - 2 * self.rng.rand(self.num_mix))
 
         if self.alpha is None:
@@ -396,7 +490,7 @@ class AMICA:
 
         if self.beta is None:
             self.beta = np.ones((self.num_mix, self.num_comps))
-            if not hasattr(self, 'fix_init') or not self.fix_init:
+            if not hasattr(self, "fix_init") or not self.fix_init:
                 self.beta += 0.1 * (0.5 - self.rng.rand(self.num_mix, self.num_comps))
 
         if self.rho is None:
@@ -423,7 +517,9 @@ class AMICA:
         """Update unmixing matrices from mixing matrix."""
         self.W = get_unmixing_matrices(self.A, self.comp_list)
 
-    def _compute_log_pdf(self, y: np.ndarray, rho: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _compute_log_pdf(
+        self, y: np.ndarray, rho: float
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Compute log PDF value and its derivative for given activation.
 
@@ -470,23 +566,27 @@ class AMICA:
         """
         # Initialize update accumulators
         updates = {
-            'dgm': np.zeros(self.num_models),
-            'dalpha': np.zeros((self.num_mix, self.num_comps)),
-            'dmu': np.zeros((self.num_mix, self.num_comps)),
-            'dbeta': np.zeros((self.num_mix, self.num_comps)),
-            'drho': np.zeros((self.num_mix, self.num_comps)),
-            'dA': np.zeros((self.data_dim, self.data_dim, self.num_models)),
-            'dc': np.zeros((self.data_dim, self.num_models)),
-            'll': 0.0
+            "dgm": np.zeros(self.num_models),
+            "dalpha": np.zeros((self.num_mix, self.num_comps)),
+            "dmu": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta": np.zeros((self.num_mix, self.num_comps)),
+            "drho": np.zeros((self.num_mix, self.num_comps)),
+            "dA": np.zeros((self.data_dim, self.data_dim, self.num_models)),
+            "dc": np.zeros((self.data_dim, self.num_models)),
+            "ll": 0.0,
         }
 
         if self.do_newton:
-            updates.update({
-                'dsigma2': np.zeros((self.data_dim, self.num_models)),
-                'dlambda': np.zeros((self.data_dim, self.num_models)),
-                'dkappa': np.zeros((self.data_dim, self.num_models)),
-                'dbaralpha': np.zeros((self.num_mix, self.data_dim, self.num_models))
-            })
+            updates.update(
+                {
+                    "dsigma2": np.zeros((self.data_dim, self.num_models)),
+                    "dlambda": np.zeros((self.data_dim, self.num_models)),
+                    "dkappa": np.zeros((self.data_dim, self.num_models)),
+                    "dbaralpha": np.zeros(
+                        (self.num_mix, self.data_dim, self.num_models)
+                    ),
+                }
+            )
 
         # Process data in blocks
         for start in range(0, self.data.shape[1], self.block_size):
@@ -518,23 +618,27 @@ class AMICA:
         """
         batch_size = X.shape[1]
         updates = {
-            'dgm': np.zeros(self.num_models),
-            'dalpha': np.zeros((self.num_mix, self.num_comps)),
-            'dmu': np.zeros((self.num_mix, self.num_comps)),
-            'dbeta': np.zeros((self.num_mix, self.num_comps)),
-            'drho': np.zeros((self.num_mix, self.num_comps)),
-            'dA': np.zeros((self.data_dim, self.data_dim, self.num_models)),
-            'dc': np.zeros((self.data_dim, self.num_models)),
-            'll': 0.0
+            "dgm": np.zeros(self.num_models),
+            "dalpha": np.zeros((self.num_mix, self.num_comps)),
+            "dmu": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta": np.zeros((self.num_mix, self.num_comps)),
+            "drho": np.zeros((self.num_mix, self.num_comps)),
+            "dA": np.zeros((self.data_dim, self.data_dim, self.num_models)),
+            "dc": np.zeros((self.data_dim, self.num_models)),
+            "ll": 0.0,
         }
 
         if self.do_newton:
-            updates.update({
-                'dsigma2': np.zeros((self.data_dim, self.num_models)),
-                'dlambda': np.zeros((self.data_dim, self.num_models)),
-                'dkappa': np.zeros((self.data_dim, self.num_models)),
-                'dbaralpha': np.zeros((self.num_mix, self.data_dim, self.num_models))
-            })
+            updates.update(
+                {
+                    "dsigma2": np.zeros((self.data_dim, self.num_models)),
+                    "dlambda": np.zeros((self.data_dim, self.num_models)),
+                    "dkappa": np.zeros((self.data_dim, self.num_models)),
+                    "dbaralpha": np.zeros(
+                        (self.num_mix, self.data_dim, self.num_models)
+                    ),
+                }
+            )
 
         # Compute activations for each model
         b = np.zeros((batch_size, self.data_dim, self.num_models))
@@ -553,7 +657,9 @@ class AMICA:
                     log_pdf, dpdf = self._compute_log_pdf(y, self.rho[j, k])
 
                     # Compute log probability directly in log space
-                    z[:, i, j, h] = np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + log_pdf
+                    z[:, i, j, h] = (
+                        np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + log_pdf
+                    )
 
         # Normalize responsibilities
         z = np.exp(z - np.max(z, axis=2, keepdims=True))
@@ -575,43 +681,47 @@ class AMICA:
         v /= np.sum(v, axis=1, keepdims=True)
 
         # Accumulate parameter updates
-        updates['ll'] = np.sum(ll)
+        updates["ll"] = np.sum(ll)
 
         for h in range(self.num_models):
             # Model weights
-            updates['dgm'][h] = np.sum(v[:, h])
+            updates["dgm"][h] = np.sum(v[:, h])
 
             for i in range(self.data_dim):
                 k = self.comp_list[i, h]
 
                 # Mixture weights
                 for j in range(self.num_mix):
-                    updates['dalpha'][j, k] += np.sum(v[:, h] * z[:, i, j, h])
+                    updates["dalpha"][j, k] += np.sum(v[:, h] * z[:, i, j, h])
 
                     # Component means
                     y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
                     log_pdf, dpdf = self._compute_log_pdf(y, self.rho[j, k])
-                    updates['dmu'][j, k] += np.sum(v[:, h] * z[:, i, j, h] * dpdf)
+                    updates["dmu"][j, k] += np.sum(v[:, h] * z[:, i, j, h] * dpdf)
 
                     # Scale parameters
-                    updates['dbeta'][j, k] += np.sum(
-                        v[:, h] * z[:, i, j, h] * y * dpdf)
+                    updates["dbeta"][j, k] += np.sum(v[:, h] * z[:, i, j, h] * y * dpdf)
 
                     # Shape parameters
                     if self.rho[j, k] not in (1.0, 2.0):
                         logy = np.log(np.abs(y))
-                        updates['drho'][j, k] += np.sum(
-                            v[:, h] * z[:, i, j, h] * np.power(
-                                np.abs(y), self.rho[j, k]) * logy)
+                        updates["drho"][j, k] += np.sum(
+                            v[:, h]
+                            * z[:, i, j, h]
+                            * np.power(np.abs(y), self.rho[j, k])
+                            * logy
+                        )
 
                     if self.do_newton:
                         # Newton optimization parameters
-                        updates['dbaralpha'][j, i, h] += np.sum(v[:, h] * z[:, i, j, h])
-                        updates['dsigma2'][i, h] += np.sum(v[:, h] * b[:, i, h]**2)
-                        updates['dlambda'][i, h] += np.sum(
-                            v[:, h] * z[:, i, j, h] * (dpdf * y - 1)**2)
-                        updates['dkappa'][i, h] += np.sum(
-                            v[:, h] * z[:, i, j, h] * dpdf**2)
+                        updates["dbaralpha"][j, i, h] += np.sum(v[:, h] * z[:, i, j, h])
+                        updates["dsigma2"][i, h] += np.sum(v[:, h] * b[:, i, h] ** 2)
+                        updates["dlambda"][i, h] += np.sum(
+                            v[:, h] * z[:, i, j, h] * (dpdf * y - 1) ** 2
+                        )
+                        updates["dkappa"][i, h] += np.sum(
+                            v[:, h] * z[:, i, j, h] * dpdf**2
+                        )
 
             # Unmixing matrices
             g = np.zeros((batch_size, self.data_dim))
@@ -622,10 +732,10 @@ class AMICA:
                     _, dpdf = self._compute_log_pdf(y, self.rho[j, k])
                     g[:, i] += self.beta[j, k] * z[:, i, j, h] * dpdf
 
-            updates['dA'][:, :, h] += np.dot(X, v[:, h: h + 1] * g)
+            updates["dA"][:, :, h] += np.dot(X, v[:, h : h + 1] * g)
 
             # Bias terms
-            updates['dc'][:, h] += np.sum(v[:, h: h + 1] * g, axis=0)
+            updates["dc"][:, h] += np.sum(v[:, h : h + 1] * g, axis=0)
 
         return updates
 
@@ -640,42 +750,43 @@ class AMICA:
         """
         # Update model weights
         if self.do_reject:
-            self.gm = updates['dgm'] / self.num_good_samples
+            self.gm = updates["dgm"] / self.num_good_samples
         else:
-            self.gm = updates['dgm'] / self.num_samples
+            self.gm = updates["dgm"] / self.num_samples
 
         # Update mixture weights
-        self.alpha = updates['dalpha'] / np.sum(updates['dalpha'], axis=0)
+        self.alpha = updates["dalpha"] / np.sum(updates["dalpha"], axis=0)
 
         # Update component means
-        dmu = updates['dmu'] / updates['dalpha']
+        dmu = updates["dmu"] / updates["dalpha"]
         self.mu += self.lrate * dmu
 
         # Update scale parameters
-        dbeta = updates['dbeta'] / updates['dalpha']
+        dbeta = updates["dbeta"] / updates["dalpha"]
         self.beta *= np.sqrt(1 + self.lrate * dbeta)
         self.beta = np.clip(self.beta, self.invsigmin, self.invsigmax)
 
         # Update shape parameters
         if not np.all(self.rho == 1.0) and not np.all(self.rho == 2.0):
-            drho = updates['drho'] / updates['dalpha']
+            drho = updates["drho"] / updates["dalpha"]
             self.rho += self.rholrate * (1 - self.rho * drho)
             self.rho = np.clip(self.rho, self.minrho, self.maxrho)
 
         # Update unmixing matrices
         if self.do_newton and self.iter >= self.newt_start:
             # Update Newton parameters
-            self.sigma2 = updates['dsigma2'] / updates['dgm'][:, None]
-            self.lambda_ = updates['dlambda'] / updates['dgm'][:, None]
-            self.kappa = updates['dkappa'] / updates['dgm'][:, None]
-            self.baralpha = updates['dbaralpha'] / updates['dgm'][:, None, None]
+            self.sigma2 = updates["dsigma2"] / updates["dgm"][:, None]
+            self.lambda_ = updates["dlambda"] / updates["dgm"][:, None]
+            self.kappa = updates["dkappa"] / updates["dgm"][:, None]
+            self.baralpha = updates["dbaralpha"] / updates["dgm"][:, None, None]
 
             # Newton updates
-            self.lrate = min(self.newtrate,
-                             self.lrate + min(1.0 / self.newt_ramp, self.lrate))
+            self.lrate = min(
+                self.newtrate, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
+            )
 
             for h in range(self.num_models):
-                dA = -updates['dA'][:, :, h] / updates['dgm'][h]
+                dA = -updates["dA"][:, :, h] / updates["dgm"][h]
                 dA[np.diag_indices_from(dA)] += 1
 
                 # Compute Newton direction
@@ -688,29 +799,34 @@ class AMICA:
                             sk1 = self.sigma2[i, h] * self.kappa[j, h]
                             sk2 = self.sigma2[j, h] * self.kappa[i, h]
                             if sk1 * sk2 > 1.0:
-                                H[i, j] = (sk1 * dA[i, j] - dA[j, i]) / (sk1 * sk2 - 1.0)
+                                H[i, j] = (sk1 * dA[i, j] - dA[j, i]) / (
+                                    sk1 * sk2 - 1.0
+                                )
 
                 self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
-                    self.A[:, self.comp_list[:, h]], H)
+                    self.A[:, self.comp_list[:, h]], H
+                )
         else:
             # Natural gradient updates
-            self.lrate = min(self.lrate0,
-                             self.lrate + min(1.0 / self.newt_ramp, self.lrate))
+            self.lrate = min(
+                self.lrate0, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
+            )
 
             for h in range(self.num_models):
-                dA = -updates['dA'][:, :, h] / updates['dgm'][h]
+                dA = -updates["dA"][:, :, h] / updates["dgm"][h]
                 dA[np.diag_indices_from(dA)] += 1
 
                 self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
-                    self.A[:, self.comp_list[:, h]], dA)
+                    self.A[:, self.comp_list[:, h]], dA
+                )
 
         # Update bias terms
-        self.c += self.lrate * updates['dc'] / updates['dgm'][:, None]
+        self.c += self.lrate * updates["dc"] / updates["dgm"][:, None]
 
         # Rescale parameters if requested
         if self.doscaling and self.iter % self.scalestep == 0:
             for k in range(self.num_comps):
-                scale = np.sqrt(np.sum(self.A[:, k]**2))
+                scale = np.sqrt(np.sum(self.A[:, k] ** 2))
                 if scale > 0:
                     self.A[:, k] /= scale
                     self.mu[:, k] *= scale
@@ -720,13 +836,13 @@ class AMICA:
         self._update_unmixing_matrices()
 
         # Store likelihood
-        self.ll.append(updates['ll'])
+        self.ll.append(updates["ll"])
 
         # Compute gradient norm
         if self.use_grad_norm:
             dA = np.zeros_like(self.A)
             for h in range(self.num_models):
-                dA[:, self.comp_list[:, h]] += self.gm[h] * updates['dA'][:, :, h]
+                dA[:, self.comp_list[:, h]] += self.gm[h] * updates["dA"][:, :, h]
             self.nd.append(np.sqrt(np.sum(dA**2) / (self.data_dim * self.num_comps)))
 
     def _optimize(self):
@@ -744,20 +860,20 @@ class AMICA:
 
         # Determine whether to use tqdm or per-line printing
         use_tqdm_progress = self.use_tqdm and not self.verbose
-        
+
         # Create iterator (with or without tqdm)
         if use_tqdm_progress:
             # Use minimal progress bar with dynamic width and ASCII characters for better compatibility
             progress_bar = tqdm(
-                range(self.max_iter), 
-                desc="AMICA", 
+                range(self.max_iter),
+                desc="AMICA",
                 unit="it",
                 ncols=60,  # Smaller fixed width
                 dynamic_ncols=True,  # Adapt to terminal width
                 ascii=True,  # Use ASCII characters for better compatibility
                 miniters=1,  # Update on every iteration
                 leave=True,
-                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'  # Simpler format
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",  # Simpler format
             )
             iterator = progress_bar
         else:
@@ -776,28 +892,32 @@ class AMICA:
 
                 # Calculate metrics for logging/progress
                 elapsed_time = time.time() - start_time
-                seconds_per_iter = elapsed_time / (iter + 1) if iter > 0 else elapsed_time
+                seconds_per_iter = (
+                    elapsed_time / (iter + 1) if iter > 0 else elapsed_time
+                )
                 total_seconds = seconds_per_iter * self.max_iter
                 total_hours = total_seconds / 3600
-                current_seconds = (elapsed_time / 3600 - int(elapsed_time / 3600)) * 3600
-                
+                current_seconds = (
+                    elapsed_time / 3600 - int(elapsed_time / 3600)
+                ) * 3600
+
                 if len(self.ll) > 1:
                     ll_diff = self.ll[-1] - self.ll[-2]
-                    
+
                     # Always log detailed metrics to the file logger
                     if self.use_grad_norm:
                         detailed_log = (
-                            f" iter {iter+1:5d} lrate = {self.lrate:12.10f} "
+                            f" iter {iter + 1:5d} lrate = {self.lrate:12.10f} "
                             f"LL = {self.ll[-1]:13.10f} "
                             f"nd = {self.nd[-1]:11.10f}, "
                             f"D = {ll_diff:11.5e} {ll_diff:11.5e}  "
                             f"({current_seconds:5.2f} s, {total_hours:4.1f} h)"
                         )
-                        
+
                         # Always write detailed logs to the file
-                        with open(self.file_path, 'a') as f:
-                            f.write(detailed_log + '\n')
-                        
+                        with open(self.file_path, "a") as f:
+                            f.write(detailed_log + "\n")
+
                         # Also log to console if verbose or not using tqdm
                         if self.verbose or not self.use_tqdm:
                             self.logger.info(detailed_log)
@@ -809,16 +929,29 @@ class AMICA:
                     break
 
                 # Reject outliers if requested
-                if (self.do_reject and self.maxrej > 0 and (
-                        (iter == self.rejstart) or (
-                            ((iter - self.rejstart) % self.rejint == 0) and (numrej < self.maxrej)))):
+                if (
+                    self.do_reject
+                    and self.maxrej > 0
+                    and (
+                        (iter == self.rejstart)
+                        or (
+                            ((iter - self.rejstart) % self.rejint == 0)
+                            and (numrej < self.maxrej)
+                        )
+                    )
+                ):
                     self._reject_outliers()
                     numrej += 1
 
                 # Share components if requested
-                if (self.share_comps and iter >= self.share_start and (iter - self.share_start) % self.share_int == 0):
+                if (
+                    self.share_comps
+                    and iter >= self.share_start
+                    and (iter - self.share_start) % self.share_int == 0
+                ):
                     self.comp_list, self.comp_used = identify_shared_components(
-                        self.A, self.W, self.comp_list, self.comp_thresh)
+                        self.A, self.W, self.comp_list, self.comp_thresh
+                    )
 
                 # Write intermediate results if requested
                 if self.writestep > 0 and iter % self.writestep == 0:
@@ -831,26 +964,30 @@ class AMICA:
             # Close the progress bar if using tqdm
             if use_tqdm_progress:
                 progress_bar.close()
-                
+
                 # Display final metrics after progress bar is closed
                 if len(self.ll) > 0 and self.use_grad_norm and len(self.nd) > 0:
-                    final_metrics = f"Final LL: {self.ll[-1]:.6e}, Gradient norm: {self.nd[-1]:.6e}"
+                    final_metrics = (
+                        f"Final LL: {self.ll[-1]:.6e}, Gradient norm: {self.nd[-1]:.6e}"
+                    )
                     self.logger.info(final_metrics)
                     # Also log to file if using tqdm (since it wouldn't be logged during iterations)
-                    with open(self.file_path, 'a') as f:
-                        f.write(final_metrics + '\n')
-            
+                    with open(self.file_path, "a") as f:
+                        f.write(final_metrics + "\n")
+
             # Log convergence reason if available
             if convergence_reason:
                 self.logger.info(convergence_reason)
-                with open(self.file_path, 'a') as f:
-                    f.write(convergence_reason + '\n')
-                
+                with open(self.file_path, "a") as f:
+                    f.write(convergence_reason + "\n")
+
             # Log final message (only once)
-            final_message = f"Optimization finished after {final_iter+1} iterations"
+            final_message = f"Optimization finished after {final_iter + 1} iterations"
             self.logger.info(final_message)
 
-    def _check_convergence(self, numdecs: int, numincs: int) -> Tuple[bool, Optional[str]]:
+    def _check_convergence(
+        self, numdecs: int, numincs: int
+    ) -> Tuple[bool, Optional[str]]:
         """
         Check convergence criteria.
 
@@ -977,6 +1114,9 @@ class AMICA:
         S : ndarray of shape (n_components, n_samples, n_models)
             The unmixed sources for each model
         """
+        if self.W is None:
+            raise RuntimeError("Model has not been fitted yet; call fit() first.")
+
         if self.mean is not None:
             data = data - self.mean
 

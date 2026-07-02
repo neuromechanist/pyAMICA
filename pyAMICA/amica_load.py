@@ -10,6 +10,7 @@ from scipy.special import gamma
 @dataclass
 class AmicaOutput:
     """Class to hold AMICA output data."""
+
     num_models: int
     mod_prob: np.ndarray
     W: np.ndarray  # unmixing weights (post-sphering)
@@ -33,10 +34,12 @@ class AmicaOutput:
     v: Optional[np.ndarray]  # log10 posterior model odds
 
 
-def read_binary_file(filepath: Union[str, Path], dtype=np.float64, shape=None) -> Optional[np.ndarray]:
+def read_binary_file(
+    filepath: Union[str, Path], dtype=np.float64, shape=None
+) -> Optional[np.ndarray]:
     """Read binary file into numpy array."""
     try:
-        with open(filepath, 'rb') as f:
+        with open(filepath, "rb") as f:
             data = np.fromfile(f, dtype=dtype)
             if shape is not None:
                 data = data.reshape(shape)
@@ -57,113 +60,146 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
     outdir = Path(outdir)
 
     # Read number of models from gm file
-    gm = read_binary_file(outdir / 'gm')
+    gm = read_binary_file(outdir / "gm")
     num_models = len(gm) if gm is not None else 1
     if gm is None:
-        print('No gm present, setting num_models to 1')
+        print("No gm present, setting num_models to 1")
         gm = np.array([1.0])
 
     # Read weights
-    W = read_binary_file(outdir / 'W')
+    W = read_binary_file(outdir / "W")
     if W is None:
-        raise FileNotFoundError('No W present, cannot continue')
+        raise FileNotFoundError("No W present, cannot continue")
     nw2 = len(W) // num_models
     nw = int(np.sqrt(nw2))
     W = W.reshape(nw, nw, num_models)
 
     # Read mean and sphere
-    mn = read_binary_file(outdir / 'mean')
+    mn = read_binary_file(outdir / "mean")
     if mn is None:
-        print('No mean present, setting mean to zero')
+        print("No mean present, setting mean to zero")
         nx = nw
         mn = np.zeros(nx)
     else:
         nx = len(mn)
 
-    S = read_binary_file(outdir / 'S')
+    S = read_binary_file(outdir / "S")
     if S is None:
         if mn is not None:
             S = np.eye(nx)
         else:
-            raise FileNotFoundError('No sphere or mean present, cannot continue')
+            raise FileNotFoundError("No sphere or mean present, cannot continue")
     else:
         if len(S.shape) == 1:
             S = S.reshape(nx, nx)
 
     # Read component list
-    comp_list = read_binary_file(outdir / 'comp_list', dtype=np.int32)
+    comp_list = read_binary_file(outdir / "comp_list", dtype=np.int32)
     if comp_list is not None:
-        comp_list = comp_list.reshape(nw, num_models)
+        expected = nw * num_models
+        # The Fortran writer opens this file with the record length formula
+        # used for real*8 arrays (recl=2*nbyte*nw*num_models), which is 2x
+        # too large for int32 comp_list data; the direct-access write then
+        # zero-pads the record to that length, so a well-formed file is
+        # either exactly `expected` values or `2*expected` values with the
+        # trailing half all zero. Only accept those two shapes; anything
+        # else is a corrupt or unexpected file and should fail loudly
+        # rather than silently truncating.
+        if comp_list.size == expected:
+            comp_list = comp_list.reshape(nw, num_models)
+        elif comp_list.size == 2 * expected and not np.any(comp_list[expected:]):
+            comp_list = comp_list[:expected].reshape(nw, num_models)
+        else:
+            raise ValueError(
+                f"comp_list has {comp_list.size} elements; expected {expected} "
+                f"(nw={nw} * num_models={num_models}) or {2 * expected} with a "
+                f"zero-padded tail (Fortran recl=2*nbyte*nw*num_models). File may "
+                f"be corrupt or from an incompatible run."
+            )
 
     # Read log likelihoods
-    LLt = read_binary_file(outdir / 'LLt')
+    LLt = read_binary_file(outdir / "LLt")
     if LLt is not None:
         LLt = LLt.reshape(num_models + 1, -1)
         Lht = LLt[:num_models]
         Lt = LLt[num_models]
     else:
-        print('LLt not present')
+        print("LLt not present")
         Lht = Lt = None
 
-    LL = read_binary_file(outdir / 'LL') or np.array([0])
+    LL = read_binary_file(outdir / "LL")
+    if LL is None:
+        LL = np.array([0])
 
     # Read model parameters
-    c = read_binary_file(outdir / 'c')
+    c = read_binary_file(outdir / "c")
     if c is None:
         c = np.zeros((nw, num_models))
     else:
         c = c.reshape(nw, num_models)
 
     # Read mixture parameters
-    alpha_tmp = read_binary_file(outdir / 'alpha')
+    alpha_tmp = read_binary_file(outdir / "alpha")
     if alpha_tmp is not None:
         num_mix = len(alpha_tmp) // (nw * num_models)
         alpha_tmp = alpha_tmp.reshape(num_mix, nw * num_models)
         alpha = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):
-                alpha[:, i, h] = (alpha_tmp[:, comp_list[i, h] - 1] if comp_list is not None
-                                  else alpha_tmp[:, i + h * nw])
+                alpha[:, i, h] = (
+                    alpha_tmp[:, comp_list[i, h] - 1]
+                    if comp_list is not None
+                    else alpha_tmp[:, i + h * nw]
+                )
     else:
         num_mix = 1
         alpha = np.ones((num_mix, nw, num_models))
 
     # Read mu, sbeta, rho
-    mu_tmp = read_binary_file(outdir / 'mu')
+    mu_tmp = read_binary_file(outdir / "mu")
     if mu_tmp is not None:
         mu_tmp = mu_tmp.reshape(num_mix, nw * num_models)
         mu = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):
-                mu[:, i, h] = (mu_tmp[:, comp_list[i, h] - 1] if comp_list is not None
-                               else mu_tmp[:, i + h * nw])
+                mu[:, i, h] = (
+                    mu_tmp[:, comp_list[i, h] - 1]
+                    if comp_list is not None
+                    else mu_tmp[:, i + h * nw]
+                )
     else:
         mu = np.zeros((num_mix, nw, num_models))
 
-    sbeta_tmp = read_binary_file(outdir / 'sbeta')
+    sbeta_tmp = read_binary_file(outdir / "sbeta")
     if sbeta_tmp is not None:
         sbeta_tmp = sbeta_tmp.reshape(num_mix, nw * num_models)
         sbeta = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):
-                sbeta[:, i, h] = (sbeta_tmp[:, comp_list[i, h] - 1] if comp_list is not None
-                                  else sbeta_tmp[:, i + h * nw])
+                sbeta[:, i, h] = (
+                    sbeta_tmp[:, comp_list[i, h] - 1]
+                    if comp_list is not None
+                    else sbeta_tmp[:, i + h * nw]
+                )
     else:
         sbeta = np.ones((num_mix, nw, num_models))
 
-    rho_tmp = read_binary_file(outdir / 'rho')
+    rho_tmp = read_binary_file(outdir / "rho")
     if rho_tmp is not None:
         rho_tmp = rho_tmp.reshape(num_mix, nw * num_models)
         rho = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):
-                rho[:, i, h] = (rho_tmp[:, comp_list[i, h] - 1] if comp_list is not None
-                                else rho_tmp[:, i + h * nw])
+                rho[:, i, h] = (
+                    rho_tmp[:, comp_list[i, h] - 1]
+                    if comp_list is not None
+                    else rho_tmp[:, i + h * nw]
+                )
     else:
         rho = 2 * np.ones((num_mix, nw, num_models))
 
     # Read weight change history
-    nd = read_binary_file(outdir / 'nd')
+    nd = read_binary_file(outdir / "nd")
     if nd is not None:
         max_iter = len(nd) // (nw * num_models)
         nd = nd.reshape(max_iter, nw, num_models)
@@ -199,11 +235,13 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
             mix_idx = slice(0, num_mix_used)
             r = rho[mix_idx, i, h]
             svar[i, h] = np.sum(
-                alpha[mix_idx, i, h] * (
-                    mu[mix_idx, i, h]**2 + (gamma(3 / r) / gamma(1 / r)) / sbeta[mix_idx, i, h]**2
+                alpha[mix_idx, i, h]
+                * (
+                    mu[mix_idx, i, h] ** 2
+                    + (gamma(3 / r) / gamma(1 / r)) / sbeta[mix_idx, i, h] ** 2
                 )
             )
-            svar[i, h] *= np.linalg.norm(A[:, i, h])**2
+            svar[i, h] *= np.linalg.norm(A[:, i, h]) ** 2
 
         # Sort by variance
         idx = np.argsort(svar[:, h])[::-1]
@@ -256,5 +294,5 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
         svar=svar,
         A=A,
         origord=origord,
-        v=v
+        v=v,
     )

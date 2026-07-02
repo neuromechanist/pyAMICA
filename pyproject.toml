@@ -29,7 +29,8 @@ dependencies = [
     "scipy",
     "matplotlib",
     "tqdm",
-    "json5"
+    "json5",
+    "torch>=2.12.1",
 ]
 
 [project.urls]
@@ -39,3 +40,9 @@ Repository = "http://github.com/neuromechanist/pyAMICA"
 [tool.setuptools]
 packages = ["pyAMICA"]
 package-data = {"pyAMICA" = ["data/*"]}
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
