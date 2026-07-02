@@ -96,12 +96,26 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
     # Read component list
     comp_list = read_binary_file(outdir / "comp_list", dtype=np.int32)
     if comp_list is not None:
+        expected = nw * num_models
         # The Fortran writer opens this file with the record length formula
         # used for real*8 arrays (recl=2*nbyte*nw*num_models), which is 2x
         # too large for int32 comp_list data; the direct-access write then
-        # zero-pads the record to that length. Keep only the meaningful
-        # leading nw*num_models values before reshaping.
-        comp_list = comp_list[: nw * num_models].reshape(nw, num_models)
+        # zero-pads the record to that length, so a well-formed file is
+        # either exactly `expected` values or `2*expected` values with the
+        # trailing half all zero. Only accept those two shapes; anything
+        # else is a corrupt or unexpected file and should fail loudly
+        # rather than silently truncating.
+        if comp_list.size == expected:
+            comp_list = comp_list.reshape(nw, num_models)
+        elif comp_list.size == 2 * expected and not np.any(comp_list[expected:]):
+            comp_list = comp_list[:expected].reshape(nw, num_models)
+        else:
+            raise ValueError(
+                f"comp_list has {comp_list.size} elements; expected {expected} "
+                f"(nw={nw} * num_models={num_models}) or {2 * expected} with a "
+                f"zero-padded tail (Fortran recl=2*nbyte*nw*num_models). File may "
+                f"be corrupt or from an incompatible run."
+            )
 
     # Read log likelihoods
     LLt = read_binary_file(outdir / "LLt")
