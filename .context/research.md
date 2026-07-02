@@ -96,10 +96,20 @@ faithful port and is the spec.
    `torch.log(alpha_k.mean() + eps)` discards the per-source mixture weights `alpha_{k,i}`.
 3. **LL normalization (the "~13x" scale gap)** - Fortran reports
    `LL = LLtmp2 / (num_samples * nw)` (`amica17.f90:1866`; `nw` = n_sources = 32 for the sample
-   data). Torch divides by `n_samples` only (`amica_torch.py:205`) and additionally adds
-   `n_samples * log_det_W` (line 195), which Fortran omits from the reported LL (the natural
-   gradient's `I - <g y^T>` form already accounts for the Jacobian). Fix: divide by
-   `n_samples * nw`, drop the explicit logdet term.
+   data). Torch divides by `n_samples` only (`amica_torch.py:205`). Fix: divide by
+   `n_samples * nw`.
+   **CORRECTION (2026-07-02, verified against source):** an earlier version of this note claimed
+   Fortran omits `log|det W|` from the reported LL and that the fix should drop the logdet term.
+   That is WRONG. Fortran's printed LL INCLUDES both the unmixing log-determinant and the
+   sphering log-determinant: `amica17.f90:975-980` computes `Dtemp(h) = sum_i log|R(i,i)|` from the
+   QR of `W(:,:,h)` (= `log|det W(h)|`), and `amica17.f90:1273` seeds the per-timepoint accumulator
+   `Ptmp(:,h) = Dsum(h) + log(gm(h)) + sldet` (with `Dsum = log|det W|`, `sldet = log|det sphere|`)
+   BEFORE the per-source density loop; this flows unchanged into `LL(iter)` at `:1866` (the printed
+   value). So the reported LL MUST include `log|det W|` and `sldet`. The autograd backends also need
+   `log|det W|` in the training objective for stability (without it W inflates degenerately); the
+   closed-form natural-gradient backend gets it for free via the `I - <g y^T>` update (the identity
+   term is exactly the gradient of `log|det W|`), but must still ADD `log|det W| + sldet` to the
+   REPORTED LL value.
 4. **Newton double-steps** - `newton_optimizer.py:221-262` mutates `A` in place, then the main
    loop also calls Adam `optimizer.step()` on the same iteration -> NaN at `newt_start`. Port the
    NumPy Newton (`pyAMICA.py:666-694`) instead.
