@@ -21,7 +21,8 @@ amicaout_dir = op.join(sample_data_path, "amicaout")
 @pytest.mark.xfail(
     reason="full 2000-iter run does not match Fortran (LL scale/sign bug, "
     "AGENTS.md Known Issue #2; parity gated by epic #9)",
-    strict=False,
+    strict=True,
+    raises=AssertionError,
 )
 def test_sample_data_scikit(tmp_path):
     """Test pyAMICA using scikit-learn style API."""
@@ -56,9 +57,14 @@ def test_sample_data_scikit(tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="full 2000-iter run does not match Fortran (LL scale/sign bug, "
-    "AGENTS.md Known Issue #2; parity gated by epic #9)",
-    strict=False,
+    reason="legacy AMICA._optimize() writes results as .npy files "
+    "(save_results in pyAMICA.py) but loadmodout() expects raw "
+    "Fortran-format binary files with no extension; the round-trip "
+    "raises FileNotFoundError for 'W' before the correlation check is "
+    "even reached. Separate bug from Known Issue #2, needs its own fix "
+    "(gated by epic #9); no raises= constraint since the failure mode "
+    "is not a clean AssertionError.",
+    strict=True,
 )
 def test_sample_data_cli():
     """Test pyAMICA using CLI interface."""
@@ -112,9 +118,11 @@ def test_sample_data_cli():
 
 
 @pytest.mark.xfail(
-    reason="components not fully decorrelated after only 50 iterations "
-    "(parity/convergence gated by epic #9)",
-    strict=False,
+    reason="components not fully decorrelated after only 50 iterations, "
+    "downstream of the LL scale/sign bug (Final LL prints a nonsensical "
+    "positive ~1.5e6; AGENTS.md Known Issue #2; parity gated by epic #9)",
+    strict=True,
+    raises=AssertionError,
 )
 def test_sample_data_light(tmp_path):
     """Light version of the test for CI that runs only 50 iterations."""

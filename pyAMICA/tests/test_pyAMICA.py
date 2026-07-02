@@ -101,7 +101,8 @@ def test_data_loading(temp_dir):
 
 @pytest.mark.xfail(
     reason="legacy NumPy Newton optimization hits NaN likelihood (parity gated by epic #9)",
-    strict=False,
+    strict=True,
+    raises=AssertionError,
 )
 def test_full_pipeline(random_data):
     """Test complete AMICA pipeline with simple data."""
