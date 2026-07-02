@@ -24,15 +24,19 @@
 - [ ] Component sharing
 
 ### Priority 3: Testing & validation
-- [ ] Real-data test suite exercising the PyTorch backend end-to-end (issue #7; currently unverified and expected to fail)
-- [ ] Integration tests comparing against Fortran outputs (`tests/torch_tests/`)
+- [x] Real-data test suite exercising the PyTorch backend end-to-end (issue #7) - Phase 1, issue #10:
+      suite collects cleanly and passes (35 passed, 6 xfailed for documented parity/algorithm
+      issues, 0 errors); see `.context/phase1_baseline.md`
+- [x] Integration tests comparing against Fortran outputs (`tests/torch_tests/`) - Phase 1, issue #10
 - [ ] Numerical-stability regression tests
 - [ ] Edge cases (single channel, single sample)
 
 ### Infrastructure / migration
-- [ ] Migrate environment from conda `torch-312` to UV; declare the PyTorch stack in `pyproject.toml`
+- [x] Migrate environment from conda `torch-312` to UV; declare the PyTorch stack in `pyproject.toml`
+      (Phase 1, issue #10: `torch`, `pytest`, `pytest-cov` added to `pyproject.toml`/`uv.lock`,
+      `.python-version` pinned to 3.12 for torch/MPS compatibility)
 - [ ] Set up CI (see `.rules/ci_cd.md`)
-- [ ] Fix legacy test function signatures (`load_data_file` extra parameter)
+- [x] Fix legacy test function signatures (`load_data_file` extra parameter) - Phase 1, issue #10
 
 ## Success Criteria
 - [ ] Component correlation > 0.95 with Fortran
