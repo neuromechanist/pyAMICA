@@ -6,6 +6,7 @@ implementation for GPU-accelerated ICA with adaptive mixtures.
 """
 
 import numpy as np
+import torch
 from typing import Optional, Union
 import json
 import logging
@@ -44,8 +45,9 @@ class AMICA:
 
     Attributes
     ----------
-    model_ : AMICATorch
-        The underlying PyTorch model
+    model_ : AMICATorch or AMICATorchNG
+        The underlying PyTorch model (``AMICATorchNG`` when
+        ``backend="ng"``, otherwise ``AMICATorch``)
     is_fitted_ : bool
         Whether the model has been fitted
     ll_history_ : list
@@ -159,6 +161,23 @@ class AMICA:
             device = self.device
 
         if self.backend == "ng":
+            # AMICATorchNG defaults to float64 for Fortran parity, which MPS
+            # cannot represent. When the device was auto-selected (the user
+            # did not pin one) and resolved to MPS for a float64 run, fall
+            # back to CPU so the default config runs instead of crashing.
+            # CUDA supports float64, so only MPS needs this. Users wanting MPS
+            # can pass dtype=torch.float32 (and device="mps") explicitly.
+            ng_dtype = kwargs.get("dtype", torch.float64)
+            dev_type = getattr(device, "type", device)
+            if self.device is None and dev_type == "mps" and ng_dtype == torch.float64:
+                device = torch.device("cpu")
+                if self.verbose:
+                    print(
+                        "backend='ng' uses float64 for Fortran parity; MPS "
+                        "lacks float64 support, so using CPU. Pass "
+                        "dtype=torch.float32 with device='mps' to run on MPS."
+                    )
+
             if debug:
                 raise ValueError(
                     "debug=True (Fortran-style output) is not supported by "
@@ -311,8 +330,6 @@ class AMICA:
                 "is not an nn.Module and has no state_dict()."
             )
 
-        import torch
-
         torch.save(
             {
                 "model_state": self.model_.state_dict(),
@@ -342,8 +359,6 @@ class AMICA:
                 "load() is not implemented for backend='ng': AMICATorchNG "
                 "has no save()/state_dict() counterpart."
             )
-
-        import torch
 
         checkpoint = torch.load(filepath, map_location="cpu")
 
