@@ -16,7 +16,7 @@ Main Features:
 
 from .version import __version__
 from .amica import AMICA
-from .torch_impl import AMICATorch
+from .torch_impl import AMICATorch, AMICATorchNG
 from . import amica_utils
 from . import amica_data
 from . import amica_newton
@@ -27,13 +27,14 @@ from . import amica_viz
 from .pyAMICA import AMICA as AMICA_NumPy
 
 __all__ = [
-    'AMICA',
-    'AMICATorch',
-    'AMICA_NumPy',
-    'amica_utils',
-    'amica_data',
-    'amica_newton',
-    'amica_pdf',
-    'amica_viz',
-    '__version__'
+    "AMICA",
+    "AMICATorch",
+    "AMICATorchNG",
+    "AMICA_NumPy",
+    "amica_utils",
+    "amica_data",
+    "amica_newton",
+    "amica_pdf",
+    "amica_viz",
+    "__version__",
 ]

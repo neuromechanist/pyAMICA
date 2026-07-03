@@ -1,7 +1,7 @@
 # ADR 0001: Rewrite the PyTorch backend as a natural-gradient EM port, not Adam+autograd
 
-**Status:** proposed
-**Date:** 2026-07-02
+**Status:** accepted
+**Date:** 2026-07-02 (accepted 2026-07-03)
 **Owner:** Seyed Yahya Shirazi
 
 ## Context
@@ -36,6 +36,14 @@ statistics block-wise, and drop Adam/autograd for the parameter updates. The Num
   `AMICA` interface must be re-pointed at the new module.
 - **Obligation:** keep `validate_implementations.py` (real sample data + Fortran binary) green as
   the source of truth; no synthetic-data correctness tests.
+
+**Outcome (2026-07-03, issue #24 / PR #25):** implemented as `AMICATorchNG`
+(`torch_impl/amica_torch_ng.py`), wired into `AMICA(backend="ng")`. Single-model reaches Fortran
+parity (LL ~ -3.40, Hungarian component correlation ~0.997 with Newton positive-definite, 0
+fallbacks); the NumPy backend carries the same fixes. The root-cause fix was the natural-gradient
+A-update (it was transposed / multiplied on the wrong side); see
+`.context/issue-24/root_cause_Aupdate.py`. Multi-model M-step is bit-exact vs Fortran; full-fit
+partition matching is tracked in #27, adaptive-PDF in #26.
 
 ## Alternatives considered
 

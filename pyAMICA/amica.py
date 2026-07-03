@@ -6,13 +6,20 @@ implementation for GPU-accelerated ICA with adaptive mixtures.
 """
 
 import numpy as np
+import torch
 from typing import Optional, Union
+import inspect
 import json
 import logging
 
 from .torch_impl import AMICATorch, AMICATorchNG, setup_device
 
 logger = logging.getLogger(__name__)
+
+# AMICATorchNG's default parameter dtype, derived from its signature so the
+# wrapper's MPS/float64 fallback below stays in lockstep if that default ever
+# changes (rather than duplicating the literal).
+_NG_DEFAULT_DTYPE = inspect.signature(AMICATorchNG).parameters["dtype"].default
 
 
 class AMICA:
@@ -29,7 +36,11 @@ class AMICA:
     n_mix : int, default=3
         Number of mixture components per source
     device : str or torch.device, optional
-        Device to use ('cuda', 'mps', 'cpu', or None for auto)
+        Device to use ('cuda', 'mps', 'cpu', or None for auto). Note: with
+        ``backend="ng"`` and ``None`` (auto), an auto-selected MPS device is
+        redirected to CPU because the NG backend computes in float64 for
+        Fortran parity and MPS cannot represent it; pass ``dtype=torch.float32``
+        (with ``device="mps"``) to run on MPS instead.
     verbose : bool, default=True
         Whether to show progress during fitting
     backend : {"torch", "ng"}, default="torch"
@@ -44,8 +55,9 @@ class AMICA:
 
     Attributes
     ----------
-    model_ : AMICATorch
-        The underlying PyTorch model
+    model_ : AMICATorch or AMICATorchNG
+        The underlying PyTorch model (``AMICATorchNG`` when
+        ``backend="ng"``, otherwise ``AMICATorch``)
     is_fitted_ : bool
         Whether the model has been fitted
     ll_history_ : list
@@ -159,6 +171,26 @@ class AMICA:
             device = self.device
 
         if self.backend == "ng":
+            # AMICATorchNG defaults to float64 for Fortran parity, which MPS
+            # cannot represent. When the device was auto-selected (the user
+            # did not pin one) and resolved to MPS for a float64 run, fall
+            # back to CPU so the default config runs instead of crashing.
+            # CUDA supports float64, so only MPS needs this. An explicit
+            # device="mps" is left untouched and surfaces AMICATorchNG's own
+            # ValueError; users wanting MPS pass dtype=torch.float32 too.
+            ng_dtype = kwargs.get("dtype", _NG_DEFAULT_DTYPE)
+            dev_type = getattr(device, "type", device)
+            if self.device is None and dev_type == "mps" and ng_dtype == torch.float64:
+                device = torch.device("cpu")
+                msg = (
+                    "backend='ng' uses float64 for Fortran parity; MPS lacks "
+                    "float64 support, so falling back to CPU. Pass "
+                    "dtype=torch.float32 with device='mps' to run on MPS."
+                )
+                logger.warning(msg)
+                if self.verbose:
+                    print(msg)
+
             if debug:
                 raise ValueError(
                     "debug=True (Fortran-style output) is not supported by "
@@ -311,8 +343,6 @@ class AMICA:
                 "is not an nn.Module and has no state_dict()."
             )
 
-        import torch
-
         torch.save(
             {
                 "model_state": self.model_.state_dict(),
@@ -342,8 +372,6 @@ class AMICA:
                 "load() is not implemented for backend='ng': AMICATorchNG "
                 "has no save()/state_dict() counterpart."
             )
-
-        import torch
 
         checkpoint = torch.load(filepath, map_location="cpu")
 

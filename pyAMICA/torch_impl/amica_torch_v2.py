@@ -11,7 +11,8 @@ unstable Newton) is superseded by ``amica_torch_ng.AMICATorchNG``, the
 natural-gradient EM backend that now matches the Fortran reference (component
 correlation ~0.997 with Newton positive-definite and firing). ``AMICATorchV2`` is
 not wired into the public interface and is retained only for its adaptive-PDF
-prototype; do not build on it. New work belongs in ``AMICATorchNG``.
+prototype; do not build on it. New work belongs in ``AMICATorchNG``. Scheduled for
+removal once ``backend="ng"`` becomes the default (issue #32).
 """
 
 import torch

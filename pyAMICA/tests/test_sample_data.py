@@ -63,9 +63,9 @@ def test_sample_data_scikit(tmp_path):
     "(save_results in pyAMICA.py) but loadmodout() expects raw "
     "Fortran-format binary files with no extension; the round-trip "
     "raises FileNotFoundError for 'W' before the correlation check is "
-    "even reached. Separate bug from Known Issue #2, needs its own fix "
-    "(gated by epic #9); no raises= constraint since the failure mode "
-    "is not a clean AssertionError.",
+    "even reached. Independent legacy-CLI bug tracked in issue #30; no "
+    "raises= constraint since the failure mode is not a clean "
+    "AssertionError.",
     strict=True,
 )
 def test_sample_data_cli():
