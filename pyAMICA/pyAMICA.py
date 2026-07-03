@@ -256,7 +256,6 @@ class AMICA:
             self.sigma2 = None
             self.lambda_ = None
             self.kappa = None
-            self.baralpha = None
 
         # Setup logging
         self._setup_logging()
@@ -508,7 +507,6 @@ class AMICA:
             self.sigma2 = np.ones((self.data_dim, self.num_models))
             self.lambda_ = np.zeros((self.data_dim, self.num_models))
             self.kappa = np.zeros((self.data_dim, self.num_models))
-            self.baralpha = np.zeros((self.num_mix, self.data_dim, self.num_models))
 
         # Get initial unmixing matrices
         self._update_unmixing_matrices()
@@ -555,6 +553,17 @@ class AMICA:
 
         return log_pdf, dpdf
 
+    def _compute_score(self, y: np.ndarray, rho: float) -> np.ndarray:
+        """Generalized-Gaussian score ``fp = d|y|^rho/dy`` (Fortran ``fp``,
+        amica17.f90:1455-1467): ``sign(y)`` for Laplace, ``2y`` for Gaussian,
+        ``rho*sign(y)*|y|^(rho-1)`` otherwise. Used by the Newton curvature
+        statistics; distinct from the density derivative ``dpdf``."""
+        if rho == 1.0:
+            return np.sign(y)
+        if rho == 2.0:
+            return 2.0 * y
+        return rho * np.sign(y) * np.power(np.abs(y), rho - 1.0)
+
     def _get_updates_and_likelihood(self) -> Dict:
         """
         Compute parameter updates and data likelihood.
@@ -582,9 +591,6 @@ class AMICA:
                     "dsigma2": np.zeros((self.data_dim, self.num_models)),
                     "dlambda": np.zeros((self.data_dim, self.num_models)),
                     "dkappa": np.zeros((self.data_dim, self.num_models)),
-                    "dbaralpha": np.zeros(
-                        (self.num_mix, self.data_dim, self.num_models)
-                    ),
                 }
             )
 
@@ -634,9 +640,6 @@ class AMICA:
                     "dsigma2": np.zeros((self.data_dim, self.num_models)),
                     "dlambda": np.zeros((self.data_dim, self.num_models)),
                     "dkappa": np.zeros((self.data_dim, self.num_models)),
-                    "dbaralpha": np.zeros(
-                        (self.num_mix, self.data_dim, self.num_models)
-                    ),
                 }
             )
 
@@ -690,6 +693,13 @@ class AMICA:
             for i in range(self.data_dim):
                 k = self.comp_list[i, h]
 
+                # Newton second moment sigma2 = E_v[b_i^2] is a per-source
+                # quantity (no mixture index), accumulated once per (i, h)
+                # (Fortran amica17.f90:1419). It must NOT sit inside the
+                # mixture loop below, or it is inflated num_mix-fold.
+                if self.do_newton:
+                    updates["dsigma2"][i, h] += np.sum(v[:, h] * b[:, i, h] ** 2)
+
                 # Mixture weights
                 for j in range(self.num_mix):
                     updates["dalpha"][j, k] += np.sum(v[:, h] * z[:, i, j, h])
@@ -713,14 +723,19 @@ class AMICA:
                         )
 
                     if self.do_newton:
-                        # Newton optimization parameters
-                        updates["dbaralpha"][j, i, h] += np.sum(v[:, h] * z[:, i, j, h])
-                        updates["dsigma2"][i, h] += np.sum(v[:, h] * b[:, i, h] ** 2)
-                        updates["dlambda"][i, h] += np.sum(
-                            v[:, h] * z[:, i, j, h] * (dpdf * y - 1) ** 2
-                        )
-                        updates["dkappa"][i, h] += np.sum(
-                            v[:, h] * z[:, i, j, h] * dpdf**2
+                        # Newton curvature terms use the score
+                        # fp = d|y|^rho/dy (Fortran amica17.f90:1455-1467,
+                        # 1500-1512), NOT the density derivative dpdf (which
+                        # carries an extra pdf factor). The kappa term carries
+                        # the sbeta^2 = beta^2 factor, and lambda folds in the
+                        # baralpha-weighted mu^2 curvature term so that
+                        # lambda = dlambda/dgm at finalization matches Fortran.
+                        vz = v[:, h] * z[:, i, j, h]
+                        fp = self._compute_score(y, self.rho[j, k])
+                        dkap = np.sum(vz * fp**2) * self.beta[j, k] ** 2
+                        updates["dkappa"][i, h] += dkap
+                        updates["dlambda"][i, h] += (
+                            np.sum(vz * (fp * y - 1) ** 2) + dkap * self.mu[j, k] ** 2
                         )
 
             # Unmixing matrices
@@ -782,24 +797,29 @@ class AMICA:
             self.rho = np.clip(self.rho, self.minrho, self.maxrho)
 
         # Update unmixing matrices
-        if self.do_newton and self.iter >= self.newt_start:
-            # Update Newton parameters
+        newton_active = self.do_newton and self.iter >= self.newt_start
+        if newton_active:
+            # Finalize Newton curvature statistics (Fortran amica17.f90:1762-1776).
+            # The dsigma2/dkappa/dlambda accumulators already carry the sbeta^2
+            # and baralpha-weighted mu^2 factors, so finalization is a plain
+            # division by the model mass dgm = sum_t v_h.
             self.sigma2 = updates["dsigma2"] / updates["dgm"][:, None]
             self.lambda_ = updates["dlambda"] / updates["dgm"][:, None]
             self.kappa = updates["dkappa"] / updates["dgm"][:, None]
-            self.baralpha = updates["dbaralpha"] / updates["dgm"][:, None, None]
 
-            # Newton updates
-            self.lrate = min(
-                self.newtrate, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
-            )
+        # Per-model direction: Newton H if the model is positive definite,
+        # otherwise natural gradient. Matching Fortran (amica17.f90:1814-1837),
+        # if any off-diagonal pair fails sk1*sk2 > 1 the whole model falls
+        # back to the natural gradient and the ramp targets lrate0, not newtrate.
+        directions = []
+        no_newt = False
+        for h in range(self.num_models):
+            dA = -updates["dA"][:, :, h] / updates["dgm"][h]
+            dA[np.diag_indices_from(dA)] += 1
 
-            for h in range(self.num_models):
-                dA = -updates["dA"][:, :, h] / updates["dgm"][h]
-                dA[np.diag_indices_from(dA)] += 1
-
-                # Compute Newton direction
+            if newton_active:
                 H = np.zeros_like(dA)
+                posdef = True
                 for i in range(self.data_dim):
                     for j in range(self.data_dim):
                         if i == j:
@@ -811,23 +831,38 @@ class AMICA:
                                 H[i, j] = (sk1 * dA[i, j] - dA[j, i]) / (
                                     sk1 * sk2 - 1.0
                                 )
+                            else:
+                                posdef = False
+                if posdef:
+                    directions.append(H)
+                else:
+                    no_newt = True
+                    directions.append(dA)
+            else:
+                directions.append(dA)
 
-                self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
-                    self.A[:, self.comp_list[:, h]], H
-                )
+        if newton_active and no_newt:
+            # Fortran prints this whenever a model is not positive definite
+            # (amica17.f90:1911-1913); surface it rather than falling back
+            # silently.
+            self.logger.info(
+                "Hessian not positive definite at iter %d; using natural gradient.",
+                self.iter,
+            )
+
+        if newton_active and not no_newt:
+            self.lrate = min(
+                self.newtrate, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
+            )
         else:
-            # Natural gradient updates
             self.lrate = min(
                 self.lrate0, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
             )
 
-            for h in range(self.num_models):
-                dA = -updates["dA"][:, :, h] / updates["dgm"][h]
-                dA[np.diag_indices_from(dA)] += 1
-
-                self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
-                    self.A[:, self.comp_list[:, h]], dA
-                )
+        for h in range(self.num_models):
+            self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
+                self.A[:, self.comp_list[:, h]], directions[h]
+            )
 
         # Update bias terms
         self.c += self.lrate * updates["dc"] / updates["dgm"][:, None]
