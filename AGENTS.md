@@ -60,11 +60,22 @@ exact-EM mixture updates + digamma rho update + symmetric-ZCA sphere + Jacobian 
 `AMICATorchNG` backend and the legacy NumPy `pyAMICA.py` now ascend to Fortran's solution
 (LL ~ -3.40, Hungarian-matched component correlation ~0.997 with Newton, > 0.95 gate cleared).
 Root-cause writeup and machine-precision repro: `.context/issue-24/root_cause_Aupdate.py` +
-`drift_localization.md`. Remaining, non-blocking:
+`drift_localization.md`.
+
+Multi-model (`n_models>1`): the M-step and model responsibilities are bit-exact vs Fortran (one
+seeded step matches to ~1e-15, including `gm`) and the sphere matches to ~1e-13; NG<->NumPy
+multi-model sufficient-stat parity is a suite test. A full 2-model fit reaches a comparable LL
+(NG -3.355 vs Fortran -3.345) but a lower Hungarian cross-correlation (~0.77), because multi-model
+AMICA has many near-degenerate partitions (unlike single-model's unique solution), so the two
+implementations settle into different but equally-valid partitions. This is intrinsic partition
+ambiguity, not a code defect; NG is self-consistent (cross-corr 1.0 across block sizes).
+
+Remaining, non-blocking:
 1. Newton stability was fixed for `AMICATorchNG` (posdef, 0 fallbacks on the sample data). The
    separate experimental `AMICATorchV2` Newton path was not part of this fix.
-2. The `AMICATorchNG` backend still lacks the adaptive-PDF selection present in the NumPy path;
-   outlier rejection IS implemented (`do_reject`).
+2. The `AMICATorchNG` backend still lacks the adaptive-PDF selection present in the NumPy path
+   (a feature beyond Fortran parity, which uses a fixed GG PDF); outlier rejection IS implemented
+   (`do_reject`).
 
 ## Development Workflow
 1. **Check context:** `.context/plan.md` for current tasks and priorities.

@@ -46,13 +46,14 @@ def _fresh_ng(block_size: int = 256, **kwargs) -> AMICATorchNG:
 
 def _numpy_ref_like(ng: AMICATorchNG, blk: int, **kwargs) -> AMICA_NumPy:
     """A NumPy AMICA carrying the NG backend's exact parameters (the
-    established copy-params parity pattern)."""
-    npm = AMICA_NumPy(num_models=1, num_mix=NMIX, **kwargs)
+    established copy-params parity pattern). Model count follows ``ng``."""
+    npm = AMICA_NumPy(num_models=ng.n_models, num_mix=NMIX, **kwargs)
     npm.data_dim = NW
-    npm.num_comps = NW
-    npm.num_models = 1
+    npm.num_comps = NW * ng.n_models
+    npm.num_models = ng.n_models
     npm.num_mix = NMIX
     npm.block_size = blk
+    npm.sldet = ng.sldet
     npm.comp_list = ng.comp_list.cpu().numpy()
     npm.A = ng.A.cpu().numpy().copy()
     npm.W = ng.W.cpu().numpy().copy()
@@ -378,16 +379,69 @@ def test_newton_stats_match_at_rho_boundaries(rho_val):
 
 
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_multimodel_sufficient_stats_match_numpy_reference():
+    """Multi-model (n_models=2) per-block sufficient statistics == NumPy reference.
+
+    The decisive multi-model correctness check. Both backends now compute the
+    per-model log-likelihood with the log|det W| + sldet Jacobian (issue #24), so
+    the model responsibilities ``v = softmax(logV)`` -- and every v-weighted
+    sufficient statistic -- must agree to float64 precision. This is the
+    Fortran-free proxy for the (separately verified) machine-precision match of
+    one multi-model M-step against the Fortran binary.
+    """
+    data = _load_real_data()
+    ng = AMICATorchNG(
+        n_channels=NW,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+        block_size=256,
+    )
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    blk = 256
+    block = X_t[:, :blk].contiguous()
+    ng_upd = ng._get_block_updates(block)
+
+    npm = _numpy_ref_like(ng, blk, do_newton=False)
+    npm.A = ng.A.cpu().numpy().copy()
+    npm.W = ng.W.cpu().numpy().copy()
+    npm.c = ng.c.cpu().numpy().copy()
+    npm.mu = ng.mu.cpu().numpy().copy()
+    npm.alpha = ng.alpha.cpu().numpy().copy()
+    npm.beta = ng.beta.cpu().numpy().copy()
+    npm.rho = ng.rho.cpu().numpy().copy()
+    npm.gm = ng.gm.cpu().numpy().copy()
+    npm.comp_list = ng.comp_list.cpu().numpy()
+    np_upd = npm._get_block_updates(block.cpu().numpy())
+
+    keys = [
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_n",
+        "dbeta_d",
+        "drho_n",
+        "dWtmp",
+        "dc",
+        "ll",
+    ]
+    for key in keys:
+        a = np.asarray(ng_upd[key].cpu().numpy(), dtype=np.float64)
+        b = np.asarray(np_upd[key], dtype=np.float64).reshape(a.shape)
+        max_diff = float(np.max(np.abs(a - b)))
+        assert max_diff < 1e-8, f"{key} differs from NumPy reference by {max_diff:.3e}"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_newton_multimodel_finite_and_shaped():
     """Multi-model (n_models=2) Newton runs with correct per-model shapes and
-    finite output.
-
-    A NumPy-parity comparison is not valid here: for n_models>1 the NG backend
-    intentionally includes the per-model log|det W| + sldet Jacobian in the
-    model responsibility (Fortran-faithful; see the module docstring), whereas
-    the legacy NumPy port omits it. So this checks per-model finalization
-    (shape (n_channels, n_models), finite, no cross-model NaN) and that a short
-    two-model Newton fit stays finite for both models.
+    finite output: per-model finalization (shape (n_channels, n_models), finite,
+    no cross-model NaN) and a short two-model Newton fit stays finite for both
+    models. (Sufficient-stat NumPy parity is covered by the test above.)
     """
     data = _load_real_data()
     blk = 256
