@@ -46,19 +46,39 @@ MPS note: run with `PYTORCH_ENABLE_MPS_FALLBACK=1` for ops MPS does not yet supp
 - **Sample data:** `pyAMICA/sample_data/`
 
 ## Current Status
-- PyTorch backend with GPU/MPS/CPU support and basic AMICA converges.
+- PyTorch backend with GPU/MPS/CPU support; the `AMICATorchNG` natural-gradient EM backend now
+  matches the Fortran reference (LL ~ -3.40, component correlation ~0.997) with Newton enabled
+  and positive-definite (issue #24).
 - Validation harness runs both backends and matches components via the Hungarian algorithm.
-- Newton, adaptive PDF, and multi-model exist only in the experimental `AMICATorchV2` (not wired into the default `AMICA`); the legacy NumPy `pyAMICA.py` implements Newton, baralpha, and outlier rejection.
+- Newton and exact-EM updates are implemented in `AMICATorchNG` and the legacy NumPy `pyAMICA.py`
+  (both Fortran-faithful); adaptive PDF and multi-model remain experimental (`AMICATorchV2`).
 - See `FEATURE_PARITY.md`, `MIGRATION_PLAN.md`, and `PROGRESS_SUMMARY.md` for detailed roadmaps.
 
 ## Known Issues (parity blockers)
-1. Component correlation with Fortran ~0.46-0.9 (run-dependent; target: >0.95).
-2. Log-likelihood scaling differs from Fortran (~13x for the basic backend, more for enhanced);
-   the enhanced model produced positive LLs (addressed by the GG normalization fix, needs revalidation).
-3. Newton (in `AMICATorchV2`) is unstable, NaN at the Newton-start iteration (gradient clipping +
-   Fortran-matched ramp added in commit 2ccbae6, needs revalidation).
-4. The default torch backend lacks adaptive-PDF and outlier rejection (present in legacy NumPy),
-   reducing separation quality.
+The core parity blockers were RESOLVED by issue #24 (natural-gradient A-update transpose fix +
+exact-EM mixture updates + digamma rho update + symmetric-ZCA sphere + Jacobian LL). Both the
+`AMICATorchNG` backend and the legacy NumPy `pyAMICA.py` now ascend to Fortran's solution
+(LL ~ -3.40, Hungarian-matched component correlation ~0.997 with Newton, > 0.95 gate cleared).
+Root-cause writeup and machine-precision repro: `.context/issue-24/root_cause_Aupdate.py` +
+`drift_localization.md`.
+
+Multi-model (`n_models>1`): the per-block sufficient statistics and model responsibilities are
+bit-exact vs Fortran (one seeded step matches unmixing to ~1e-15, including `gm`) and the sphere
+matches to ~1e-13; NG<->NumPy multi-model sufficient-stat parity is a suite test. A full 2-model fit
+reaches a comparable LL (NG -3.355 vs Fortran -3.345) but a lower Hungarian cross-correlation
+(~0.77). Two contributors, being separated in issue #27: (1) intrinsic partition ambiguity --
+multi-model AMICA has many near-degenerate partitions (unlike single-model's unique solution), and
+NG is self-consistent (cross-corr 1.0 across block sizes); (2) a genuine code gap -- the per-model
+bias `c` update is omitted (only a no-op for `n_models=1`), whereas Fortran moves `c` per model when
+`v` is non-uniform. So the multi-model gap is NOT purely partition ambiguity; the `c` update is an
+open, fixable suspect.
+
+Remaining, non-blocking:
+1. Newton stability was fixed for `AMICATorchNG` (posdef, 0 fallbacks on the sample data). The
+   separate experimental `AMICATorchV2` Newton path was not part of this fix.
+2. The `AMICATorchNG` backend still lacks the adaptive-PDF selection present in the NumPy path
+   (a feature beyond Fortran parity, which uses a fixed GG PDF); outlier rejection IS implemented
+   (`do_reject`).
 
 ## Development Workflow
 1. **Check context:** `.context/plan.md` for current tasks and priorities.

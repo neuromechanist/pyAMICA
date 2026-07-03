@@ -46,13 +46,14 @@ def _fresh_ng(block_size: int = 256, **kwargs) -> AMICATorchNG:
 
 def _numpy_ref_like(ng: AMICATorchNG, blk: int, **kwargs) -> AMICA_NumPy:
     """A NumPy AMICA carrying the NG backend's exact parameters (the
-    established copy-params parity pattern)."""
-    npm = AMICA_NumPy(num_models=1, num_mix=NMIX, **kwargs)
+    established copy-params parity pattern). Model count follows ``ng``."""
+    npm = AMICA_NumPy(num_models=ng.n_models, num_mix=NMIX, **kwargs)
     npm.data_dim = NW
-    npm.num_comps = NW
-    npm.num_models = 1
+    npm.num_comps = NW * ng.n_models
+    npm.num_models = ng.n_models
     npm.num_mix = NMIX
     npm.block_size = blk
+    npm.sldet = ng.sldet
     npm.comp_list = ng.comp_list.cpu().numpy()
     npm.A = ng.A.cpu().numpy().copy()
     npm.W = ng.W.cpu().numpy().copy()
@@ -104,7 +105,18 @@ def test_sufficient_stats_match_numpy_reference():
 
     np_upd = npm._get_block_updates(block.cpu().numpy())
 
-    for key in ["dgm", "dalpha", "dmu", "dbeta", "drho", "dA", "dc"]:
+    keys = [
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_n",
+        "dbeta_d",
+        "drho_n",
+        "dWtmp",
+        "dc",
+    ]
+    for key in keys:
         a = np.asarray(ng_upd[key].cpu().numpy(), dtype=np.float64)
         b = np.asarray(np_upd[key], dtype=np.float64).reshape(a.shape)
         max_diff = float(np.max(np.abs(a - b)))
@@ -124,7 +136,19 @@ def test_blocking_invariance():
 
     acc_a = accumulate(256)
     acc_b = accumulate(512)
-    for key in ["dgm", "dalpha", "dmu", "dbeta", "drho", "dA", "dc", "ll"]:
+    keys = [
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_n",
+        "dbeta_d",
+        "drho_n",
+        "dWtmp",
+        "dc",
+        "ll",
+    ]
+    for key in keys:
         a = acc_a[key].cpu().numpy()
         b = acc_b[key].cpu().numpy()
         assert np.allclose(a, b, atol=1e-8), f"{key} depends on block_size"
@@ -232,7 +256,49 @@ def test_newton_mstep_matches_numpy_reference():
     np_upd = npm._get_block_updates(block.cpu().numpy())
     npm._update_parameters(np_upd)
 
-    assert np.max(np.abs(A_ng - npm.A)) < 1e-8
+    # Cross-check every parameter the M-step touches, not just A: the exact-EM
+    # mu/beta and digamma rho updates are independently written in the two
+    # backends and could diverge without A noticing.
+    assert np.max(np.abs(A_ng - npm.A)) < 1e-8, "A"
+    assert np.max(np.abs(ng.mu.cpu().numpy() - npm.mu)) < 1e-8, "mu"
+    assert np.max(np.abs(ng.beta.cpu().numpy() - npm.beta)) < 1e-8, "beta"
+    assert np.max(np.abs(ng.rho.cpu().numpy() - npm.rho)) < 1e-8, "rho"
+    assert np.max(np.abs(ng.alpha.cpu().numpy() - npm.alpha)) < 1e-8, "alpha"
+    assert np.max(np.abs(ng.gm.cpu().numpy() - npm.gm)) < 1e-8, "gm"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_newton_finalize_uses_preupdate_mu():
+    """Regression (issue #24 review): ``_update_parameters`` must finalize the
+    Newton curvature (lambda folds in mu^2) using the PRE-update mu, before the
+    exact-EM mu update moves it. The torch backend previously read ``self.mu``
+    after it had already been reassigned, computing lambda with the wrong mu.
+    """
+    data = _load_real_data()
+    ng = _fresh_ng(do_newton=True, newt_start=0)
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    ng.iteration = 5  # >= newt_start so Newton finalization runs
+    block = X_t[:, :256].contiguous()
+    acc = ng._get_block_updates(block)
+
+    mu_pre = ng.mu.clone()
+    captured = {}
+    original = ng._finalize_newton_stats
+
+    def spy(a):
+        captured["mu"] = ng.mu.clone()  # mu as seen by the finalization
+        return original(a)
+
+    ng._finalize_newton_stats = spy
+    ng._update_parameters(acc, 256)
+
+    assert "mu" in captured, "Newton finalization was not invoked"
+    assert torch.equal(captured["mu"], mu_pre), (
+        "Newton finalization saw the post-update mu (issue #24 lambda bug)"
+    )
+    # Guard the test itself: mu genuinely moved, so pre != post is a real check.
+    assert not torch.equal(ng.mu, mu_pre)
 
 
 def test_newton_direction_matches_formula():
@@ -299,15 +365,16 @@ def test_newton_posdef_mstep_composition():
     A_before = ng.A.clone()
 
     # Independent expected A-update for the (single) model, using the same
-    # forced stats and the unit-tested _newton_direction.
+    # forced stats and the unit-tested _newton_direction. The stored A is
+    # Fortran's A^T, so the step is A -= lrate*(H^T @ A) (issue #24).
     eye = torch.eye(NW, dtype=torch.float64)
-    dA_h = -acc["dA"][:, :, 0] / acc["dgm"][0] + eye
+    dA_h = -acc["dWtmp"][:, :, 0] / acc["dgm"][0] + eye
     H, posdef = ng._newton_direction(dA_h, big[:, 0], lam[:, 0], big[:, 0])
     assert posdef
     lrate_after = min(1.0, ng.lrate + min(1.0 / ng.newt_ramp, ng.lrate))
     idx = ng.comp_list[:, 0]
     A_expected = A_before.clone()
-    A_expected[:, idx] = A_before[:, idx] + lrate_after * (A_before[:, idx] @ H)
+    A_expected[:, idx] = A_before[:, idx] - lrate_after * (H.T @ A_before[:, idx])
     scale = torch.sqrt((A_expected**2).sum(dim=0))
     nz = scale > 0
     A_expected[:, nz] = A_expected[:, nz] / scale[nz]
@@ -354,16 +421,69 @@ def test_newton_stats_match_at_rho_boundaries(rho_val):
 
 
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_multimodel_sufficient_stats_match_numpy_reference():
+    """Multi-model (n_models=2) per-block sufficient statistics == NumPy reference.
+
+    The decisive multi-model correctness check. Both backends now compute the
+    per-model log-likelihood with the log|det W| + sldet Jacobian (issue #24), so
+    the model responsibilities ``v = softmax(logV)`` -- and every v-weighted
+    sufficient statistic -- must agree to float64 precision. This is the
+    Fortran-free proxy for the (separately verified) machine-precision match of
+    one multi-model M-step against the Fortran binary.
+    """
+    data = _load_real_data()
+    ng = AMICATorchNG(
+        n_channels=NW,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+        block_size=256,
+    )
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    blk = 256
+    block = X_t[:, :blk].contiguous()
+    ng_upd = ng._get_block_updates(block)
+
+    npm = _numpy_ref_like(ng, blk, do_newton=False)
+    npm.A = ng.A.cpu().numpy().copy()
+    npm.W = ng.W.cpu().numpy().copy()
+    npm.c = ng.c.cpu().numpy().copy()
+    npm.mu = ng.mu.cpu().numpy().copy()
+    npm.alpha = ng.alpha.cpu().numpy().copy()
+    npm.beta = ng.beta.cpu().numpy().copy()
+    npm.rho = ng.rho.cpu().numpy().copy()
+    npm.gm = ng.gm.cpu().numpy().copy()
+    npm.comp_list = ng.comp_list.cpu().numpy()
+    np_upd = npm._get_block_updates(block.cpu().numpy())
+
+    keys = [
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_n",
+        "dbeta_d",
+        "drho_n",
+        "dWtmp",
+        "dc",
+        "ll",
+    ]
+    for key in keys:
+        a = np.asarray(ng_upd[key].cpu().numpy(), dtype=np.float64)
+        b = np.asarray(np_upd[key], dtype=np.float64).reshape(a.shape)
+        max_diff = float(np.max(np.abs(a - b)))
+        assert max_diff < 1e-8, f"{key} differs from NumPy reference by {max_diff:.3e}"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_newton_multimodel_finite_and_shaped():
     """Multi-model (n_models=2) Newton runs with correct per-model shapes and
-    finite output.
-
-    A NumPy-parity comparison is not valid here: for n_models>1 the NG backend
-    intentionally includes the per-model log|det W| + sldet Jacobian in the
-    model responsibility (Fortran-faithful; see the module docstring), whereas
-    the legacy NumPy port omits it. So this checks per-model finalization
-    (shape (n_channels, n_models), finite, no cross-model NaN) and that a short
-    two-model Newton fit stays finite for both models.
+    finite output: per-model finalization (shape (n_channels, n_models), finite,
+    no cross-model NaN) and a short two-model Newton fit stays finite for both
+    models. (Sufficient-stat NumPy parity is covered by the test above.)
     """
     data = _load_real_data()
     blk = 256
@@ -448,25 +568,15 @@ def test_rejection_shrinks_good_sample_set():
 
 @pytest.mark.slow
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
-@pytest.mark.xfail(
-    strict=False,
-    reason="Component correlation vs Fortran plateaus at ~0.68 regardless of "
-    "Newton. Newton/PDF/rejection are ported and unit-parity-verified (Phase 4, "
-    "issue #13), but they only accelerate convergence to the NG backend's own "
-    "fixed point (LL ~ -3.47), which differs from Fortran's (LL -3.41). Closing "
-    "the >0.95 gate needs a separate investigation of the NG-vs-Fortran "
-    "fixed-point gap (initialization/E-step), tracked as issue #21.",
-)
 def test_end_to_end_correlation_vs_fortran():
     """Epic definition-of-done: Hungarian-matched component correlation vs the
     Fortran binary > 0.95 on the sample data.
 
-    Currently xfails: see the marker reason. Newton is enabled here (matching
-    the Fortran sample settings); on this data the curvature is not positive
-    definite, so the Newton step falls back to natural gradient every iteration
-    (``m.n_newton_fallbacks``), which is part of why the correlation plateaus at
-    ~0.68. The positive-definite Newton composition is covered by
-    ``test_newton_posdef_mstep_composition``.
+    Passes since issue #24: the natural-gradient A-update transpose fix (plus the
+    exact-EM mixture updates, the digamma rho update, and the symmetric-ZCA
+    sphere) makes the backend ascend to Fortran's solution (LL ~ -3.40) with
+    Newton positive-definite and firing (``m.n_newton_fallbacks == 0``), reaching
+    component correlation ~0.997.
     """
     import sys
 
@@ -485,7 +595,15 @@ def test_end_to_end_correlation_vs_fortran():
     out.mkdir(parents=True, exist_ok=True)
     fortran = run_fortran_amica(data, params, out, SEED)
 
-    m = _fresh_ng(do_newton=True, newt_start=50, newtrate=1.0, lrate=0.05)
+    m = _fresh_ng(
+        block_size=512,
+        do_newton=True,
+        newt_start=50,
+        newtrate=1.0,
+        lrate=0.05,
+        invsigmin=0.0,
+        invsigmax=100.0,
+    )
     m.fit(data.astype(np.float64), max_iter=100, verbose=False)
     ng_results = {
         "final_ll": m.ll_history[-1],
@@ -495,3 +613,6 @@ def test_end_to_end_correlation_vs_fortran():
     }
     cmp = compare_results(fortran, ng_results)
     assert cmp["mean_correlation"] > 0.95
+    # The docstring's headline claim: Newton is positive-definite and actually
+    # firing, not silently falling back to natural gradient every iteration.
+    assert m.n_newton_fallbacks == 0

@@ -99,38 +99,6 @@ def test_data_loading(temp_dir):
         load_data_file(Path(temp_dir) / "nonexistent.bin", 10, 100)
 
 
-@pytest.mark.xfail(
-    reason="legacy NumPy Newton optimization no longer NaNs (issue #11 epsilon "
-    "floor on dalpha), but source separation quality is still too low to "
-    "pass (corr ~0.19 vs required >0.8); parity gated by epic #9",
-    strict=True,
-    raises=AssertionError,
-)
-def test_full_pipeline(random_data):
-    """Test complete AMICA pipeline with simple data."""
-    # Create simple mixing scenario
-    n_sources = 4
-    n_samples = 1000
-    rng = np.random.RandomState(42)
-
-    # Create independent sources
-    S = rng.laplace(size=(n_sources, n_samples))
-    A_true = rng.randn(n_sources, n_sources)
-    X = np.dot(A_true, S)
-
-    # Fit AMICA model
-    model = AMICA(num_models=1, max_iter=100, do_newton=True, seed=42)
-    model.fit(X)
-
-    # Test transform
-    S_est = model.transform(X)
-    assert S_est.shape == (n_sources, n_samples, 1)
-
-    # Test correlation with true sources
-    corr = np.abs(np.corrcoef(S.ravel(), S_est[:, :, 0].ravel())[0, 1])
-    assert corr > 0.8  # Should have high correlation with true sources
-
-
 def test_error_handling():
     """Test error handling in various scenarios."""
     model = AMICA()

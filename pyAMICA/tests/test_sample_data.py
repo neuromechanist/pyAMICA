@@ -19,8 +19,10 @@ amicaout_dir = op.join(sample_data_path, "amicaout")
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="full 2000-iter run does not match Fortran (LL scale/sign bug, "
-    "AGENTS.md Known Issue #2; parity gated by epic #9)",
+    reason="uses a per-row corrcoef of the internal W (= Fortran W^T, so rows are "
+    "mismatched) and a full 2000-iter run; superseded by "
+    "test_sample_data_numpy_vs_fortran, which uses the correct get_weights()@sphere "
+    "Hungarian metric. The LL scale/sign issue itself is fixed (issue #24).",
     strict=True,
     raises=AssertionError,
 )
@@ -118,9 +120,9 @@ def test_sample_data_cli():
 
 
 @pytest.mark.xfail(
-    reason="components not fully decorrelated after only 50 iterations, "
-    "downstream of the LL scale/sign bug (Final LL prints a nonsensical "
-    "positive ~1.5e6; AGENTS.md Known Issue #2; parity gated by epic #9)",
+    reason="components not fully decorrelated (off-diagonal < 0.1) after only 50 "
+    "iterations -- an under-convergence limit, not a correctness bug. The LL "
+    "scale/sign issue is fixed (issue #24; LL is now ~ -3.4, not positive).",
     strict=True,
     raises=AssertionError,
 )
@@ -153,6 +155,66 @@ def test_sample_data_light(tmp_path):
     corr = np.corrcoef(Y[:, :, 0])
     np.fill_diagonal(corr, 0)  # Remove diagonal elements
     assert np.all(np.abs(corr) < 0.1), "Components are not sufficiently decorrelated"
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_sample_data_numpy_vs_fortran(tmp_path):
+    """Real-data parity: the NumPy backend's total spatial filter matches the
+    Fortran reference (amicaout) with Hungarian-matched component correlation
+    > 0.9 (issue #24). Replaces the removed synthetic source-recovery tests.
+
+    The strict > 0.95 definition-of-done gate is the torch backend's
+    test_end_to_end_correlation_vs_fortran; this confirms the (bit-identical
+    trajectory) NumPy port also converges to the Fortran solution on real data.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )
+    W_ref = np.fromfile(op.join(amicaout_dir, "W"), np.float64).reshape(
+        32, 32, order="F"
+    )
+    S_ref = np.fromfile(op.join(amicaout_dir, "S"), np.float64).reshape(
+        32, 32, order="F"
+    )
+
+    model = AMICA(
+        use_tqdm=False,
+        num_models=1,
+        num_mix=3,
+        seed=42,
+        block_size=512,
+        lrate=0.05,
+        lratefact=0.5,
+        max_decs=5,
+        do_newton=True,
+        newt_start=50,
+        newtrate=1.0,
+        rho0=1.5,
+        minrho=1.0,
+        maxrho=2.0,
+        rholrate=0.05,
+        invsigmin=0.0,
+        invsigmax=100.0,
+        doscaling=True,
+        do_mean=True,
+        do_sphere=True,
+        max_iter=150,
+        writestep=10000,
+        outdir=str(tmp_path / "out"),
+    )
+    model.fit(data)
+
+    filt_np = model.get_weights() @ model.sphere  # true unmixing @ sphere
+    filt_ref = W_ref @ S_ref
+    a = filt_np / np.linalg.norm(filt_np, axis=1, keepdims=True)
+    b = filt_ref / np.linalg.norm(filt_ref, axis=1, keepdims=True)
+    corr = np.abs(a @ b.T)
+    rows, cols = linear_sum_assignment(1 - corr)
+    mean_corr = float(corr[rows, cols].mean())
+    assert mean_corr > 0.9, f"NumPy vs Fortran component corr {mean_corr:.3f} <= 0.9"
 
 
 if __name__ == "__main__":

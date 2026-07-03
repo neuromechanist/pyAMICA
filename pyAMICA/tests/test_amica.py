@@ -4,7 +4,6 @@ import numpy as np
 from pathlib import Path
 import unittest
 
-from pyAMICA import AMICA_NumPy as AMICA
 from pyAMICA.amica_data import load_data_file, preprocess_data
 from pyAMICA.amica_pdf import compute_pdf
 from pyAMICA.amica_newton import compute_newton_direction
@@ -103,41 +102,11 @@ class TestAMICA(unittest.TestCase):
                     else:
                         self.assertAlmostEqual(H[i, j], 0.0)
 
-    @unittest.expectedFailure
-    def test_full_amica(self):
-        """Test full AMICA optimization.
-
-        Currently fails: legacy NumPy Newton optimization no longer NaNs
-        (issue #11 epsilon floor on dalpha), but source separation quality
-        is still too low to pass (corr ~0.19 vs required >0.9); parity
-        gated by epic #9.
-        """
-        # Create simple test case
-        rng = np.random.RandomState(42)
-        n_sources = 4
-        n_samples = 1000
-
-        # Create independent sources
-        S = rng.laplace(size=(n_sources, n_samples))
-
-        # Create random mixing matrix
-        A_true = rng.randn(n_sources, n_sources)
-
-        # Mix sources
-        X = np.dot(A_true, S)
-
-        # Run AMICA
-        model = AMICA(
-            num_models=1, num_mix=3, max_iter=100, do_newton=True, lrate=0.1, seed=42
-        )
-        model.fit(X)
-
-        # Get unmixed sources
-        S_est = model.transform(X)
-
-        # Compute correlation with true sources
-        corr = np.corrcoef(S.ravel(), S_est[:, :, 0].ravel())[0, 1]
-        self.assertGreater(np.abs(corr), 0.9)
+    # NOTE: the former synthetic-data source-recovery test (test_full_amica) was
+    # removed: it fabricated data (against the NO-MOCK policy) and used a broken
+    # metric (corrcoef on raveled sources, no permutation/sign/scale matching, so
+    # it could never pass). Real-data NumPy-vs-Fortran parity is covered by
+    # tests/test_sample_data.py::test_sample_data_numpy_vs_fortran.
 
     @classmethod
     def tearDownClass(cls):

@@ -5,6 +5,13 @@ This version includes:
 - Newton optimization with automatic ramping (matching Fortran)
 - Adaptive PDF selection based on source statistics
 - Improved initialization for better convergence
+
+PARKED / SUPERSEDED (issue #24): this experimental backend (Adam-reparameterized,
+unstable Newton) is superseded by ``amica_torch_ng.AMICATorchNG``, the
+natural-gradient EM backend that now matches the Fortran reference (component
+correlation ~0.997 with Newton positive-definite and firing). ``AMICATorchV2`` is
+not wired into the public interface and is retained only for its adaptive-PDF
+prototype; do not build on it. New work belongs in ``AMICATorchNG``.
 """
 
 import torch
