@@ -78,6 +78,34 @@ decomposition scores low. The basis-invariant metric is the total spatial filter
 (Fortran's own mixing is `pinv(W*S)`, `loadmodout15.m:257`). The harness should compare
 `W @ sphere` rows, not `W` rows.
 
+## Update: fixed-point test + transpose bug (per-iteration parity grind)
+
+Seeding the corrected M-step with Fortran's *converged* `amicaout` solution (raw `W`, `S`,
+`mean`, `mu`, `sbeta`, `rho`, `alpha`) and running one M-step (fixed-point test) established:
+
+- **The corrected M-step is faithful.** Fortran's solution is a *stable* fixed point of the
+  natural gradient: seeded LL = -3.40186 (== Fortran -3.402), 15 steps at lrate=0.05 hold
+  -3.4019, and the stationarity condition `<g b^T>/dgm == I` holds to max 0.005. So score fp
+  + exact-EM mu/beta + source-space natural gradient are correct.
+
+- **W/A transpose bug (major, new).** Seeding required `A = inv(W_fortran.T)`: NG's internal
+  `W` is the *transpose* of the true unmixing. `_forward` (`b = X.T @ W`) uses it correctly,
+  but `transform` (`W @ X`), `get_unmixing_matrix` (returns `self.W`), and the validation
+  comparison are transposed. At Fortran's solution, `corr(self.W.T, Fortran W) = 0.9997`
+  vs `corr(self.W, Fortran W) ~ 0.5`. **Fix: report/compare `self.W.T`** (and fix `transform`
+  to `self.W.T @ x`). This shared-with-NumPy transpose is a dominant cause of the low
+  correlation number, independent of LL. (`amica_torch_ng.py:475` forward vs `:994` transform
+  vs `:1001` get_unmixing.)
+
+- **Newton is the remaining blocker.** At lrate ramping to 1.0, the Newton step diverges even
+  seeded at the fixed point (0 fallbacks -- it takes the Newton direction, then overshoots).
+  Root: the 2x2 solve `H[i,k] = (sk1*dA[i,k] - dA[k,i])/(sk1*sk2 - 1)` amplifies the small
+  residual `dA = I - <g b^T>/dgm` for source pairs whose `sk1*sk2` is barely > 1 (near-marginal
+  positive definiteness). Fortran is stable at lrate=1.0. Needs: match Fortran's Newton
+  curvature exactly at the fixed point (so the residual and marginal pairs vanish), and/or a
+  gentler ramp. Natural-gradient alone (no Newton) reaches ~-3.47 (vs Fortran's pre-Newton
+  -3.44) with ~0.5 correlation, so Newton is required for >0.95.
+
 ## Remaining work
 
 The confirmed fixes remove the divergence and make Newton fire, but a residual per-iteration
