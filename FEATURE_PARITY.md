@@ -1,5 +1,16 @@
 # Feature Parity Report: Fortran vs PyTorch AMICA
 
+> **Status (2026-07-03, epic #9 / issue #24):** the "PyTorch" column below tracks the pre-epic
+> basic backend (`AMICATorch`, `backend="torch"`, Adam/autograd). It has been **superseded for
+> parity by the natural-gradient EM backend `AMICATorchNG` (`backend="ng"`)**, which reaches
+> Fortran parity: single-model LL ~ -3.40 (vs Fortran -3.4018) and Hungarian component correlation
+> ~0.997 with Newton positive-definite (0 fallbacks). `AMICATorchNG` also implements Newton +
+> Fortran-style ramping and outlier rejection (`do_reject`). The rows below that still read
+> "Missing"/"Partial" describe the basic backend and no longer reflect `backend="ng"`. Remaining
+> gaps on the NG path: adaptive-PDF selection (#26) and full multi-model partition matching (#27,
+> M-step is already bit-exact vs Fortran). See `PROGRESS_SUMMARY.md` and ADR
+> `.context/decisions/0001-torch-backend-natural-gradient-em.md`.
+
 ## Implementation Status Overview
 
 | Component | Fortran | NumPy | PyTorch | Notes |
@@ -122,93 +133,58 @@
 
 ## Validation Status
 
-### Convergence Behavior
+### Convergence Behavior (`backend="ng"`, issue #24)
 
-| Metric | Fortran | PyTorch | Match? | Notes |
-|--------|---------|---------|--------|-------|
-| **Initial LL** | ~-3.5 | ~-46 | ❌ | Different scaling |
+| Metric | Fortran | PyTorch NG | Match? | Notes |
+|--------|---------|-----------|--------|-------|
+| **Final LL** | -3.4018 | -3.40 | ✅ | Jacobian-normalized, parity |
+| **Component Correlation** | - | ~0.997 | ✅ | Hungarian-matched, clears >0.95 gate |
 | **Convergence Rate** | Fast | Fast | ✅ | Similar speed |
-| **Final LL Range** | -3.4 to -3.5 | -44 to -46 | ❌ | Consistent offset |
-| **Gradient Decay** | Exponential | Exponential | ✅ | Similar pattern |
+| **Newton** | posdef | posdef | ✅ | 0 fallbacks on sample data |
 
-### Component Quality
+The pre-epic basic backend (`backend="torch"`) still shows the old offset (initial LL ~-46,
+final -44 to -46; ~0.78 correlation) and is superseded by `backend="ng"` for parity.
+
+### Component Quality (`backend="ng"`)
 
 | Metric | Status | Notes |
 |--------|--------|-------|
-| **Component Correlation** | 🔧 Testing | Need same initialization |
-| **Mixing Matrix Recovery** | 🔧 Testing | Depends on convergence |
-| **Source Separation** | 🔧 Testing | Need synthetic data test |
+| **Component Correlation** | ✅ ~0.997 | Real sample data vs Fortran (Hungarian match) |
+| **Mixing Matrix Recovery** | ✅ | Ascends to Fortran fixed point |
+| **Source Separation** | ✅ real-data | Validated on sample EEG (no synthetic; NO-MOCK policy) |
 
-## Critical Features Implementation Roadmap
+## Remaining Roadmap (`backend="ng"`)
 
-### Priority 1: Core Algorithm (Immediate - Week 1)
+The epic (#9 / #24) delivered core parity on `AMICATorchNG`. Done on the NG path: natural-gradient
+EM at the Fortran fixed point, Newton + Fortran-style ramping (positive-definite), exact-EM mixture
+updates, symmetric-ZCA sphere, Jacobian LL, and outlier rejection (`do_reject`). Open items:
 
-#### 1. Newton Optimization Method ⚠️ Partially Implemented
-**Why Critical**: Provides quadratic convergence, essential for fine-tuning components
-- [ ] Fix MPS compatibility with pytorch-minimize
-- [ ] Implement Newton ramping (gradual transition after iter 50)
-- [ ] Add line search and trust region
-- [ ] Match Fortran's Newton behavior (lrate → 1.0)
+#### 1. Adaptive PDF Selection (issue #26)
+**Why**: different sources have different distributions; beyond strict Fortran parity (fixed GG PDF)
+- [ ] Laplace / Student-t / generalized-Gaussian selection on the NG path
+- [ ] Kurtosis-based selection and per-component PDF-fit monitoring
 
-#### 2. Adaptive PDF Selection 🔴 Not Implemented  
-**Why Critical**: Different sources have different distributions; dramatically improves separation
-- [ ] Implement kurtosis-based PDF selection
-- [ ] Add Laplace, Student-t, uniform PDFs
-- [ ] Create smooth transitions between PDFs
-- [ ] Monitor PDF fit quality per component
+#### 2. Multi-Model Partition Matching (issue #27)
+**Why**: full 2-model fit is partition-limited (~0.77) though the M-step is bit-exact vs Fortran
+- [ ] Resolve the partition/cross-correlation gap
+- [ ] Restore the omitted per-model bias `c` update (no-op only for `n_models=1`)
 
-#### 3. Multiple PDF Types 🔴 Not Implemented
-**Why Critical**: Real data contains mixed source types (super/sub-Gaussian)
-- [ ] Allow different PDFs per source
-- [ ] Implement PDF-specific updates
-- [ ] Initialize based on data statistics
-
-### Priority 2: Multi-Modal Features (Week 2)
-
-#### 4. Multi-Modal AMICA ⚠️ Framework Exists
-**Why Critical**: Handles non-stationary data and multiple brain states
-- [ ] Debug multi-model optimization
-- [ ] Implement proper gm updates
-- [ ] Add model selection criteria
-- [ ] Test with non-stationary data
-
-#### 5. Component Sharing 🔴 Not Implemented
-**Why Critical**: Identifies stable components across states
-- [ ] Implement similarity metrics
-- [ ] Add sharing detection
-- [ ] Create shared component pools
-
-### Priority 3: Robustness (Week 3)
-
-#### 6. Outlier Rejection 🔴 Not Implemented
-**Why Critical**: Real EEG data contains artifacts
-- [ ] Implement robust likelihood
-- [ ] Add sample weighting
-- [ ] Create adaptive thresholds
-
-#### 7. Adaptive Block Size 🔴 Not Implemented
-**Why Critical**: Optimizes memory and convergence
-- [ ] Dynamic block selection
-- [ ] Memory monitoring
-- [ ] GPU optimization
+#### 3. Retire Superseded/Legacy Paths
+- [ ] Remove `AMICATorchV2` and promote `backend="ng"` to default (issue #32)
+- [ ] Reassess the basic `backend="torch"` path (legacy mixture M-step bug: #31; legacy CLI
+      save/load format: #30)
 
 ## Migration Readiness
 
-### Ready to Replace NumPy ✅
-- PyTorch implementation is more stable
-- Better performance
-- GPU support
-- Active maintenance
-
-### Not Ready to Replace Fortran ⚠️
-- Need to validate component quality
-- Missing some advanced features
-- Different numerical scaling
+### `backend="ng"` at Fortran parity ✅
+- Single-model LL ~ -3.40 and component correlation ~0.997 vs Fortran (issue #24)
+- NumPy backend carries the same fixes
+- Multi-model M-step bit-exact; full-fit partition matching tracked in #27
 
 ### Recommendation
-1. **Immediate**: Replace NumPy with PyTorch
-2. **Testing**: Run both Fortran and PyTorch in parallel
-3. **Future**: Full Fortran replacement after validation
+1. Use `backend="ng"` for parity-critical work (default for that use case)
+2. Keep `validate_implementations.py` (real sample data + Fortran binary) green as source of truth
+3. Close out adaptive-PDF (#26) and multi-model (#27) before removing the Fortran binary from the loop
 
 ## Testing Checklist
 
@@ -216,9 +192,8 @@
 - [x] Convergence test
 - [x] GPU/MPS support
 - [x] Output format compatibility
-- [ ] Same initialization test
-- [ ] Component correlation test
-- [ ] Synthetic data recovery
+- [x] Component correlation vs Fortran (real data, Hungarian match)
+- [x] NG backend sufficient-stats vs NumPy reference (bit-exact)
 - [ ] Large-scale data test
 - [ ] Memory usage comparison
 - [ ] Speed benchmarks
