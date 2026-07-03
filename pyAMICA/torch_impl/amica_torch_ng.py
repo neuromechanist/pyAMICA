@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 
 _LOG2 = math.log(2.0)
 _HALF_LOG_PI = 0.5 * math.log(math.pi)
+# Fortran's epsdble (amica17_header.f90:73): the drho-numerator underflow guard
+# zeros the rho*ln|y| term when |y|^rho falls below this, matching amica17.f90:1570.
+_EPSDBLE = 1e-16
 
 
 def _log_pdf_and_deriv(
@@ -589,7 +592,7 @@ class AMICATorchNG:
             ay = y.abs()
             ayrho = ay.pow(rho_h.unsqueeze(0))  # |y|^rho
             logab = rho_h.unsqueeze(0) * torch.log(ay.clamp_min(tiny))  # rho*ln|y|
-            logab = torch.where(ayrho < tiny, torch.zeros_like(logab), logab)
+            logab = torch.where(ayrho < _EPSDBLE, torch.zeros_like(logab), logab)
             drho_n.index_add_(1, idx, (u * (ayrho * logab)).sum(0).T)
 
             g = (beta_h * ufp).sum(-1)  # g_i = sum_j sbeta*ufp (:1493)
@@ -709,12 +712,25 @@ class AMICATorchNG:
 
         The mixture parameters use exact-EM fixed-point updates (no ``lrate``);
         only the ``A``/``W`` step is scaled by ``lrate`` (Fortran amica17.f90:
-        1890-2035). ``c`` is not updated: for mean-removed data Fortran's ``c``
-        stays at machine zero (issue #24), so the update is a no-op.
+        1890-2035). ``c`` is not updated: for ``n_models=1`` on mean-removed data
+        Fortran's ``c = sum(v*x)/sum(v)`` collapses to the (zero) data mean since
+        ``v == 1``, so the update is a no-op and single-model parity is exact. For
+        ``n_models>1`` Fortran's per-model ``v`` is non-uniform and ``c`` does move;
+        porting that (a data-space accumulator, not the retained ``dc``) is tracked
+        as a multi-model follow-up (issue #27).
         """
         self.gm = acc["dgm"] / n_samples
 
         self.alpha = acc["dalpha_n"] / acc["dalpha_n"].sum(dim=0, keepdim=True)
+
+        # Finalize the Newton curvature with the PRE-update mu. Fortran folds the
+        # mu^2 term into lambda during E-step accumulation, before the M-step
+        # moves mu (amica17.f90:1762-1774), and the NumPy port bakes it in at
+        # accumulation time. Do it here, before self.mu is reassigned below, so
+        # lambda uses this iteration's mu rather than the updated one.
+        newton_active = self.do_newton and self.iteration >= self.newt_start
+        if newton_active:
+            sigma2, lambda_, kappa = self._finalize_newton_stats(acc)
 
         # Exact-EM mixture location/scale (Fortran :1978/:1993). No lrate.
         self.mu = self.mu + acc["dmu_n"] / acc["dmu_d"]
@@ -723,17 +739,39 @@ class AMICATorchNG:
             self.invsigmin,
             self.invsigmax,
         )
+        # Fortran keeps a live "NaN in sbeta!" canary here (amica17.f90:1996-2000).
+        # The exact-EM mu/beta divisions are unguarded (matching Fortran, whose own
+        # mu/beta guard is commented out), so surface a non-finite value here
+        # instead of letting it propagate to a later, unattributable nan-LL stop.
+        if not torch.isfinite(self.mu).all() or not torch.isfinite(self.beta).all():
+            logger.warning(
+                "Non-finite mu/beta at iter %d (a mixture component's mass likely "
+                "collapsed).",
+                self.iteration,
+            )
 
         # GG shape update with the 1/psi(1+1/rho) digamma factor (Fortran
         # :2013-2014); the divisor is the per-component responsibility mass
-        # dalpha_n (floored so a near-empty component cannot poison rho).
+        # dalpha_n (floored so a near-empty component cannot poison rho). A NaN
+        # here (e.g. from upstream mu/beta corruption) is reset to rho0 -- but
+        # logged first, so the reset does not silently erase the failure origin.
         if not torch.all(self.rho == 1.0) and not torch.all(self.rho == 2.0):
             drho = acc["drho_n"] / acc["dalpha_n"].clamp_min(1e-8)
             psi = torch.special.digamma(1.0 + 1.0 / self.rho)
             new_rho = self.rho + self.rholrate * (1.0 - (self.rho / psi) * drho)
-            self.rho = torch.clamp(
-                torch.nan_to_num(new_rho, nan=self.rho0), self.minrho, self.maxrho
-            )
+            nan_mask = torch.isnan(new_rho)
+            if nan_mask.any():
+                logger.warning(
+                    "NaN in rho update at iter %d for %d component(s); resetting "
+                    "to rho0=%g.",
+                    self.iteration,
+                    int(nan_mask.sum()),
+                    self.rho0,
+                )
+                new_rho = torch.where(
+                    nan_mask, torch.full_like(new_rho, self.rho0), new_rho
+                )
+            self.rho = torch.clamp(new_rho, self.minrho, self.maxrho)
 
         # --- A / W update: natural gradient, optionally Newton-preconditioned.
         # A is stored as Fortran's A^T (the true unmixing is W^T = inv(A)^T), so
@@ -744,10 +782,7 @@ class AMICATorchNG:
         # this wrong (right-multiply by the untransposed dir) is invisible at the
         # fixed point but sends the free-running fit downhill -- issue #24 root
         # cause (.context/issue-24/root_cause_Aupdate.py, machine-exact check).
-        newton_active = self.do_newton and self.iteration >= self.newt_start
-        if newton_active:
-            sigma2, lambda_, kappa = self._finalize_newton_stats(acc)
-
+        # (newton_active / sigma2 / lambda_ / kappa were finalized above.)
         eye = torch.eye(self.n_channels, dtype=self.dtype, device=self.device)
         directions = []
         no_newt = False
@@ -875,9 +910,17 @@ class AMICATorchNG:
             self._update_parameters(acc, n_use)
 
             ll = (acc["ll"] / (n_use * self.n_channels)).item()
-            if math.isnan(ll):
-                logger.warning("NaN log-likelihood at iteration %d; stopping.", it)
-                self.stop_reason = "nan_ll"
+            # A singular W makes logdet -> -inf (not NaN), so guard on isfinite,
+            # not isnan alone: a -inf LL would otherwise sail past as a mere
+            # "decrease" and the run would "complete" (stop_reason=max_iter) on a
+            # degenerate model with no diagnostic.
+            if not math.isfinite(ll):
+                self.stop_reason = "nan_ll" if math.isnan(ll) else "singular_ll"
+                logger.warning(
+                    "Non-finite log-likelihood (%s) at iteration %d; stopping.",
+                    ll,
+                    it,
+                )
                 break
             self.ll_history.append(ll)
 

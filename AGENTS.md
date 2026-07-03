@@ -62,13 +62,16 @@ exact-EM mixture updates + digamma rho update + symmetric-ZCA sphere + Jacobian 
 Root-cause writeup and machine-precision repro: `.context/issue-24/root_cause_Aupdate.py` +
 `drift_localization.md`.
 
-Multi-model (`n_models>1`): the M-step and model responsibilities are bit-exact vs Fortran (one
-seeded step matches to ~1e-15, including `gm`) and the sphere matches to ~1e-13; NG<->NumPy
-multi-model sufficient-stat parity is a suite test. A full 2-model fit reaches a comparable LL
-(NG -3.355 vs Fortran -3.345) but a lower Hungarian cross-correlation (~0.77), because multi-model
-AMICA has many near-degenerate partitions (unlike single-model's unique solution), so the two
-implementations settle into different but equally-valid partitions. This is intrinsic partition
-ambiguity, not a code defect; NG is self-consistent (cross-corr 1.0 across block sizes).
+Multi-model (`n_models>1`): the per-block sufficient statistics and model responsibilities are
+bit-exact vs Fortran (one seeded step matches unmixing to ~1e-15, including `gm`) and the sphere
+matches to ~1e-13; NG<->NumPy multi-model sufficient-stat parity is a suite test. A full 2-model fit
+reaches a comparable LL (NG -3.355 vs Fortran -3.345) but a lower Hungarian cross-correlation
+(~0.77). Two contributors, being separated in issue #27: (1) intrinsic partition ambiguity --
+multi-model AMICA has many near-degenerate partitions (unlike single-model's unique solution), and
+NG is self-consistent (cross-corr 1.0 across block sizes); (2) a genuine code gap -- the per-model
+bias `c` update is omitted (only a no-op for `n_models=1`), whereas Fortran moves `c` per model when
+`v` is non-uniform. So the multi-model gap is NOT purely partition ambiguity; the `c` update is an
+open, fixable suspect.
 
 Remaining, non-blocking:
 1. Newton stability was fixed for `AMICATorchNG` (posdef, 0 fallbacks on the sample data). The

@@ -696,13 +696,22 @@ class AMICA:
         logV = np.zeros((batch_size, self.num_models))
         for h in range(self.num_models):
             # A near-singular W (a transient the natural gradient can pass
-            # through) makes slogdet emit a divide-by-zero FP warning while still
-            # returning a large-negative logdet; that value is correct (the model
-            # is momentarily degenerate) and flows into logV, where the fit-loop's
-            # NaN check still guards genuine divergence. Silence only the numpy FP
-            # warning for this expected event -- no value is suppressed.
+            # through) makes slogdet emit divide/overflow/invalid FP warnings.
+            # Suppress the numpy console noise, but DON'T rely on that as the
+            # guard: the explicit isfinite check below is the real diagnostic --
+            # it fires for a -inf logdet (singular W) AND a NaN logdet (genuinely
+            # broken W), so silencing `invalid` does not hide a NaN W. The
+            # fit-loop LL check (_check_convergence) also stops on a -inf LL.
             with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
                 _, logdet_W = np.linalg.slogdet(self.W[:, :, h])
+            if not np.isfinite(logdet_W):
+                self.logger.warning(
+                    "Non-finite logdet(W) for model %d at iter %d (logdet=%s); "
+                    "W is singular or corrupt.",
+                    h,
+                    getattr(self, "iter", -1),
+                    logdet_W,
+                )
             logV[:, h] = (
                 np.log(self.gm[h])
                 + logdet_W
@@ -762,7 +771,10 @@ class AMICA:
                     ay = np.abs(y)
                     ayrho = np.power(ay, self.rho[j, k])
                     logab = self.rho[j, k] * np.log(np.maximum(ay, tiny))
-                    logab = np.where(ayrho < tiny, 0.0, logab)
+                    # Fortran zeros the term when |y|^rho < epsdble=1e-16
+                    # (amica17.f90:1570 / amica17_header.f90:73), not at denormal
+                    # underflow; use 1e-16 to match, not np.finfo.tiny.
+                    logab = np.where(ayrho < 1e-16, 0.0, logab)
                     updates["drho_n"][j, k] += np.sum(u * ayrho * logab)
 
                     if self.do_newton:
@@ -817,17 +829,37 @@ class AMICA:
         self.mu = self.mu + updates["dmu_n"] / updates["dmu_d"]
         self.beta = self.beta * np.sqrt(updates["dbeta_n"] / updates["dbeta_d"])
         self.beta = np.clip(self.beta, self.invsigmin, self.invsigmax)
+        # Fortran keeps a live "NaN in sbeta!" canary here (amica17.f90:1996-2000);
+        # the exact-EM mu/beta divisions are unguarded (matching Fortran), so
+        # surface a non-finite value immediately instead of letting it propagate
+        # to a later, unattributable nan-LL stop.
+        if not np.all(np.isfinite(self.mu)) or not np.all(np.isfinite(self.beta)):
+            self.logger.warning(
+                "Non-finite mu/beta at iter %d (mixture component mass likely "
+                "collapsed).",
+                self.iter,
+            )
 
         # GG shape update with the 1/psi(1+1/rho) digamma factor (Fortran
         # :2013-2014); the divisor is the per-component responsibility mass
-        # dalpha_n (floored so a near-empty component cannot poison rho).
+        # dalpha_n (floored so a near-empty component cannot poison rho). A NaN
+        # is reset to rho0 -- but logged first, so the reset does not silently
+        # erase the failure origin.
         if not np.all(self.rho == 1.0) and not np.all(self.rho == 2.0):
             drho = updates["drho_n"] / np.maximum(updates["dalpha_n"], 1e-8)
             psi = digamma(1.0 + 1.0 / self.rho)
             new_rho = self.rho + self.rholrate * (1.0 - (self.rho / psi) * drho)
-            self.rho = np.clip(
-                np.nan_to_num(new_rho, nan=self.rho0), self.minrho, self.maxrho
-            )
+            nan_mask = np.isnan(new_rho)
+            if nan_mask.any():
+                self.logger.warning(
+                    "NaN in rho update at iter %d for %d component(s); resetting "
+                    "to rho0=%g.",
+                    self.iter,
+                    int(nan_mask.sum()),
+                    self.rho0,
+                )
+                new_rho = np.where(nan_mask, self.rho0, new_rho)
+            self.rho = np.clip(new_rho, self.minrho, self.maxrho)
 
         # Update unmixing matrices
         newton_active = self.do_newton and self.iter >= self.newt_start
@@ -1091,9 +1123,11 @@ class AMICA:
         if self.iter == 0:
             return False, None
 
-        # Check for NaN
-        if np.isnan(self.ll[-1]):
-            return True, "NaN encountered in likelihood"
+        # Check for non-finite LL: a singular W makes logdet -> -inf (not NaN),
+        # so guard on isfinite, not isnan alone, or a degenerate model would run
+        # to max_iter undetected.
+        if not np.isfinite(self.ll[-1]):
+            return True, "Non-finite likelihood (NaN/-inf) encountered"
 
         # Check for likelihood decrease
         if self.ll[-1] < self.ll[-2]:

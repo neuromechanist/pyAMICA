@@ -256,7 +256,49 @@ def test_newton_mstep_matches_numpy_reference():
     np_upd = npm._get_block_updates(block.cpu().numpy())
     npm._update_parameters(np_upd)
 
-    assert np.max(np.abs(A_ng - npm.A)) < 1e-8
+    # Cross-check every parameter the M-step touches, not just A: the exact-EM
+    # mu/beta and digamma rho updates are independently written in the two
+    # backends and could diverge without A noticing.
+    assert np.max(np.abs(A_ng - npm.A)) < 1e-8, "A"
+    assert np.max(np.abs(ng.mu.cpu().numpy() - npm.mu)) < 1e-8, "mu"
+    assert np.max(np.abs(ng.beta.cpu().numpy() - npm.beta)) < 1e-8, "beta"
+    assert np.max(np.abs(ng.rho.cpu().numpy() - npm.rho)) < 1e-8, "rho"
+    assert np.max(np.abs(ng.alpha.cpu().numpy() - npm.alpha)) < 1e-8, "alpha"
+    assert np.max(np.abs(ng.gm.cpu().numpy() - npm.gm)) < 1e-8, "gm"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_newton_finalize_uses_preupdate_mu():
+    """Regression (issue #24 review): ``_update_parameters`` must finalize the
+    Newton curvature (lambda folds in mu^2) using the PRE-update mu, before the
+    exact-EM mu update moves it. The torch backend previously read ``self.mu``
+    after it had already been reassigned, computing lambda with the wrong mu.
+    """
+    data = _load_real_data()
+    ng = _fresh_ng(do_newton=True, newt_start=0)
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    ng.iteration = 5  # >= newt_start so Newton finalization runs
+    block = X_t[:, :256].contiguous()
+    acc = ng._get_block_updates(block)
+
+    mu_pre = ng.mu.clone()
+    captured = {}
+    original = ng._finalize_newton_stats
+
+    def spy(a):
+        captured["mu"] = ng.mu.clone()  # mu as seen by the finalization
+        return original(a)
+
+    ng._finalize_newton_stats = spy
+    ng._update_parameters(acc, 256)
+
+    assert "mu" in captured, "Newton finalization was not invoked"
+    assert torch.equal(captured["mu"], mu_pre), (
+        "Newton finalization saw the post-update mu (issue #24 lambda bug)"
+    )
+    # Guard the test itself: mu genuinely moved, so pre != post is a real check.
+    assert not torch.equal(ng.mu, mu_pre)
 
 
 def test_newton_direction_matches_formula():
@@ -571,3 +613,6 @@ def test_end_to_end_correlation_vs_fortran():
     }
     cmp = compare_results(fortran, ng_results)
     assert cmp["mean_correlation"] > 0.95
+    # The docstring's headline claim: Newton is positive-definite and actually
+    # firing, not silently falling back to natural gradient every iteration.
+    assert m.n_newton_fallbacks == 0
