@@ -25,3 +25,4 @@ Do not write one for routine choices that are obvious from reading the code.
 Add new entries here as you create ADRs:
 
 - ADR 0000 - template (do not edit)
+- ADR 0001 - [Rewrite the PyTorch backend as a natural-gradient EM port, not Adam+autograd](0001-torch-backend-natural-gradient-em.md) (accepted)

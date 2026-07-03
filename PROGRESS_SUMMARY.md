@@ -26,35 +26,41 @@
 - Updated `CLAUDE.md` with current status and roadmap
 - Documented critical missing features and priorities
 
+### 5. Natural-gradient EM backend at Fortran parity ✅ (epic #9 / issue #24)
+- Added `AMICATorchNG` (`torch_impl/amica_torch_ng.py`), wired into `AMICA(backend="ng")`
+- Root-caused the parity gap: the natural-gradient A-update was transposed / multiplied on the
+  wrong side (proven machine-exact); plus exact-EM mixture updates, the digamma rho update, the
+  symmetric-ZCA sphere, the output transpose, and the NumPy Jacobian LL
+- Newton ported from NumPy and positive-definite (0 fallbacks on the sample data)
+
 ## Current Results
 
-### Validation Metrics (50 iterations)
-- **Log-likelihood ratio**: ~13x (consistent scaling difference)
-- **Component correlation**: 0.78 mean (0.61 min, 0.88 max)
-- **Convergence**: Both implementations converge stably
+### Validation Metrics (`backend="ng"`, issue #24)
+- **Log-likelihood**: LL ~ -3.40 (matches Fortran -3.4018; the earlier ~13x scaling gap was an
+  artifact of the pre-parity basic backend)
+- **Component correlation**: ~0.997 (Hungarian-matched, Newton positive-definite) -- clears the
+  >0.95 gate
+- **NumPy backend**: carries the same fixes and matches
+- **Multi-model** (`n_models>1`): M-step bit-exact vs Fortran; full-fit partition matching is
+  partition-limited (~0.77), tracked in #27
 
-### Key Findings
-1. PyTorch implementation works and converges
-2. Component quality needs improvement (target >0.95 correlation)
-3. Missing Newton optimization is critical (Fortran switches at iter 50)
-4. Adaptive PDF selection needed for better separation
+The pre-epic basic backend (`backend="torch"`, Adam) still shows the old ~0.78 correlation / ~13x
+LL scaling; it is retained but superseded by `backend="ng"` for parity work.
 
 ## Next Steps (Prioritized)
 
-### 1. Fix Newton Optimization (Critical)
-- Debug pytorch-minimize integration
-- Implement Newton ramping (gradual transition)
-- Match Fortran's behavior (lrate → 1.0 after iter 50)
+### 1. Adaptive PDF selection for `AMICATorchNG` (issue #26)
+- Laplace / Student-t / generalized-Gaussian selection (present in the NumPy path, beyond strict
+  Fortran parity which uses a fixed GG PDF)
 
-### 2. Implement Adaptive PDF Selection (Critical)
-- Add multiple PDF types (Laplace, Student-t, uniform)
-- Implement kurtosis-based selection
-- Allow different PDFs per component
+### 2. Multi-model partition matching (issue #27)
+- Resolve the full-fit multi-model cross-correlation gap; includes the omitted per-model bias
+  `c` update
 
-### 3. Ensure Identical Initialization
-- Match random seed behavior
-- Initialize with same sphering matrix
-- Start from identical mixing matrices
+### 3. Retire the parked/superseded paths (issue #32)
+- `AMICATorchV2` is parked (superseded by `AMICATorchNG`); once `backend="ng"` is the de-facto
+  default, remove `AMICATorchV2` and promote `backend="ng"` to default, then reassess the basic
+  `backend="torch"` path (legacy mixture M-step bug tracked in #31)
 
 ## Technical Achievements
 - Successfully handles MPS device limitations
@@ -71,6 +77,5 @@
 6. Update gitignore for validation output
 
 ## Repository Status
-- Branch: `pytorch-implementation`
-- All changes committed and pushed
-- Ready for next phase of development
+- Epic #9 (PyTorch backend Fortran parity) delivered via `AMICATorchNG` / `backend="ng"`
+- Remaining follow-ups tracked as issues #26 (adaptive PDF), #27 (multi-model), #30/#31 (legacy)

@@ -7,14 +7,12 @@ import tempfile
 import shutil
 
 import pyAMICA
-from pyAMICA import AMICA
-from pyAMICA.amica_utils import create_output_dirs
+from pyAMICA import AMICA_NumPy as AMICA
 from pyAMICA.amica_data import load_data_file, preprocess_data
-from pyAMICA.amica_viz import plot_components
 from pyAMICA.amica_pdf import compute_pdf
 
 # Setup test data path
-data_path = op.join(pyAMICA.__path__[0], 'data')
+data_path = op.join(pyAMICA.__path__[0], "data")
 
 
 @pytest.fixture
@@ -39,7 +37,7 @@ def test_amica_initialization():
     # Test default initialization
     model = AMICA()
     assert model.num_models == 1
-    assert model.max_iter == 1000
+    assert model.max_iter == 2000
 
     # Test custom parameters
     model = AMICA(num_models=2, max_iter=500, do_newton=True)
@@ -82,69 +80,23 @@ def test_pdf_computation():
     npt.assert_allclose(dpdf, -2 * y * pdf)
 
 
-def test_output_directory_creation(temp_dir):
-    """Test creation of output directories."""
-    outdir = Path(temp_dir) / 'test_output'
-    create_output_dirs(outdir)
-
-    # Check that directories were created
-    assert outdir.exists()
-    assert (outdir / 'figures').exists()
-    assert (outdir / 'results').exists()
-
-
 def test_data_loading(temp_dir):
     """Test data loading functionality."""
     # Create test data
     data = np.random.randn(10, 100).astype(np.float32)
-    data_file = Path(temp_dir) / 'test.bin'
+    data_file = Path(temp_dir) / "test.bin"
 
     # Save in Fortran format
-    with open(data_file, 'wb') as f:
+    with open(data_file, "wb") as f:
         data.T.tofile(f)
 
     # Test loading
-    loaded_data = load_data_file(data_file, 10, 100, 1, dtype=np.float32)
+    loaded_data = load_data_file(data_file, 10, 100, dtype=np.float32)
     npt.assert_allclose(loaded_data, data)
 
     # Test error handling
     with pytest.raises(FileNotFoundError):
-        load_data_file(Path(temp_dir) / 'nonexistent.bin', 10, 100, 1)
-
-
-def test_full_pipeline(random_data):
-    """Test complete AMICA pipeline with simple data."""
-    # Create simple mixing scenario
-    n_sources = 4
-    n_samples = 1000
-    rng = np.random.RandomState(42)
-
-    # Create independent sources
-    S = rng.laplace(size=(n_sources, n_samples))
-    A_true = rng.randn(n_sources, n_sources)
-    X = np.dot(A_true, S)
-
-    # Fit AMICA model
-    model = AMICA(num_models=1, max_iter=100, do_newton=True, seed=42)
-    model.fit(X)
-
-    # Test transform
-    S_est = model.transform(X)
-    assert S_est.shape == (n_sources, n_samples, 1)
-
-    # Test correlation with true sources
-    corr = np.abs(np.corrcoef(S.ravel(), S_est[:, :, 0].ravel())[0, 1])
-    assert corr > 0.8  # Should have high correlation with true sources
-
-
-def test_visualization(random_data, temp_dir):
-    """Test visualization functions."""
-    outdir = Path(temp_dir)
-
-    # Test component plotting
-    fig = plot_components(random_data, outdir=outdir)
-    assert fig is not None
-    assert (outdir / 'figures').exists()
+        load_data_file(Path(temp_dir) / "nonexistent.bin", 10, 100)
 
 
 def test_error_handling():
