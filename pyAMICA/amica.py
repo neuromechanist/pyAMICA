@@ -119,10 +119,10 @@ class AMICA:
         do_sphere : bool, default=True
             Whether to sphere (whiten) the data
         do_newton : bool, default=False
-            Whether to use Newton optimization (experimental). Only supported
-            by ``backend="torch"``; passing ``do_newton=True`` with
-            ``backend="ng"`` raises, since Newton is not yet ported to the
-            natural-gradient backend (Phase 4).
+            Whether to use Newton optimization. Supported by both backends.
+            For ``backend="ng"`` this enables the Fortran-parity Newton
+            preconditioner; tune it via ``newt_start``/``newtrate`` in
+            ``**kwargs``.
         output_dir : str, optional
             Directory for debug output (only used if debug=True). Only
             supported by ``backend="torch"``.
@@ -158,11 +158,6 @@ class AMICA:
             device = self.device
 
         if self.backend == "ng":
-            if do_newton:
-                raise ValueError(
-                    "do_newton=True is not supported by backend='ng' yet "
-                    "(Newton is Phase 4, not ported to AMICATorchNG)."
-                )
             if debug:
                 raise ValueError(
                     "debug=True (Fortran-style output) is not supported by "
@@ -181,6 +176,7 @@ class AMICA:
                 lrate=lrate,
                 do_mean=do_mean,
                 do_sphere=do_sphere,
+                do_newton=do_newton,
                 device=device,
                 **kwargs,
             )
