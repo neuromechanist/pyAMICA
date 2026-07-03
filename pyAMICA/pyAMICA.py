@@ -695,7 +695,14 @@ class AMICA:
         )  # (batch, data_dim, num_models)
         logV = np.zeros((batch_size, self.num_models))
         for h in range(self.num_models):
-            _, logdet_W = np.linalg.slogdet(self.W[:, :, h])
+            # A near-singular W (a transient the natural gradient can pass
+            # through) makes slogdet emit a divide-by-zero FP warning while still
+            # returning a large-negative logdet; that value is correct (the model
+            # is momentarily degenerate) and flows into logV, where the fit-loop's
+            # NaN check still guards genuine divergence. Silence only the numpy FP
+            # warning for this expected event -- no value is suppressed.
+            with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                _, logdet_W = np.linalg.slogdet(self.W[:, :, h])
             logV[:, h] = (
                 np.log(self.gm[h])
                 + logdet_W
