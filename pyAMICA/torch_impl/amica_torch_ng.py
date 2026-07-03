@@ -135,13 +135,21 @@ class AMICATorchNG:
         during the E-step scales with this, not with the total sample count.
     lrate : float, default=0.1
         Initial/maximum natural-gradient learning rate (``lrate0`` in NumPy).
-    minlrate, lratefact : float
-        Learning-rate floor and decay factor (kept for interface parity;
-        convergence-based decay is not implemented in this module -- callers
-        control iteration count directly via ``fit(max_iter=...)``).
+    minlrate : float, default=1e-12
+        Hard learning-rate floor: once ``lrate`` anneals to it, ``fit`` stops
+        (``stop_reason="lrate_floor"``).
+    lratefact : float, default=0.5
+        Factor by which ``lrate`` (and the ceiling ``lrate_cap``/``newtrate``)
+        are annealed when the log-likelihood decreases; see ``fit`` for the
+        Fortran-style ``numdecs``/``maxdecs`` ratchet.
+    maxdecs : int, default=5
+        Number of consecutive log-likelihood decreases after which the
+        learning-rate *ceiling* is ratcheted down (Fortran ``maxdecs``).
     newt_ramp : int, default=10
-        Denominator of the per-iteration learning-rate ramp
-        ``lrate = min(lrate0, lrate + min(1/newt_ramp, lrate))``.
+        Denominator of the per-iteration learning-rate ramp toward the current
+        ceiling: ``lrate = min(ceiling, lrate + min(1/newt_ramp, lrate))``
+        (ceiling is ``lrate_cap`` for natural gradient, ``newtrate`` for
+        Newton).
     do_newton : bool, default=False
         Enable the Newton preconditioner for the ``A``/``W`` update once
         ``iteration >= newt_start``. Ported from the Fortran reference
@@ -254,6 +262,13 @@ class AMICATorchNG:
         self.rejstart = rejstart
         self.rejint = rejint
         self.maxrej = maxrej
+        if do_reject:
+            if rejint < 1:
+                raise ValueError(f"rejint must be >= 1, got {rejint}")
+            if rejsig <= 0:
+                raise ValueError(f"rejsig must be > 0, got {rejsig}")
+            if maxrej < 0:
+                raise ValueError(f"maxrej must be >= 0, got {maxrej}")
 
         self.rho0 = rho0
         self.minrho = minrho
@@ -295,6 +310,12 @@ class AMICATorchNG:
         # Outlier-rejection bookkeeping (set up in fit()).
         self.numrej = 0
         self.good_idx: Optional[torch.Tensor] = None
+
+        # Set by fit(): why fitting stopped ("max_iter", "nan_ll", "lrate_floor")
+        # and how many iterations reverted Newton to natural gradient (Fortran
+        # prints this; here it is exposed for parity debugging, see issue #21).
+        self.stop_reason: Optional[str] = None
+        self.n_newton_fallbacks = 0
 
         # Populated by fit()/_initialize_parameters().
         self.A = self.W = self.c = None
@@ -727,15 +748,23 @@ class AMICATorchNG:
 
         self.alpha = acc["dalpha"] / acc["dalpha"].sum(dim=0, keepdim=True)
 
-        dmu = acc["dmu"] / acc["dalpha"]
+        # dalpha is the per-component responsibility mass and the divisor for
+        # dmu/dbeta/drho. A mixture component with (near) zero responsibility --
+        # more likely once do_reject shrinks the sample pool -- would produce
+        # NaN and poison mu/beta/rho, so floor it, matching the NumPy reference
+        # (pyAMICA.py dalpha_safe). The floor also makes the two backends agree
+        # exactly in this degenerate regime.
+        dalpha_safe = acc["dalpha"].clamp_min(1e-10)
+
+        dmu = acc["dmu"] / dalpha_safe
         self.mu = self.mu + self.lrate * dmu
 
-        dbeta = acc["dbeta"] / acc["dalpha"]
+        dbeta = acc["dbeta"] / dalpha_safe
         self.beta = self.beta * torch.sqrt(1.0 + self.lrate * dbeta)
         self.beta = torch.clamp(self.beta, self.invsigmin, self.invsigmax)
 
         if not torch.all(self.rho == 1.0) and not torch.all(self.rho == 2.0):
-            drho = acc["drho"] / acc["dalpha"]
+            drho = acc["drho"] / dalpha_safe
             self.rho = self.rho + self.rholrate * (1.0 - self.rho * drho)
             self.rho = torch.clamp(self.rho, self.minrho, self.maxrho)
 
@@ -760,6 +789,17 @@ class AMICATorchNG:
                     directions.append(dA_h)  # fall back to natural gradient
             else:
                 directions.append(dA_h)
+
+        if newton_active and no_newt:
+            # Fortran prints "Hessian not positive definite, using natural
+            # gradient" here (amica17.f90:1911-1913). Surface the same signal so
+            # a silent all-fallback run (the current issue #21 behaviour) is
+            # visible without re-instrumenting the code.
+            self.n_newton_fallbacks += 1
+            logger.warning(
+                "Newton not positive definite at iter %d; using natural gradient.",
+                self.iteration,
+            )
 
         # Learning-rate ramp: toward newtrate while Newton is active and stable,
         # otherwise toward lrate0 (Fortran amica17.f90:1906-1917). Ramped after
@@ -825,6 +865,8 @@ class AMICATorchNG:
         self._initialize_parameters()
         self.ll_history = []
         self.numrej = 0
+        self.n_newton_fallbacks = 0
+        self.stop_reason = "max_iter"
         self.good_idx = (
             torch.arange(n_total, device=self.device) if self.do_reject else None
         )
@@ -837,11 +879,32 @@ class AMICATorchNG:
             X_use = X_t[:, self.good_idx] if self.do_reject else X_t
             n_use = X_use.shape[1]
             acc = self._accumulate_blocks(X_use)
+
+            # Whether rejection fires this iteration (Fortran schedule,
+            # amica17.f90:1141-1146). Fortran rejects using the per-sample
+            # log-likelihood from THIS iteration's E-step, i.e. the PRE-update
+            # parameters (loglik is stored in get_updates_and_likelihood before
+            # update_params runs). Capture it here, before _update_parameters,
+            # to match that ordering.
+            will_reject = (
+                self.do_reject
+                and self.maxrej > 0
+                and (
+                    it == self.rejstart
+                    or (
+                        max(1, it - self.rejstart) % self.rejint == 0
+                        and self.numrej < self.maxrej
+                    )
+                )
+            )
+            reject_ll = self._sample_ll(self.good_idx, X_t) if will_reject else None
+
             self._update_parameters(acc, n_use)
 
             ll = (acc["ll"] / (n_use * self.n_channels)).item()
             if math.isnan(ll):
                 logger.warning("NaN log-likelihood at iteration %d; stopping.", it)
+                self.stop_reason = "nan_ll"
                 break
             self.ll_history.append(ll)
 
@@ -855,7 +918,12 @@ class AMICATorchNG:
             # a one-shot halving just oscillate and the LL drifts down.
             if len(self.ll_history) > 1 and ll < self.ll_history[-2]:
                 if self.lrate <= self.minlrate:
-                    logger.info("lrate floor reached at iter %d; stopping.", it)
+                    logger.warning(
+                        "lrate floor (%g) reached at iter %d; stopping.",
+                        self.minlrate,
+                        it,
+                    )
+                    self.stop_reason = "lrate_floor"
                     break
                 self.lrate *= self.lratefact
                 self.rholrate *= self.rholratefact
@@ -868,44 +936,45 @@ class AMICATorchNG:
             if self.do_newton and it == self.newt_start:
                 numdecs = 0
 
-            # Outlier rejection after the parameter update (Fortran order,
-            # amica17.f90:1141-1146).
-            if (
-                self.do_reject
-                and self.maxrej > 0
-                and (
-                    it == self.rejstart
-                    or (
-                        max(1, it - self.rejstart) % self.rejint == 0
-                        and self.numrej < self.maxrej
-                    )
-                )
-            ):
-                self._reject_outliers(X_t)
+            # Outlier rejection, after the parameter update (Fortran order,
+            # amica17.f90:1141-1146) but using the pre-update per-sample LL
+            # captured above.
+            if will_reject:
+                self._reject_outliers(reject_ll)
 
             iterator.set_postfix({"LL": f"{ll:.4f}", "lrate": f"{self.lrate:.4g}"})
 
         return self
 
-    def _reject_outliers(self, X_t: torch.Tensor):
-        """Permanently drop samples whose log-likelihood is a low outlier.
+    def _sample_ll(self, good_idx: torch.Tensor, X_t: torch.Tensor) -> torch.Tensor:
+        """Per-sample total log-likelihood over ``good_idx``, block by block, in
+        ``good_idx`` order (so a keep-mask over the result maps back correctly)."""
+        parts = [
+            self._block_sample_ll(X_t[:, good_idx[start : start + self.block_size]])
+            for start in range(0, int(good_idx.numel()), self.block_size)
+        ]
+        return torch.cat(parts)
 
-        Fortran ``reject_data`` (amica17.f90:2380-2464): recompute the total
-        per-sample log-likelihood over the currently-good samples, then reject
-        any sample with ``loglik < mean - rejsig*std`` (population std). The
-        rejection is one-directional; ``good_idx`` only ever shrinks, and the
-        good-sample count drives the ``gm``/LL normalization thereafter.
+    def _reject_outliers(self, ll_vec: torch.Tensor):
+        """Permanently drop samples whose (pre-update) log-likelihood is a low
+        outlier.
+
+        Fortran ``reject_data`` (amica17.f90:2380-2464): reject any currently-good
+        sample with ``loglik < mean - rejsig*std`` (population std). The rejection
+        is one-directional; ``good_idx`` only ever shrinks, and the good-sample
+        count drives the ``gm``/LL normalization thereafter. ``ll_vec`` is the
+        per-sample log-likelihood over the current good set, in ``good_idx`` order.
         """
         good = self.good_idx
-        sample_ll = []
-        for start in range(0, good.numel(), self.block_size):
-            block_idx = good[start : start + self.block_size]
-            sample_ll.append(self._block_sample_ll(X_t[:, block_idx]))
-        ll_vec = torch.cat(sample_ll)  # per current-good sample
-
         mean = ll_vec.mean()
         std = torch.sqrt((ll_vec.pow(2).mean() - mean.pow(2)).clamp_min(0.0))
         keep = ll_vec >= (mean - self.rejsig * std)
+
+        if not bool(keep.any()):
+            raise ValueError(
+                f"Outlier rejection removed all {good.numel()} samples "
+                f"(rejsig={self.rejsig} too aggressive for this data)."
+            )
 
         self.good_idx = good[keep]
         self.numrej += 1

@@ -119,10 +119,11 @@ class AMICA:
         do_sphere : bool, default=True
             Whether to sphere (whiten) the data
         do_newton : bool, default=False
-            Whether to use Newton optimization. Supported by both backends.
-            For ``backend="ng"`` this enables the Fortran-parity Newton
-            preconditioner; tune it via ``newt_start``/``newtrate`` in
-            ``**kwargs``.
+            Whether to use Newton optimization. Functional only for
+            ``backend="ng"``, where it enables the Fortran-parity Newton
+            preconditioner (tune via ``newt_start``/``newtrate`` in
+            ``**kwargs``). The default ``backend="torch"`` (Adam) currently
+            ignores this flag.
         output_dir : str, optional
             Directory for debug output (only used if debug=True). Only
             supported by ``backend="torch"``.

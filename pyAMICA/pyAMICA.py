@@ -841,6 +841,15 @@ class AMICA:
             else:
                 directions.append(dA)
 
+        if newton_active and no_newt:
+            # Fortran prints this whenever a model is not positive definite
+            # (amica17.f90:1911-1913); surface it rather than falling back
+            # silently.
+            self.logger.info(
+                "Hessian not positive definite at iter %d; using natural gradient.",
+                self.iter,
+            )
+
         if newton_active and not no_newt:
             self.lrate = min(
                 self.newtrate, self.lrate + min(1.0 / self.newt_ramp, self.lrate)

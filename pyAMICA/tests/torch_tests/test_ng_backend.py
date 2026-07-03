@@ -179,7 +179,7 @@ def test_newton_stats_match_numpy_reference():
 
     npm = _numpy_ref_like(ng, blk, do_newton=True)
     np_upd = npm._get_block_updates(block.cpu().numpy())
-    dgm = np_upd["dgm"][:, None]
+    dgm = np_upd["dgm"][None, :]
     refs = {
         "sigma2": (sigma2_ng, np_upd["dsigma2"] / dgm),
         "kappa": (kappa_ng, np_upd["dkappa"] / dgm),
@@ -196,10 +196,12 @@ def test_newton_mstep_matches_numpy_reference():
     """One full Newton M-step (``_update_parameters`` with Newton active)
     produces the same mixing matrix as the NumPy reference.
 
-    This exercises the whole Newton path end to end -- stat finalization, the
-    per-source-pair 2x2 direction solve, the positive-definiteness fallback,
-    the newtrate-capped ramp, and the A update -- and asserts the resulting
-    ``A`` matches to float64 precision.
+    On this early real-data block the curvature is not yet positive definite,
+    so both backends take the natural-gradient fallback; the test verifies the
+    two ports agree bit-for-bit on that path (finalization, the posdef guard,
+    the fallback ramp, the A update) to float64 precision. The positive-definite
+    ``H`` composition is covered separately by
+    ``test_newton_posdef_mstep_matches_reference``.
     """
     data = _load_real_data()
     blk = 256
@@ -270,6 +272,151 @@ def test_newton_direction_matches_formula():
 
 
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_newton_posdef_mstep_composition():
+    """When the curvature is positive definite, the M-step applies the Newton
+    direction ``H`` (not the natural gradient) and ramps toward ``newtrate``.
+
+    On real data the curvature is not positive definite at these iterations
+    (issue #21), so the posdef branch never fires in a plain fit. Here the
+    finalized stats are forced positive definite to exercise that branch, and
+    the resulting ``A`` is checked against an independent recomputation of the
+    exact composition (slice -> H -> ``A + lrate*(A@H)`` -> column rescale).
+    """
+    data = _load_real_data()
+    blk = 256
+    big = torch.full((NW, 1), 5.0, dtype=torch.float64)
+    lam = torch.full((NW, 1), 1.5, dtype=torch.float64)
+
+    def forced(_acc):
+        return big.clone(), lam.clone(), big.clone()
+
+    ng = _fresh_ng(do_newton=True, newt_start=0, newtrate=1.0, lrate=0.1)
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    ng.iteration = 5
+    block = X_t[:, :blk].contiguous()
+    acc = ng._get_block_updates(block)
+    A_before = ng.A.clone()
+
+    # Independent expected A-update for the (single) model, using the same
+    # forced stats and the unit-tested _newton_direction.
+    eye = torch.eye(NW, dtype=torch.float64)
+    dA_h = -acc["dA"][:, :, 0] / acc["dgm"][0] + eye
+    H, posdef = ng._newton_direction(dA_h, big[:, 0], lam[:, 0], big[:, 0])
+    assert posdef
+    lrate_after = min(1.0, ng.lrate + min(1.0 / ng.newt_ramp, ng.lrate))
+    idx = ng.comp_list[:, 0]
+    A_expected = A_before.clone()
+    A_expected[:, idx] = A_before[:, idx] + lrate_after * (A_before[:, idx] @ H)
+    scale = torch.sqrt((A_expected**2).sum(dim=0))
+    nz = scale > 0
+    A_expected[:, nz] = A_expected[:, nz] / scale[nz]
+
+    ng._finalize_newton_stats = forced
+    ng._update_parameters(acc, blk)
+
+    assert ng.n_newton_fallbacks == 0  # positive-definite branch taken
+    assert ng.lrate == pytest.approx(lrate_after)  # ramped toward newtrate
+    assert np.max(np.abs(ng.A.cpu().numpy() - A_expected.cpu().numpy())) < 1e-10
+    assert np.all(np.isfinite(ng.A.cpu().numpy()))
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+@pytest.mark.parametrize("rho_val", [1.0, 2.0])
+def test_newton_stats_match_at_rho_boundaries(rho_val):
+    """Newton stats match the NumPy reference when rho is at the Laplace
+    (1.0) / Gaussian (2.0) special cases, which real fits reach commonly.
+
+    ``_score`` uses distinct closed forms at these boundaries (``sign(y)``,
+    ``2y``), not just the generic ``rho*sign(y)*|y|^(rho-1)`` limit, so they
+    need their own parity coverage.
+    """
+    data = _load_real_data()
+    blk = 256
+    ng = _fresh_ng(do_newton=True, newt_start=0)
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    ng.rho[:] = rho_val
+    block = X_t[:, :blk].contiguous()
+    ng_upd = ng._get_block_updates(block)
+    sigma2_ng, lambda_ng, kappa_ng = ng._finalize_newton_stats(ng_upd)
+
+    npm = _numpy_ref_like(ng, blk, do_newton=True)
+    np_upd = npm._get_block_updates(block.cpu().numpy())
+    dgm = np_upd["dgm"][None, :]
+    for name, a_t, b_np in [
+        ("sigma2", sigma2_ng, np_upd["dsigma2"] / dgm),
+        ("kappa", kappa_ng, np_upd["dkappa"] / dgm),
+        ("lambda", lambda_ng, np_upd["dlambda"] / dgm),
+    ]:
+        a = a_t.cpu().numpy()
+        assert float(np.max(np.abs(a - np.asarray(b_np).reshape(a.shape)))) < 1e-8, name
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_newton_multimodel_finite_and_shaped():
+    """Multi-model (n_models=2) Newton runs with correct per-model shapes and
+    finite output.
+
+    A NumPy-parity comparison is not valid here: for n_models>1 the NG backend
+    intentionally includes the per-model log|det W| + sldet Jacobian in the
+    model responsibility (Fortran-faithful; see the module docstring), whereas
+    the legacy NumPy port omits it. So this checks per-model finalization
+    (shape (n_channels, n_models), finite, no cross-model NaN) and that a short
+    two-model Newton fit stays finite for both models.
+    """
+    data = _load_real_data()
+    blk = 256
+    ng = AMICATorchNG(
+        n_channels=NW,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+        block_size=blk,
+        do_newton=True,
+        newt_start=0,
+    )
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    block = X_t[:, :blk].contiguous()
+    ng_upd = ng._get_block_updates(block)
+    sigma2, lambda_, kappa = ng._finalize_newton_stats(ng_upd)
+    for name, stat in [("sigma2", sigma2), ("lambda", lambda_), ("kappa", kappa)]:
+        assert stat.shape == (NW, 2), name
+        assert torch.all(torch.isfinite(stat)), name
+
+    ng.fit(data, max_iter=6, verbose=False)
+    for h in range(2):
+        assert np.all(np.isfinite(ng.get_unmixing_matrix(h)))
+
+
+def test_rejection_degenerate_ll_raises_clear_error():
+    """If the per-sample log-likelihood is degenerate (e.g. all NaN from a
+    diverged fit), rejection raises a clear ValueError rather than silently
+    emptying the good set and crashing downstream on ``None`` accumulators."""
+    m = _fresh_ng(do_reject=True)
+    m.good_idx = torch.arange(16)
+    m.numrej = 0
+    ll = torch.full((16,), float("nan"), dtype=torch.float64)
+    with pytest.raises(ValueError, match="removed all"):
+        m._reject_outliers(ll)
+
+
+def test_reject_param_validation():
+    """Invalid rejection parameters are rejected at construction (guarding the
+    otherwise-opaque downstream crashes: rejint=0 -> ZeroDivisionError,
+    rejsig<=0 -> good set collapses to a ``None`` accumulator)."""
+    with pytest.raises(ValueError, match="rejint"):
+        _fresh_ng(do_reject=True, rejint=0)
+    with pytest.raises(ValueError, match="rejsig"):
+        _fresh_ng(do_reject=True, rejsig=0.0)
+    with pytest.raises(ValueError, match="rejsig"):
+        _fresh_ng(do_reject=True, rejsig=-5.0)
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_rejection_shrinks_good_sample_set():
     """With ``do_reject`` enabled, low-log-likelihood samples are dropped: the
     good-sample set shrinks, at most ``maxrej`` passes run, and the fit stays
@@ -283,9 +430,20 @@ def test_rejection_shrinks_good_sample_set():
 
     assert m.numrej <= 2
     assert m.numrej >= 1
-    assert int(m.good_idx.numel()) < n_total  # some samples rejected
+    n_good = int(m.good_idx.numel())
+    assert n_good < n_total  # some samples rejected
     assert np.all(np.isfinite(m.get_unmixing_matrix(0)))
     assert np.all(np.isfinite(m.ll_history))
+
+    # The reported LL is normalized by the good-sample count, not the original
+    # total. Recompute the final iteration's LL from the surviving good set and
+    # confirm it divides by n_good (dividing by n_total would be off by
+    # n_good/n_total, well outside tolerance here since ~hundreds are dropped).
+    X_t = m._preprocess(data)
+    acc = m._accumulate_blocks(X_t[:, m.good_idx])
+    ll_per_good = float(acc["ll"] / (n_good * m.n_channels))
+    ll_per_total = float(acc["ll"] / (n_total * m.n_channels))
+    assert abs(m.ll_history[-1] - ll_per_good) < abs(m.ll_history[-1] - ll_per_total)
 
 
 @pytest.mark.slow
@@ -304,8 +462,11 @@ def test_end_to_end_correlation_vs_fortran():
     Fortran binary > 0.95 on the sample data.
 
     Currently xfails: see the marker reason. Newton is enabled here (matching
-    the Fortran sample settings) so the test exercises the full Newton path,
-    but the fixed-point gap keeps the correlation at ~0.68.
+    the Fortran sample settings); on this data the curvature is not positive
+    definite, so the Newton step falls back to natural gradient every iteration
+    (``m.n_newton_fallbacks``), which is part of why the correlation plateaus at
+    ~0.68. The positive-definite Newton composition is covered by
+    ``test_newton_posdef_mstep_composition``.
     """
     import sys
 
