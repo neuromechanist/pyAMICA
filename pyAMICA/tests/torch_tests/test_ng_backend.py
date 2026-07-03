@@ -31,7 +31,7 @@ def _load_real_data() -> np.ndarray:
     )
 
 
-def _fresh_ng(block_size: int = 256) -> AMICATorchNG:
+def _fresh_ng(block_size: int = 256, **kwargs) -> AMICATorchNG:
     return AMICATorchNG(
         n_channels=NW,
         n_models=1,
@@ -40,7 +40,29 @@ def _fresh_ng(block_size: int = 256) -> AMICATorchNG:
         device="cpu",
         dtype=torch.float64,
         block_size=block_size,
+        **kwargs,
     )
+
+
+def _numpy_ref_like(ng: AMICATorchNG, blk: int, **kwargs) -> AMICA_NumPy:
+    """A NumPy AMICA carrying the NG backend's exact parameters (the
+    established copy-params parity pattern)."""
+    npm = AMICA_NumPy(num_models=1, num_mix=NMIX, **kwargs)
+    npm.data_dim = NW
+    npm.num_comps = NW
+    npm.num_models = 1
+    npm.num_mix = NMIX
+    npm.block_size = blk
+    npm.comp_list = ng.comp_list.cpu().numpy()
+    npm.A = ng.A.cpu().numpy().copy()
+    npm.W = ng.W.cpu().numpy().copy()
+    npm.c = ng.c.cpu().numpy().copy()
+    npm.mu = ng.mu.cpu().numpy().copy()
+    npm.alpha = ng.alpha.cpu().numpy().copy()
+    npm.beta = ng.beta.cpu().numpy().copy()
+    npm.rho = ng.rho.cpu().numpy().copy()
+    npm.gm = ng.gm.cpu().numpy().copy()
+    return npm
 
 
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
@@ -134,17 +156,157 @@ def test_fit_produces_finite_unmixing_on_real_data():
     assert np.all(np.isfinite(m.ll_history))
 
 
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_newton_stats_match_numpy_reference():
+    """Newton curvature statistics (sigma2, lambda, kappa) match the NumPy
+    reference to float64 precision on an identical real-data block.
+
+    Same copy-params pattern as the non-Newton parity test, with
+    ``do_newton=True``. Both backends carry the Fortran-corrected Newton math
+    (score ``fp`` rather than the density derivative, ``sbeta^2`` on kappa,
+    the ``mu^2`` curvature term in lambda), so the finalized curvature stats
+    that drive the Newton preconditioner must agree.
+    """
+    data = _load_real_data()
+    ng = _fresh_ng(do_newton=True, newt_start=0)
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+
+    blk = 256
+    block = X_t[:, :blk].contiguous()
+    ng_upd = ng._get_block_updates(block)
+    sigma2_ng, lambda_ng, kappa_ng = ng._finalize_newton_stats(ng_upd)
+
+    npm = _numpy_ref_like(ng, blk, do_newton=True)
+    np_upd = npm._get_block_updates(block.cpu().numpy())
+    dgm = np_upd["dgm"][:, None]
+    refs = {
+        "sigma2": (sigma2_ng, np_upd["dsigma2"] / dgm),
+        "kappa": (kappa_ng, np_upd["dkappa"] / dgm),
+        "lambda": (lambda_ng, np_upd["dlambda"] / dgm),
+    }
+    for name, (a_t, b_np) in refs.items():
+        a = a_t.cpu().numpy()
+        max_diff = float(np.max(np.abs(a - np.asarray(b_np).reshape(a.shape))))
+        assert max_diff < 1e-8, f"{name} differs from NumPy reference by {max_diff:.3e}"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_newton_mstep_matches_numpy_reference():
+    """One full Newton M-step (``_update_parameters`` with Newton active)
+    produces the same mixing matrix as the NumPy reference.
+
+    This exercises the whole Newton path end to end -- stat finalization, the
+    per-source-pair 2x2 direction solve, the positive-definiteness fallback,
+    the newtrate-capped ramp, and the A update -- and asserts the resulting
+    ``A`` matches to float64 precision.
+    """
+    data = _load_real_data()
+    blk = 256
+    it = 5  # >= newt_start so Newton is active
+
+    ng = _fresh_ng(do_newton=True, newt_start=0, newtrate=0.5)
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    ng.iteration = it
+    block = X_t[:, :blk].contiguous()
+    acc = ng._get_block_updates(block)
+    ng._update_parameters(acc, blk)
+    A_ng = ng.A.cpu().numpy().copy()
+
+    ng2 = _fresh_ng(do_newton=True, newt_start=0, newtrate=0.5)
+    ng2._preprocess(data)
+    ng2._initialize_parameters()
+    npm = _numpy_ref_like(
+        ng2, blk, do_newton=True, newt_start=0, newtrate=0.5, lrate=ng2.lrate0
+    )
+    npm.num_samples = blk
+    npm.iter = it
+    npm.doscaling = True
+    npm.scalestep = 1
+    npm.nd = []
+    npm.ll = []
+    npm.use_grad_norm = True
+    np_upd = npm._get_block_updates(block.cpu().numpy())
+    npm._update_parameters(np_upd)
+
+    assert np.max(np.abs(A_ng - npm.A)) < 1e-8
+
+
+def test_newton_direction_matches_formula():
+    """``_newton_direction`` reproduces the Fortran 2x2 solve and its
+    positive-definiteness guard on controlled inputs (no data needed)."""
+    rng = np.random.RandomState(0)
+    n = 6
+    dA = torch.from_numpy(rng.randn(n, n))
+    # Large sigma2/kappa so sk1*sk2 > 1 for all pairs -> positive definite.
+    sigma2 = torch.from_numpy(np.abs(rng.randn(n)) + 2.0)
+    kappa = torch.from_numpy(np.abs(rng.randn(n)) + 2.0)
+    lambda_ = torch.from_numpy(np.abs(rng.randn(n)) + 1.0)
+
+    ng = _fresh_ng()
+    ng.n_channels = n
+    H, posdef = ng._newton_direction(dA, sigma2, lambda_, kappa)
+    assert posdef
+    H = H.numpy()
+    s, k, lam, d = (
+        sigma2.numpy(),
+        kappa.numpy(),
+        lambda_.numpy(),
+        dA.numpy(),
+    )
+    for i in range(n):
+        assert abs(H[i, i] - d[i, i] / lam[i]) < 1e-12
+        for j in range(n):
+            if i != j:
+                sk1, sk2 = s[i] * k[j], s[j] * k[i]
+                expected = (sk1 * d[i, j] - d[j, i]) / (sk1 * sk2 - 1.0)
+                assert abs(H[i, j] - expected) < 1e-12
+
+    # Tiny sigma2/kappa so no pair satisfies sk1*sk2 > 1 -> not posdef.
+    small = torch.from_numpy(np.full(n, 0.1))
+    _, posdef2 = ng._newton_direction(dA, small, lambda_, small)
+    assert not posdef2
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_rejection_shrinks_good_sample_set():
+    """With ``do_reject`` enabled, low-log-likelihood samples are dropped: the
+    good-sample set shrinks, at most ``maxrej`` passes run, and the fit stays
+    finite (Fortran-style ``reject_data``)."""
+    data = _load_real_data()
+    m = _fresh_ng(
+        do_reject=True, rejsig=2.0, rejstart=2, rejint=3, maxrej=2, block_size=512
+    )
+    n_total = data.shape[1]
+    m.fit(data, max_iter=12, verbose=False)
+
+    assert m.numrej <= 2
+    assert m.numrej >= 1
+    assert int(m.good_idx.numel()) < n_total  # some samples rejected
+    assert np.all(np.isfinite(m.get_unmixing_matrix(0)))
+    assert np.all(np.isfinite(m.ll_history))
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 @pytest.mark.xfail(
-    strict=True,
-    reason="Natural-gradient alone reaches ~0.69 mean correlation vs Fortran; "
-    "reaching >0.95 requires Newton (Phase 4, issue #13). Flips to xpass when "
-    "Newton lands.",
+    strict=False,
+    reason="Component correlation vs Fortran plateaus at ~0.68 regardless of "
+    "Newton. Newton/PDF/rejection are ported and unit-parity-verified (Phase 4, "
+    "issue #13), but they only accelerate convergence to the NG backend's own "
+    "fixed point (LL ~ -3.47), which differs from Fortran's (LL -3.41). Closing "
+    "the >0.95 gate needs a separate investigation of the NG-vs-Fortran "
+    "fixed-point gap (initialization/E-step), tracked as issue #21.",
 )
 def test_end_to_end_correlation_vs_fortran():
     """Epic definition-of-done: Hungarian-matched component correlation vs the
-    Fortran binary > 0.95 on the sample data. Gated by Phase 4 (Newton)."""
+    Fortran binary > 0.95 on the sample data.
+
+    Currently xfails: see the marker reason. Newton is enabled here (matching
+    the Fortran sample settings) so the test exercises the full Newton path,
+    but the fixed-point gap keeps the correlation at ~0.68.
+    """
     import sys
 
     root = Path(__file__).resolve().parents[2].parent
@@ -162,7 +324,7 @@ def test_end_to_end_correlation_vs_fortran():
     out.mkdir(parents=True, exist_ok=True)
     fortran = run_fortran_amica(data, params, out, SEED)
 
-    m = _fresh_ng()
+    m = _fresh_ng(do_newton=True, newt_start=50, newtrate=1.0, lrate=0.05)
     m.fit(data.astype(np.float64), max_iter=100, verbose=False)
     ng_results = {
         "final_ll": m.ll_history[-1],
