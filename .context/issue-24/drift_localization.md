@@ -3,6 +3,33 @@
 **Date:** 2026-07-02. Follow-up to `findings.md` (which proved the -3.46 gap is a residual
 per-iteration M-step bug, not init-basin). This doc localizes the drifting term(s).
 
+---
+
+## RESOLVED 2026-07-03 -- root cause is the natural-gradient A-update (transposed / wrong side)
+
+The `-3.46` descent is a **transpose + multiply-side error in the natural-gradient A-update**,
+proven to machine precision and fixed. See `root_cause_Aupdate.py` (self-contained repro).
+
+- The prototype stores `A` as **Fortran's A^T** (its "true unmixing = inv(A).T" convention). So
+  Fortran's step `A_fort <- A_fort - lr*A_fort@(I - G/dgm)` (G = g^T b) must become, transposed,
+  `A <- A - lr*(I - G^T/dgm) @ A` (LEFT-multiply, TRANSPOSED direction). The prototype instead does
+  `A <- A - lr*A @ (I - G/dgm)` (right-multiply, untransposed) -- wrong on **both** counts.
+- Of the four candidate forms at k=0 (matched Fortran sphere), only the left/transposed form matches
+  Fortran's A_new to **7.8e-16**; the current form is off by **1.6e-3** (`root_cause_Aupdate.py` [3]).
+- With the fix, the real pinned-lrate fit **ASCENDS to -3.4265 / corr 0.648**, matching Fortran's
+  pinned-NG endpoint (-3.4269 / 0.645), instead of descending to -3.4974 / 0.506.
+- Invisible at the fixed point because `G = g^T b ~ (g^T b)^T = G^T` when the natural gradient -> 0,
+  so `corrected_mstep_prototype.py::fixed_point_test` passed while the free-running fit descended.
+
+**The two theories below are SUPERSEDED / an artifact** (kept for the record):
+- "Bug 3 mu/beta denominator" is **DISPROVEN as a formula bug.** The mu/beta exact-EM update is
+  bit-exact with Fortran (~1e-13) once the *same sphere* is used (`root_cause_Aupdate.py` [2]). The
+  4.5e-3 "drift" was a **sphere-comparison artifact**: Python spheres with `torch.cov` (cov/(N-1)),
+  Fortran uses cov/N, a pure scalar `sqrt(N/(N-1))=1.0000164` apart, amplified by the singular
+  `sum(u*rho*|y|^(rho-2))` denominator (worst in outer mixtures -> the "scales with |mu|" fingerprint).
+  That sphere difference is **benign** in a consistent run (fixing it moves the endpoint by 2e-4).
+- Bugs 1+2 (rho) are still real and confirmed bit-exact; they are necessary but not sufficient.
+
 ## Method
 
 Teacher-forced per-iteration diff (`localize_drift.py`). Fortran's true NG trajectory
@@ -64,7 +91,13 @@ factor + no mask | -3.4974
 
 Fixing rho barely moves the endpoint. The descent is driven by BUG 3.
 
-## OPEN: Bug 3 -- mu/beta exact-EM denominator drift (dominant)
+## ~~OPEN: Bug 3 -- mu/beta exact-EM denominator drift (dominant)~~ DISPROVEN 2026-07-03
+
+**This section is WRONG (kept for the record).** See the RESOLVED banner at the top. The mu/beta
+update is bit-exact with Fortran once the *same* sphere is used; the residual below was the
+`torch.cov` (N-1) vs Fortran (N) sphere mismatch amplified by the singular denominator, and the
+"the A/W update is faithful (defect 6e-5)" claim was an artifact of the row-normalized `rowdefect`
+metric (the true A error was 1.6e-3 -- the real bug). Original (incorrect) reasoning:
 
 The natural-gradient A/W update is faithful (defect 6e-5) and the mixture-summed score is right,
 but the per-mixture **mu** and **beta** updates carry a small systematic residual that compounds
@@ -96,20 +129,33 @@ but a non-MKL recompile from this source would compute the wrong score. Flag bef
 
 ## BUGS TO FIX (when porting the corrected M-step into production)
 
+- [ ] **Bug A (A-update transpose/side, ROOT CAUSE)** -- `corrected_mstep_prototype.py:195-197`:
+      the natural-gradient step is `A_cols - lrate*(A_cols @ dirs[h])` with `dirs[h] = I - dWtmp/dgm`.
+      It must be `A_cols - lrate*((I - dWtmp.T/dgm) @ A_cols)` (transpose `dWtmp`, LEFT-multiply),
+      because `A` is stored as Fortran's `A^T`. Proven machine-exact; flips the fit from descending
+      (-3.4974) to ascending (-3.4265, corr 0.648 vs Fortran 0.645). Mirror in shipped
+      `amica_torch_ng.py::_update_parameters` and `pyAMICA.py`. **Also audit the Newton path**: it
+      builds the Newton direction from the same untransposed `dA_h` and right-multiplies
+      (`corrected_mstep_prototype.py:171-197`), so it needs the matching orientation fix + the
+      `dA(i,k)`/`dA(k,i)` term order (Fortran `:1825`) before Newton is wired in.
 - [ ] **Bug 1 (rho factor)** -- `corrected_mstep_prototype.py:102-110`: `drho_n` term must be
       `rho_h * |y|^rho * ln|y|` (add the leading `rho`). Mirror in the shipped
-      `amica_torch_ng.py` rho path and `pyAMICA.py`.
+      `amica_torch_ng.py` rho path and `pyAMICA.py`. (Confirmed bit-exact with the fix.)
 - [ ] **Bug 2 (rho mask)** -- `corrected_mstep_prototype.py:104-108`: drop the per-component
       `(rho!=1)&(rho!=2)` mask; keep only a per-sample underflow guard (Fortran `:1570`).
-- [ ] **Bug 3 (mu/beta denominator, dominant)** -- OPEN, needs root-cause. `mu`/`beta` exact-EM
-      update in `_get_block_updates`/`_update_parameters`; residual is |mu|-dependent, in the
-      `sbeta*sum(ufp/y)` denominator region.
+- [ ] **Sphere (cosmetic parity)** -- `corrected_mstep_prototype.py::_preprocess` (and shipped
+      `amica_torch_ng.py`): use `torch.cov(Xc, correction=0)` (cov/N, Fortran-matched) not the
+      default cov/(N-1). Benign for convergence (endpoint moves ~2e-4) but removes a 5e-6 sphere
+      mismatch; do it so validation harnesses compare like-for-like.
 - [ ] **Flag (reference)** -- `amica17.f90:1465` `(rho - dble(0.0))` should be `(rho - dble(1.0))`
       to match the MKL branch; only matters for a non-MKL rebuild.
 
 ## Reproduce
 
 ```
-# teacher-forced per-param residual (add --fixrho to apply Bug 1):
+# ROOT CAUSE (sphere + mu/beta bit-exact + A-update forms; add --fit for the 200-iter parity):
+PYTORCH_ENABLE_MPS_FALLBACK=1 uv run python .context/issue-24/root_cause_Aupdate.py [--fit]
+
+# teacher-forced per-param residual (add --fixrho to apply Bug 1) -- historical, sphere-contaminated:
 PYTORCH_ENABLE_MPS_FALLBACK=1 uv run python .context/issue-24/localize_drift.py [run_dir] [--fixrho]
 ```
