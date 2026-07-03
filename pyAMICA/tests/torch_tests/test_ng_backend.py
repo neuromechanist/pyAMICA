@@ -104,7 +104,18 @@ def test_sufficient_stats_match_numpy_reference():
 
     np_upd = npm._get_block_updates(block.cpu().numpy())
 
-    for key in ["dgm", "dalpha", "dmu", "dbeta", "drho", "dA", "dc"]:
+    keys = [
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_n",
+        "dbeta_d",
+        "drho_n",
+        "dWtmp",
+        "dc",
+    ]
+    for key in keys:
         a = np.asarray(ng_upd[key].cpu().numpy(), dtype=np.float64)
         b = np.asarray(np_upd[key], dtype=np.float64).reshape(a.shape)
         max_diff = float(np.max(np.abs(a - b)))
@@ -124,7 +135,19 @@ def test_blocking_invariance():
 
     acc_a = accumulate(256)
     acc_b = accumulate(512)
-    for key in ["dgm", "dalpha", "dmu", "dbeta", "drho", "dA", "dc", "ll"]:
+    keys = [
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_n",
+        "dbeta_d",
+        "drho_n",
+        "dWtmp",
+        "dc",
+        "ll",
+    ]
+    for key in keys:
         a = acc_a[key].cpu().numpy()
         b = acc_b[key].cpu().numpy()
         assert np.allclose(a, b, atol=1e-8), f"{key} depends on block_size"
@@ -299,15 +322,16 @@ def test_newton_posdef_mstep_composition():
     A_before = ng.A.clone()
 
     # Independent expected A-update for the (single) model, using the same
-    # forced stats and the unit-tested _newton_direction.
+    # forced stats and the unit-tested _newton_direction. The stored A is
+    # Fortran's A^T, so the step is A -= lrate*(H^T @ A) (issue #24).
     eye = torch.eye(NW, dtype=torch.float64)
-    dA_h = -acc["dA"][:, :, 0] / acc["dgm"][0] + eye
+    dA_h = -acc["dWtmp"][:, :, 0] / acc["dgm"][0] + eye
     H, posdef = ng._newton_direction(dA_h, big[:, 0], lam[:, 0], big[:, 0])
     assert posdef
     lrate_after = min(1.0, ng.lrate + min(1.0 / ng.newt_ramp, ng.lrate))
     idx = ng.comp_list[:, 0]
     A_expected = A_before.clone()
-    A_expected[:, idx] = A_before[:, idx] + lrate_after * (A_before[:, idx] @ H)
+    A_expected[:, idx] = A_before[:, idx] - lrate_after * (H.T @ A_before[:, idx])
     scale = torch.sqrt((A_expected**2).sum(dim=0))
     nz = scale > 0
     A_expected[:, nz] = A_expected[:, nz] / scale[nz]
@@ -448,25 +472,15 @@ def test_rejection_shrinks_good_sample_set():
 
 @pytest.mark.slow
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
-@pytest.mark.xfail(
-    strict=False,
-    reason="Component correlation vs Fortran plateaus at ~0.68 regardless of "
-    "Newton. Newton/PDF/rejection are ported and unit-parity-verified (Phase 4, "
-    "issue #13), but they only accelerate convergence to the NG backend's own "
-    "fixed point (LL ~ -3.47), which differs from Fortran's (LL -3.41). Closing "
-    "the >0.95 gate needs a separate investigation of the NG-vs-Fortran "
-    "fixed-point gap (initialization/E-step), tracked as issue #21.",
-)
 def test_end_to_end_correlation_vs_fortran():
     """Epic definition-of-done: Hungarian-matched component correlation vs the
     Fortran binary > 0.95 on the sample data.
 
-    Currently xfails: see the marker reason. Newton is enabled here (matching
-    the Fortran sample settings); on this data the curvature is not positive
-    definite, so the Newton step falls back to natural gradient every iteration
-    (``m.n_newton_fallbacks``), which is part of why the correlation plateaus at
-    ~0.68. The positive-definite Newton composition is covered by
-    ``test_newton_posdef_mstep_composition``.
+    Passes since issue #24: the natural-gradient A-update transpose fix (plus the
+    exact-EM mixture updates, the digamma rho update, and the symmetric-ZCA
+    sphere) makes the backend ascend to Fortran's solution (LL ~ -3.40) with
+    Newton positive-definite and firing (``m.n_newton_fallbacks == 0``), reaching
+    component correlation ~0.997.
     """
     import sys
 
@@ -485,7 +499,15 @@ def test_end_to_end_correlation_vs_fortran():
     out.mkdir(parents=True, exist_ok=True)
     fortran = run_fortran_amica(data, params, out, SEED)
 
-    m = _fresh_ng(do_newton=True, newt_start=50, newtrate=1.0, lrate=0.05)
+    m = _fresh_ng(
+        block_size=512,
+        do_newton=True,
+        newt_start=50,
+        newtrate=1.0,
+        lrate=0.05,
+        invsigmin=0.0,
+        invsigmax=100.0,
+    )
     m.fit(data.astype(np.float64), max_iter=100, verbose=False)
     ng_results = {
         "final_ll": m.ll_history[-1],

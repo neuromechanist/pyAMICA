@@ -24,20 +24,13 @@ Key design points (see ``.context/decisions/0001-torch-backend-natural-gradient-
 * Parameters default to float64 for numerical parity with Fortran's
   double-precision arithmetic; float32 is available for speed.
 
-Known, intentional deviations from the literal NumPy port (see this
-module's docstring notes below and the Phase 3 report for citations):
-
-1. **Log-likelihood.** ``pyAMICA.AMICA._get_block_updates`` computes its
-   per-source log-likelihood from ``z`` *after* it has already been
-   normalized into a responsibility (``exp`` of a value that is no longer a
-   log-probability), which does not recover a real log-density. This module
-   instead computes the log-likelihood from the pre-normalization mixture
-   logits via ``logsumexp`` (matching ``amica17.f90:1341-1345``), which is
-   the mathematically correct per-source log-density and is required to hit
-   the Fortran-normalized LL target (~-3.4/sample-channel). This does not
-   change the natural-gradient parameter trajectory for the single-model
-   case (softmax over one model is always 1), and is a strict correctness
-   improvement for the multi-model case.
+Log-likelihood: this module computes the per-source log-likelihood from the
+pre-normalization mixture logits via ``logsumexp`` plus the ``log|det W|`` +
+``sldet`` Jacobian (matching ``amica17.f90:1341-1350``), the mathematically
+correct per-source log-density required to hit the Fortran-normalized LL target
+(~-3.4/sample-channel). As of issue #24 the legacy NumPy port
+(``pyAMICA.pyAMICA.AMICA``) computes it the same way; both backends now converge
+to the Fortran solution (component correlation > 0.95).
 """
 
 from __future__ import annotations
@@ -344,7 +337,12 @@ class AMICATorchNG:
             mean = torch.zeros(data_dim, 1, dtype=torch.float64)
 
         if self.do_sphere:
-            cov = torch.cov(X_cpu)
+            # Population covariance (divide by N), matching Fortran's DSYRK
+            # scatter/N -- NOT torch.cov's default sample covariance (/(N-1)).
+            # The two differ by a pure scalar sqrt(N/(N-1)); using /(N-1) leaves
+            # a ~5e-6 sphere mismatch vs the reference (issue #24, check [1] of
+            # .context/issue-24/root_cause_Aupdate.py).
+            cov = torch.cov(X_cpu, correction=0)
             evals, evecs = torch.linalg.eigh(cov)
             order = torch.argsort(evals, descending=True)
             evals = evals[order]
@@ -358,14 +356,19 @@ class AMICATorchNG:
             else:
                 n_comp = evals.shape[0]
 
+            V = evecs[:, :n_comp]
+            inv_sqrt = torch.diag(1.0 / torch.sqrt(evals[:n_comp]))
             if self.do_approx_sphere:
-                sphere = (
-                    torch.diag(1.0 / torch.sqrt(evals[:n_comp])) @ evecs[:, :n_comp].T
-                )
+                # Symmetric ZCA sphere V diag(1/sqrt(eval)) V^T (Fortran
+                # do_approx_sphere=True, amica17.f90:480-481). This is the
+                # Fortran default and the parity-validated form; the old
+                # diag(1/sqrt)@V^T (PCA whitening) is a different, non-symmetric
+                # transform that breaks activation parity.
+                sphere = V @ inv_sqrt @ V.T
             else:
-                sphere = torch.linalg.inv(
-                    torch.diag(torch.sqrt(evals[:n_comp])) @ evecs[:, :n_comp].T
-                )
+                # Non-symmetric PCA whitening D^-1/2 V^T (Fortran
+                # do_approx_sphere=False path, amica17.f90:495).
+                sphere = inv_sqrt @ V.T
 
             X_cpu = sphere @ X_cpu
             # Sphering log-determinant term of the data log-likelihood
@@ -509,148 +512,108 @@ class AMICATorchNG:
     def _get_block_updates(self, X: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Compute sufficient-statistic accumulators for one data block.
 
-        Vectorized port of ``pyAMICA.AMICA._get_block_updates``: broadcasts
-        over (source, mixture) with no Python loop; only loops over models
-        (h), matching the NumPy reference's two-pass structure (first pass
-        computes per-model responsibilities/log-likelihood, second pass
-        accumulates the weighted sufficient statistics).
+        Fortran-faithful exact-EM statistics (amica17.f90:1437-1592), validated
+        against the reference binary to machine precision (issue #24). Unlike a
+        first-order gradient M-step, the mixture updates use exact-EM numerator/
+        denominator pairs and the score ``fp = rho*sign(y)*|y|^(rho-1)`` (``_score``,
+        Fortran ``fp``) rather than the density derivative ``dpdf``:
 
-        Parameters
-        ----------
-        X : torch.Tensor of shape (n_channels, batch_size)
-            A block of (preprocessed) data.
+        * ``dmu_n = sum(u*fp)``, ``dmu_d = sbeta*sum(u*fp/y)``   (mu += dmu_n/dmu_d)
+        * ``dbeta_n = sum(u)``, ``dbeta_d = sum(u*fp*y)``        (beta *= sqrt(n/d))
+        * ``drho_n = rho*sum(u*|y|^rho*ln|y|)``                  (rho digamma update)
+        * ``dWtmp = g^T b`` with ``g = sum_j sbeta*u*fp``        (natural gradient)
+
+        where ``u = v*z`` (model x mixture responsibility). ``ll`` is the correct
+        pre-normalization ``logsumexp`` (see module docstring).
+
+        Assumes ``rho <= 2`` (the ``maxrho`` default); the ``rho > 2`` denominator
+        branches of Fortran (:1539/:1551) are unreachable and not implemented.
 
         Returns
         -------
-        updates : dict of str -> torch.Tensor
-            ``dgm`` (n_models,), ``dalpha``/``dmu``/``dbeta``/``drho``
-            (n_mix, n_comps), ``dA`` (n_channels, n_channels, n_models),
-            ``dc`` (n_channels, n_models), ``ll`` (scalar). When
-            ``do_newton`` is set, also ``dsigma2_numer`` (n_channels,
-            n_models) and ``dkappa_numer``/``dlambda_numer`` (n_mix,
-            n_channels, n_models) -- the Newton curvature accumulators
-            (see ``_finalize_newton_stats``). Matches the keys of
-            ``pyAMICA.AMICA._get_block_updates``'s return dict, except
-            ``ll`` is computed correctly from pre-normalization mixture
-            logits (see module docstring) rather than reproducing the
-            NumPy reference's post-normalization double-exponentiation.
+        updates : dict with ``dgm`` (n_models,), ``dalpha_n``/``dmu_n``/``dmu_d``/
+            ``dbeta_n``/``dbeta_d``/``drho_n`` (n_mix, n_comps), ``dWtmp``
+            (n_channels, n_channels, n_models), ``dc`` (n_channels, n_models),
+            ``ll`` (scalar), and -- when ``do_newton`` -- ``dsigma2_numer``,
+            ``dkappa_numer``, ``dlambda_numer`` (see ``_finalize_newton_stats``).
         """
         num_mix, num_models = self.n_mix, self.n_models
+        dev, dt = self.device, self.dtype
 
-        logV, b_list, z_list, y_list, dpdf_list = self._forward(X)
-
-        Vmax = logV.max(dim=1, keepdim=True).values
-        block_ll = (
-            Vmax.squeeze(1) + torch.log(torch.exp(logV - Vmax).sum(dim=1))
-        ).sum()
+        logV, b_list, z_list, y_list, _ = self._forward(X)
+        block_ll = torch.logsumexp(logV, dim=1).sum()
         v = torch.softmax(logV, dim=1)  # (batch, num_models)
 
-        dgm = torch.zeros(num_models, dtype=self.dtype, device=self.device)
-        dalpha = torch.zeros(
-            num_mix, self.n_comps, dtype=self.dtype, device=self.device
-        )
-        dmu = torch.zeros(num_mix, self.n_comps, dtype=self.dtype, device=self.device)
-        dbeta = torch.zeros(num_mix, self.n_comps, dtype=self.dtype, device=self.device)
-        drho = torch.zeros(num_mix, self.n_comps, dtype=self.dtype, device=self.device)
-        dA = torch.zeros(
-            self.n_channels,
-            self.n_channels,
-            num_models,
-            dtype=self.dtype,
-            device=self.device,
-        )
-        dc = torch.zeros(
-            self.n_channels, num_models, dtype=self.dtype, device=self.device
-        )
+        def zeros(*shape):
+            return torch.zeros(*shape, dtype=dt, device=dev)
 
+        dgm = zeros(num_models)
+        dalpha_n = zeros(num_mix, self.n_comps)
+        dmu_n = zeros(num_mix, self.n_comps)
+        dmu_d = zeros(num_mix, self.n_comps)
+        dbeta_n = zeros(num_mix, self.n_comps)
+        dbeta_d = zeros(num_mix, self.n_comps)
+        drho_n = zeros(num_mix, self.n_comps)
+        dWtmp = zeros(self.n_channels, self.n_channels, num_models)
+        dc = zeros(self.n_channels, num_models)
         if self.do_newton:
-            dsigma2_numer = torch.zeros(
-                self.n_channels, num_models, dtype=self.dtype, device=self.device
-            )
-            dkappa_numer = torch.zeros(
-                num_mix,
-                self.n_channels,
-                num_models,
-                dtype=self.dtype,
-                device=self.device,
-            )
-            dlambda_numer = torch.zeros(
-                num_mix,
-                self.n_channels,
-                num_models,
-                dtype=self.dtype,
-                device=self.device,
-            )
+            dsigma2_numer = zeros(self.n_channels, num_models)
+            dkappa_numer = zeros(num_mix, self.n_channels, num_models)
+            dlambda_numer = zeros(num_mix, self.n_channels, num_models)
+        tiny = torch.finfo(dt).tiny
 
         for h in range(num_models):
             idx = self.comp_list[:, h]
-            z, y, dpdf = z_list[h], y_list[h], dpdf_list[h]
+            b, zr, y = b_list[h], z_list[h], y_list[h]
             v_h = v[:, h]
+            beta_h = self.beta[:, idx].T.unsqueeze(0)  # sbeta, (1, n_ch, num_mix)
+            rho_h = self.rho[:, idx].T  # (n_ch, num_mix)
+            fp = _score(y, rho_h.unsqueeze(0))  # score, NOT dpdf (:1467)
+            u = v_h.unsqueeze(-1).unsqueeze(-1) * zr  # u = v*z (:1439)
+            ufp = u * fp  # (:1485)
 
             dgm[h] = v_h.sum()
+            dalpha_n.index_add_(1, idx, u.sum(0).T)  # sum(u) (:1524)
+            dmu_n.index_add_(1, idx, ufp.sum(0).T)  # sum(ufp) (:1532)
+            dmu_d.index_add_(
+                1, idx, (beta_h.squeeze(0) * (ufp / y).sum(0)).T
+            )  # (:1537)
+            dbeta_n.index_add_(1, idx, u.sum(0).T)  # sum(u) (:1550)
+            dbeta_d.index_add_(1, idx, (ufp * y).sum(0).T)  # sum(ufp*y) (:1556)
 
-            weighted = (
-                v_h.unsqueeze(-1).unsqueeze(-1) * z
-            )  # (batch, n_channels, num_mix)
+            # drho_numer = rho * sum(u*|y|^rho*ln|y|)  (:1560-1578). The leading
+            # rho comes from ln(|y|^rho)=rho*ln|y| in the Fortran logab chain
+            # (issue #24 Bug 1). Guard only the per-sample underflow (:1570) --
+            # no per-component (rho!=1&rho!=2) mask (Bug 2): |y|^rho*ln|y| is 0 at
+            # y=0, and clamping the log input makes the product collapse there.
+            ay = y.abs()
+            ayrho = ay.pow(rho_h.unsqueeze(0))  # |y|^rho
+            logab = rho_h.unsqueeze(0) * torch.log(ay.clamp_min(tiny))  # rho*ln|y|
+            logab = torch.where(ayrho < tiny, torch.zeros_like(logab), logab)
+            drho_n.index_add_(1, idx, (u * (ayrho * logab)).sum(0).T)
 
-            dalpha_contrib = weighted.sum(dim=0)  # (n_channels, num_mix)
-            dmu_contrib = (weighted * dpdf).sum(dim=0)
-            dbeta_contrib = (weighted * y * dpdf).sum(dim=0)
-
-            rho_h_col = self.rho[:, idx].T  # (n_channels, num_mix)
-            rho_mask = (rho_h_col != 1.0) & (rho_h_col != 2.0)
-            abs_y = y.abs()
-            # log(abs_y) is -inf at abs_y == 0, and abs_y.pow(rho) is exactly 0
-            # there (rho > 0), so the unguarded product is 0 * -inf = NaN. Fortran
-            # hits the identical term (amica17.f90:1559-1572, tmpy**rho * log(tmpy))
-            # and guards it the same way: clamp the log input so the product
-            # collapses to the analytically-correct 0 instead of NaN.
-            safe_log_abs_y = torch.log(abs_y.clamp_min(torch.finfo(self.dtype).tiny))
-            drho_term = abs_y.pow(rho_h_col.unsqueeze(0)) * safe_log_abs_y
-            drho_term = torch.where(
-                rho_mask.unsqueeze(0), drho_term, torch.zeros_like(drho_term)
-            )
-            drho_contrib = (weighted * drho_term).sum(dim=0)
-
-            dalpha.index_add_(1, idx, dalpha_contrib.T)
-            dmu.index_add_(1, idx, dmu_contrib.T)
-            dbeta.index_add_(1, idx, dbeta_contrib.T)
-            drho.index_add_(1, idx, drho_contrib.T)
-
-            beta_h_row = self.beta[:, idx].T.unsqueeze(0)  # (1, n_channels, num_mix)
-            g = (z * dpdf * beta_h_row).sum(dim=-1)  # (batch, n_channels)
-
-            dA[:, :, h] = X @ (v_h.unsqueeze(-1) * g)
-            dc[:, h] = (v_h.unsqueeze(-1) * g).sum(dim=0)
+            g = (beta_h * ufp).sum(-1)  # g_i = sum_j sbeta*ufp (:1493)
+            dWtmp[:, :, h] = g.T @ b  # source-space sum g_t b_t^T (:1592)
+            dc[:, h] = g.sum(0)
 
             if self.do_newton:
                 # Newton curvature accumulators (Fortran amica17.f90:1419,
-                # 1500-1514). These use the *score* fp = d|y|^rho/dy (not the
-                # density derivative dpdf); see _score. beta_h_row is Fortran
-                # sbeta, so the sbeta^2 factor on kappa is beta_h_row**2.
-                fp = _score(y, rho_h_col.unsqueeze(0))  # (batch, n_ch, num_mix)
-                b_h = b_list[h]  # (batch, n_channels)
-
-                # dsigma2_numer[i] = sum_t v_h * b_i^2  (once per source, no mix)
-                dsigma2_numer[:, h] = (v_h.unsqueeze(-1) * b_h.pow(2)).sum(dim=0)
-
-                # dkappa_numer[j,i] = sum_t (v_h*z) * fp^2 * sbeta_j^2
-                dkappa_contrib = (weighted * fp.pow(2)).sum(dim=0) * beta_h_row.squeeze(
-                    0
-                ).pow(2)  # (n_channels, num_mix)
-                # dlambda_numer[j,i] = sum_t (v_h*z) * (fp*y - 1)^2
-                dlambda_contrib = (weighted * (fp * y - 1.0).pow(2)).sum(dim=0)
-
-                dkappa_numer[:, :, h] = dkappa_contrib.T
-                dlambda_numer[:, :, h] = dlambda_contrib.T
+                # 1500-1514), in terms of the score fp (not dpdf).
+                dsigma2_numer[:, h] = (v_h.unsqueeze(-1) * b.pow(2)).sum(0)  # (:1419)
+                dkappa_numer[:, :, h] = (
+                    (u * fp.pow(2)).sum(0) * beta_h.squeeze(0).pow(2)
+                ).T  # (:1500)
+                dlambda_numer[:, :, h] = (u * (fp * y - 1.0).pow(2)).sum(0).T  # (:1511)
 
         updates = {
             "dgm": dgm,
-            "dalpha": dalpha,
-            "dmu": dmu,
-            "dbeta": dbeta,
-            "drho": drho,
-            "dA": dA,
+            "dalpha_n": dalpha_n,
+            "dmu_n": dmu_n,
+            "dmu_d": dmu_d,
+            "dbeta_n": dbeta_n,
+            "dbeta_d": dbeta_d,
+            "drho_n": drho_n,
+            "dWtmp": dWtmp,
             "dc": dc,
             "ll": block_ll,
         }
@@ -743,32 +706,44 @@ class AMICATorchNG:
         ``n_samples`` is the number of samples that fed the accumulators (the
         good-sample count when ``do_reject`` is active), so ``gm`` and the
         reported log-likelihood are normalized by the effective sample count.
+
+        The mixture parameters use exact-EM fixed-point updates (no ``lrate``);
+        only the ``A``/``W`` step is scaled by ``lrate`` (Fortran amica17.f90:
+        1890-2035). ``c`` is not updated: for mean-removed data Fortran's ``c``
+        stays at machine zero (issue #24), so the update is a no-op.
         """
         self.gm = acc["dgm"] / n_samples
 
-        self.alpha = acc["dalpha"] / acc["dalpha"].sum(dim=0, keepdim=True)
+        self.alpha = acc["dalpha_n"] / acc["dalpha_n"].sum(dim=0, keepdim=True)
 
-        # dalpha is the per-component responsibility mass and the divisor for
-        # dmu/dbeta/drho. A mixture component with (near) zero responsibility --
-        # more likely once do_reject shrinks the sample pool -- would produce
-        # NaN and poison mu/beta/rho, so floor it, matching the NumPy reference
-        # (pyAMICA.py dalpha_safe). The floor also makes the two backends agree
-        # exactly in this degenerate regime.
-        dalpha_safe = acc["dalpha"].clamp_min(1e-10)
+        # Exact-EM mixture location/scale (Fortran :1978/:1993). No lrate.
+        self.mu = self.mu + acc["dmu_n"] / acc["dmu_d"]
+        self.beta = torch.clamp(
+            self.beta * torch.sqrt(acc["dbeta_n"] / acc["dbeta_d"]),
+            self.invsigmin,
+            self.invsigmax,
+        )
 
-        dmu = acc["dmu"] / dalpha_safe
-        self.mu = self.mu + self.lrate * dmu
-
-        dbeta = acc["dbeta"] / dalpha_safe
-        self.beta = self.beta * torch.sqrt(1.0 + self.lrate * dbeta)
-        self.beta = torch.clamp(self.beta, self.invsigmin, self.invsigmax)
-
+        # GG shape update with the 1/psi(1+1/rho) digamma factor (Fortran
+        # :2013-2014); the divisor is the per-component responsibility mass
+        # dalpha_n (floored so a near-empty component cannot poison rho).
         if not torch.all(self.rho == 1.0) and not torch.all(self.rho == 2.0):
-            drho = acc["drho"] / dalpha_safe
-            self.rho = self.rho + self.rholrate * (1.0 - self.rho * drho)
-            self.rho = torch.clamp(self.rho, self.minrho, self.maxrho)
+            drho = acc["drho_n"] / acc["dalpha_n"].clamp_min(1e-8)
+            psi = torch.special.digamma(1.0 + 1.0 / self.rho)
+            new_rho = self.rho + self.rholrate * (1.0 - (self.rho / psi) * drho)
+            self.rho = torch.clamp(
+                torch.nan_to_num(new_rho, nan=self.rho0), self.minrho, self.maxrho
+            )
 
         # --- A / W update: natural gradient, optionally Newton-preconditioned.
+        # A is stored as Fortran's A^T (the true unmixing is W^T = inv(A)^T), so
+        # Fortran's A_fort -= lrate*A_fort @ dir becomes, transposed,
+        # A -= lrate*dir^T @ A (LEFT-multiply by the TRANSPOSED direction). The
+        # direction ``dir`` (natural gradient I - <g b^T>/dgm, or its Newton
+        # precondition) is built in Fortran's untransposed convention. Getting
+        # this wrong (right-multiply by the untransposed dir) is invisible at the
+        # fixed point but sends the free-running fit downhill -- issue #24 root
+        # cause (.context/issue-24/root_cause_Aupdate.py, machine-exact check).
         newton_active = self.do_newton and self.iteration >= self.newt_start
         if newton_active:
             sigma2, lambda_, kappa = self._finalize_newton_stats(acc)
@@ -777,7 +752,7 @@ class AMICATorchNG:
         directions = []
         no_newt = False
         for h in range(self.n_models):
-            dA_h = -acc["dA"][:, :, h] / acc["dgm"][h] + eye
+            dA_h = -acc["dWtmp"][:, :, h] / acc["dgm"][h] + eye  # I - <g b^T>/dgm
             if newton_active:
                 H, posdef = self._newton_direction(
                     dA_h, sigma2[:, h], lambda_[:, h], kappa[:, h]
@@ -803,7 +778,7 @@ class AMICATorchNG:
 
         # Learning-rate ramp: toward newtrate while Newton is active and stable,
         # otherwise toward lrate0 (Fortran amica17.f90:1906-1917). Ramped after
-        # mu/beta/rho (which used the pre-ramp lrate) and before A/c.
+        # mu/beta/rho (which are exact-EM, lrate-free) and before A.
         if newton_active and not no_newt:
             self.lrate = min(
                 self.newtrate, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
@@ -816,9 +791,7 @@ class AMICATorchNG:
         for h in range(self.n_models):
             idx = self.comp_list[:, h]
             A_cols = self.A[:, idx]
-            self.A[:, idx] = A_cols + self.lrate * (A_cols @ directions[h])
-
-        self.c = self.c + self.lrate * acc["dc"] / acc["dgm"].unsqueeze(0)
+            self.A[:, idx] = A_cols - self.lrate * (directions[h].T @ A_cols)
 
         if self.doscaling and (self.iteration % self.scalestep == 0):
             scale = torch.sqrt((self.A**2).sum(dim=0))  # (n_comps,)
@@ -988,14 +961,21 @@ class AMICATorchNG:
         )
 
     def transform(self, X: np.ndarray, model_idx: int = 0) -> np.ndarray:
-        """Apply the learned unmixing matrix to (new) data."""
+        """Apply the learned unmixing matrix to (new) data.
+
+        The internal ``W = inv(A)`` is stored transposed relative to the true
+        unmixing (the E-step forms activations as ``X^T @ W``), so the unmixing
+        applied here is ``W^T`` (issue #24 transpose convention).
+        """
         X_t = torch.from_numpy(np.ascontiguousarray(X)).to(self.device, self.dtype)
         X_t = self.sphere @ (X_t - self.mean)
-        S = self.W[:, :, model_idx] @ X_t - self.c[:, model_idx : model_idx + 1]
+        S = self.W[:, :, model_idx].T @ X_t - self.c[:, model_idx : model_idx + 1]
         return S.cpu().numpy()
 
     def get_mixing_matrix(self, model_idx: int = 0) -> np.ndarray:
-        return self.A[:, self.comp_list[:, model_idx]].cpu().numpy()
+        """True mixing matrix ``A_fort`` = (stored A)^T (issue #24 convention)."""
+        return self.A[:, self.comp_list[:, model_idx]].T.cpu().numpy()
 
     def get_unmixing_matrix(self, model_idx: int = 0) -> np.ndarray:
-        return self.W[:, :, model_idx].cpu().numpy()
+        """True unmixing matrix ``W_fort`` = (stored W)^T (issue #24 convention)."""
+        return self.W[:, :, model_idx].T.cpu().numpy()

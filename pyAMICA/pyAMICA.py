@@ -72,6 +72,7 @@ References
 
 import numpy as np
 from scipy import linalg
+from scipy.special import digamma
 import logging
 import json
 import time
@@ -243,6 +244,7 @@ class AMICA:
         self.num_samples = None
         self.mean = None
         self.sphere = None
+        self.sldet = 0.0
         self.comp_list = None
         self.comp_used = None
 
@@ -326,7 +328,9 @@ class AMICA:
         """
         if self.W is None:
             raise RuntimeError("Model has not been fitted yet; call fit() first.")
-        return self.W[:, :, 0]
+        # Internal W = inv(A) is stored transposed relative to the true unmixing
+        # (the E-step forms activations as X^T @ W), so return W^T (issue #24).
+        return self.W[:, :, 0].T
 
     def fit(self, data: Optional[np.ndarray] = None) -> "AMICA":
         """
@@ -416,8 +420,11 @@ class AMICA:
 
         # Compute sphering matrix if requested
         if self.do_sphere:
-            # Compute covariance
-            cov = np.cov(data)
+            # Population covariance (divide by N, bias=True), matching Fortran's
+            # DSYRK scatter/N -- not np.cov's default /(N-1). The two differ by a
+            # scalar sqrt(N/(N-1)); /(N-1) leaves a ~5e-6 sphere mismatch vs the
+            # reference (issue #24).
+            cov = np.cov(data, bias=True)
 
             # Eigenvalue decomposition
             evals, evecs = linalg.eigh(cov)
@@ -436,22 +443,29 @@ class AMICA:
             else:
                 n_comp = len(evals)
 
+            V = evecs[:, :n_comp]
+            inv_sqrt = np.diag(1.0 / np.sqrt(evals[:n_comp]))
             # Create sphering matrix
             if self.do_approx_sphere:
-                # Approximate sphering (faster but less accurate)
-                self.sphere = np.dot(
-                    np.diag(1.0 / np.sqrt(evals[:n_comp])), evecs[:, :n_comp].T
-                )
+                # Symmetric ZCA sphere V diag(1/sqrt(eval)) V^T (Fortran
+                # do_approx_sphere=True, amica17.f90:480-481) -- the parity form.
+                # The old diag(1/sqrt)@V^T (PCA whitening) is a different,
+                # non-symmetric transform that breaks activation parity.
+                self.sphere = V @ inv_sqrt @ V.T
             else:
-                # Exact sphering
-                self.sphere = linalg.inv(
-                    np.dot(np.diag(np.sqrt(evals[:n_comp])), evecs[:, :n_comp].T)
-                )
+                # Non-symmetric PCA whitening D^-1/2 V^T (amica17.f90:495).
+                self.sphere = inv_sqrt @ V.T
 
             # Apply sphering
             data = np.dot(self.sphere, data)
+            # Sphering log-determinant term of the data log-likelihood
+            # (Fortran sldet, amica17.f90:474): sum over kept eigenvalues of
+            # -0.5*log(eval). Required so the reported LL matches Fortran; its
+            # omission was why the NumPy LL sat ~ +1.5 instead of ~ -3.4.
+            self.sldet = float(-0.5 * np.sum(np.log(evals[:n_comp])))
         else:
             self.sphere = np.eye(self.data_dim)
+            self.sldet = 0.0
 
         self.data = data
 
@@ -576,11 +590,13 @@ class AMICA:
         # Initialize update accumulators
         updates = {
             "dgm": np.zeros(self.num_models),
-            "dalpha": np.zeros((self.num_mix, self.num_comps)),
-            "dmu": np.zeros((self.num_mix, self.num_comps)),
-            "dbeta": np.zeros((self.num_mix, self.num_comps)),
-            "drho": np.zeros((self.num_mix, self.num_comps)),
-            "dA": np.zeros((self.data_dim, self.data_dim, self.num_models)),
+            "dalpha_n": np.zeros((self.num_mix, self.num_comps)),
+            "dmu_n": np.zeros((self.num_mix, self.num_comps)),
+            "dmu_d": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta_n": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta_d": np.zeros((self.num_mix, self.num_comps)),
+            "drho_n": np.zeros((self.num_mix, self.num_comps)),
+            "dWtmp": np.zeros((self.data_dim, self.data_dim, self.num_models)),
             "dc": np.zeros((self.data_dim, self.num_models)),
             "ll": 0.0,
         }
@@ -623,13 +639,16 @@ class AMICA:
             Parameter updates for this block
         """
         batch_size = X.shape[1]
+        tiny = np.finfo(np.float64).tiny
         updates = {
             "dgm": np.zeros(self.num_models),
-            "dalpha": np.zeros((self.num_mix, self.num_comps)),
-            "dmu": np.zeros((self.num_mix, self.num_comps)),
-            "dbeta": np.zeros((self.num_mix, self.num_comps)),
-            "drho": np.zeros((self.num_mix, self.num_comps)),
-            "dA": np.zeros((self.data_dim, self.data_dim, self.num_models)),
+            "dalpha_n": np.zeros((self.num_mix, self.num_comps)),
+            "dmu_n": np.zeros((self.num_mix, self.num_comps)),
+            "dmu_d": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta_n": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta_d": np.zeros((self.num_mix, self.num_comps)),
+            "drho_n": np.zeros((self.num_mix, self.num_comps)),
+            "dWtmp": np.zeros((self.data_dim, self.data_dim, self.num_models)),
             "dc": np.zeros((self.data_dim, self.num_models)),
             "ll": 0.0,
         }
@@ -664,27 +683,35 @@ class AMICA:
                         np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + log_pdf
                     )
 
-        # Normalize responsibilities
-        z = np.exp(z - np.max(z, axis=2, keepdims=True))
-        z /= np.sum(z, axis=2, keepdims=True)
-
-        # Compute model probabilities and log likelihood
-        v = np.zeros((batch_size, self.num_models))
-        ll = np.zeros(batch_size)
+        # Per-source log-density = logsumexp over mixtures of the pre-norm logits
+        # z0, then the per-model log-likelihood logV adds the log|det W| + sldet
+        # Jacobian (Fortran amica17.f90:1341-1350). This is the correct
+        # pre-normalization log-likelihood; the earlier post-normalization
+        # np.sum(np.exp(z_normalized)) did not recover a real log-density and
+        # omitted the Jacobian (so LL was positive and ~4.9 off per channel).
+        z0max = np.max(z, axis=2, keepdims=True)
+        ll_src = z0max[:, :, 0, :] + np.log(
+            np.sum(np.exp(z - z0max), axis=2)
+        )  # (batch, data_dim, num_models)
+        logV = np.zeros((batch_size, self.num_models))
         for h in range(self.num_models):
-            v[:, h] = np.log(self.gm[h])
-            for i in range(self.data_dim):
-                k = self.comp_list[i, h]
-                # Sum log probabilities across mixture components
-                ll_i = np.log(np.sum(np.exp(z[:, i, :, h]), axis=1))
-                v[:, h] += ll_i
-                ll += ll_i
+            _, logdet_W = np.linalg.slogdet(self.W[:, :, h])
+            logV[:, h] = (
+                np.log(self.gm[h])
+                + logdet_W
+                + self.sldet
+                + np.sum(ll_src[:, :, h], axis=1)
+            )
 
-        v = np.exp(v - np.max(v, axis=1, keepdims=True))
+        # Block log-likelihood = sum_t logsumexp_h logV (Fortran :1372).
+        Vmax = np.max(logV, axis=1, keepdims=True)
+        updates["ll"] = np.sum(Vmax[:, 0] + np.log(np.sum(np.exp(logV - Vmax), axis=1)))
+
+        # Model responsibilities v = softmax(logV); mixture responsibilities z.
+        v = np.exp(logV - Vmax)
         v /= np.sum(v, axis=1, keepdims=True)
-
-        # Accumulate parameter updates
-        updates["ll"] = np.sum(ll)
+        z = np.exp(z - z0max)
+        z /= np.sum(z, axis=2, keepdims=True)
 
         for h in range(self.num_models):
             # Model weights
@@ -700,57 +727,62 @@ class AMICA:
                 if self.do_newton:
                     updates["dsigma2"][i, h] += np.sum(v[:, h] * b[:, i, h] ** 2)
 
-                # Mixture weights
+                # Mixture exact-EM sufficient statistics (Fortran
+                # amica17.f90:1524-1578). These use the score
+                # fp = rho*sign(y)*|y|^(rho-1) (Fortran fp), NOT the density
+                # derivative dpdf, and produce numerator/denominator pairs for a
+                # fixed-point (not first-order gradient) update. Assumes rho <= 2
+                # (the maxrho default); the rho > 2 denominator branches are
+                # unreachable and not implemented.
                 for j in range(self.num_mix):
-                    updates["dalpha"][j, k] += np.sum(v[:, h] * z[:, i, j, h])
-
-                    # Component means
                     y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
-                    log_pdf, dpdf = self._compute_log_pdf(y, self.rho[j, k])
-                    updates["dmu"][j, k] += np.sum(v[:, h] * z[:, i, j, h] * dpdf)
+                    fp = self._compute_score(y, self.rho[j, k])
+                    u = v[:, h] * z[:, i, j, h]  # model x mixture responsibility
+                    ufp = u * fp
 
-                    # Scale parameters
-                    updates["dbeta"][j, k] += np.sum(v[:, h] * z[:, i, j, h] * y * dpdf)
+                    updates["dalpha_n"][j, k] += np.sum(u)
+                    updates["dmu_n"][j, k] += np.sum(ufp)  # sum(ufp) (:1532)
+                    updates["dmu_d"][j, k] += self.beta[j, k] * np.sum(
+                        ufp / y
+                    )  # sbeta*sum(ufp/y) (:1537)
+                    updates["dbeta_n"][j, k] += np.sum(u)  # sum(u) (:1550)
+                    updates["dbeta_d"][j, k] += np.sum(ufp * y)  # sum(ufp*y) (:1556)
 
-                    # Shape parameters
-                    if self.rho[j, k] not in (1.0, 2.0):
-                        logy = np.log(np.abs(y))
-                        updates["drho"][j, k] += np.sum(
-                            v[:, h]
-                            * z[:, i, j, h]
-                            * np.power(np.abs(y), self.rho[j, k])
-                            * logy
-                        )
+                    # drho_numer = rho*sum(u*|y|^rho*ln|y|) (:1560-1578). Leading
+                    # rho from ln(|y|^rho)=rho*ln|y| (issue #24 Bug 1); no
+                    # per-component rho!=1&rho!=2 mask (Bug 2), only the
+                    # per-sample underflow guard (:1570).
+                    ay = np.abs(y)
+                    ayrho = np.power(ay, self.rho[j, k])
+                    logab = self.rho[j, k] * np.log(np.maximum(ay, tiny))
+                    logab = np.where(ayrho < tiny, 0.0, logab)
+                    updates["drho_n"][j, k] += np.sum(u * ayrho * logab)
 
                     if self.do_newton:
-                        # Newton curvature terms use the score
-                        # fp = d|y|^rho/dy (Fortran amica17.f90:1455-1467,
-                        # 1500-1512), NOT the density derivative dpdf (which
-                        # carries an extra pdf factor). The kappa term carries
-                        # the sbeta^2 = beta^2 factor, and lambda folds in the
-                        # baralpha-weighted mu^2 curvature term so that
-                        # lambda = dlambda/dgm at finalization matches Fortran.
-                        vz = v[:, h] * z[:, i, j, h]
-                        fp = self._compute_score(y, self.rho[j, k])
-                        dkap = np.sum(vz * fp**2) * self.beta[j, k] ** 2
+                        # Newton curvature terms use the score fp (Fortran
+                        # :1500-1512): kappa carries sbeta^2, lambda folds in the
+                        # mu^2 curvature term so lambda=dlambda/dgm matches Fortran.
+                        dkap = np.sum(u * fp**2) * self.beta[j, k] ** 2
                         updates["dkappa"][i, h] += dkap
                         updates["dlambda"][i, h] += (
-                            np.sum(vz * (fp * y - 1) ** 2) + dkap * self.mu[j, k] ** 2
+                            np.sum(u * (fp * y - 1) ** 2) + dkap * self.mu[j, k] ** 2
                         )
 
-            # Unmixing matrices
+            # Natural-gradient accumulator: g_i = sum_j sbeta*u*fp, then the
+            # source-space sum dWtmp = g^T b (Fortran :1493/:1592). Uses the
+            # score fp, not dpdf.
             g = np.zeros((batch_size, self.data_dim))
             for i in range(self.data_dim):
                 k = self.comp_list[i, h]
                 for j in range(self.num_mix):
                     y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
-                    _, dpdf = self._compute_log_pdf(y, self.rho[j, k])
-                    g[:, i] += self.beta[j, k] * z[:, i, j, h] * dpdf
+                    fp = self._compute_score(y, self.rho[j, k])
+                    g[:, i] += self.beta[j, k] * (v[:, h] * z[:, i, j, h]) * fp
 
-            updates["dA"][:, :, h] += np.dot(X, v[:, h : h + 1] * g)
+            updates["dWtmp"][:, :, h] += np.dot(g.T, b[:, :, h])
 
             # Bias terms
-            updates["dc"][:, h] += np.sum(v[:, h : h + 1] * g, axis=0)
+            updates["dc"][:, h] += np.sum(g, axis=0)
 
         return updates
 
@@ -770,31 +802,25 @@ class AMICA:
             self.gm = updates["dgm"] / self.num_samples
 
         # Update mixture weights
-        self.alpha = updates["dalpha"] / np.sum(updates["dalpha"], axis=0)
+        self.alpha = updates["dalpha_n"] / np.sum(updates["dalpha_n"], axis=0)
 
-        # dalpha is the per-component responsibility mass and is also used
-        # below as the divisor for dmu/dbeta/drho. When a mixture component's
-        # responsibility collapses to (near) zero -- e.g. an outlier
-        # component with no assigned samples -- dividing by it directly
-        # produces NaN and poisons mu/beta/rho for that component. Floor it
-        # with a small epsilon, matching the epsilon-floor pattern used
-        # elsewhere in this codebase (e.g. invsigmin/invsigmax clipping).
-        dalpha_safe = np.maximum(updates["dalpha"], 1e-10)
-
-        # Update component means
-        dmu = updates["dmu"] / dalpha_safe
-        self.mu += self.lrate * dmu
-
-        # Update scale parameters
-        dbeta = updates["dbeta"] / dalpha_safe
-        self.beta *= np.sqrt(1 + self.lrate * dbeta)
+        # Exact-EM mixture location/scale (Fortran :1978/:1993). These are
+        # fixed-point updates -- mu += dmu_n/dmu_d, beta *= sqrt(dbeta_n/dbeta_d)
+        # -- NOT first-order gradient steps, so they carry no lrate.
+        self.mu = self.mu + updates["dmu_n"] / updates["dmu_d"]
+        self.beta = self.beta * np.sqrt(updates["dbeta_n"] / updates["dbeta_d"])
         self.beta = np.clip(self.beta, self.invsigmin, self.invsigmax)
 
-        # Update shape parameters
+        # GG shape update with the 1/psi(1+1/rho) digamma factor (Fortran
+        # :2013-2014); the divisor is the per-component responsibility mass
+        # dalpha_n (floored so a near-empty component cannot poison rho).
         if not np.all(self.rho == 1.0) and not np.all(self.rho == 2.0):
-            drho = updates["drho"] / dalpha_safe
-            self.rho += self.rholrate * (1 - self.rho * drho)
-            self.rho = np.clip(self.rho, self.minrho, self.maxrho)
+            drho = updates["drho_n"] / np.maximum(updates["dalpha_n"], 1e-8)
+            psi = digamma(1.0 + 1.0 / self.rho)
+            new_rho = self.rho + self.rholrate * (1.0 - (self.rho / psi) * drho)
+            self.rho = np.clip(
+                np.nan_to_num(new_rho, nan=self.rho0), self.minrho, self.maxrho
+            )
 
         # Update unmixing matrices
         newton_active = self.do_newton and self.iter >= self.newt_start
@@ -814,7 +840,7 @@ class AMICA:
         directions = []
         no_newt = False
         for h in range(self.num_models):
-            dA = -updates["dA"][:, :, h] / updates["dgm"][h]
+            dA = -updates["dWtmp"][:, :, h] / updates["dgm"][h]
             dA[np.diag_indices_from(dA)] += 1
 
             if newton_active:
@@ -859,13 +885,19 @@ class AMICA:
                 self.lrate0, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
             )
 
+        # A is stored as Fortran's A^T (true unmixing = W^T = inv(A)^T), so the
+        # Fortran step A_fort -= lrate*A_fort @ dir becomes A -= lrate*dir^T @ A
+        # (LEFT-multiply by the TRANSPOSED direction). Right-multiply by the
+        # untransposed dir is invisible at the fixed point but sends the fit
+        # downhill -- issue #24 root cause.
         for h in range(self.num_models):
-            self.A[:, self.comp_list[:, h]] += self.lrate * np.dot(
-                self.A[:, self.comp_list[:, h]], directions[h]
+            idx = self.comp_list[:, h]
+            self.A[:, idx] = self.A[:, idx] - self.lrate * np.dot(
+                directions[h].T, self.A[:, idx]
             )
 
-        # Update bias terms
-        self.c += self.lrate * updates["dc"] / updates["dgm"][:, None]
+        # c is not updated: for mean-removed data Fortran's c stays at machine
+        # zero (issue #24), so the exact-EM update is a no-op.
 
         # Rescale parameters if requested
         if self.doscaling and self.iter % self.scalestep == 0:
@@ -886,7 +918,7 @@ class AMICA:
         if self.use_grad_norm:
             dA = np.zeros_like(self.A)
             for h in range(self.num_models):
-                dA[:, self.comp_list[:, h]] += self.gm[h] * updates["dA"][:, :, h]
+                dA[:, self.comp_list[:, h]] += self.gm[h] * updates["dWtmp"][:, :, h]
             self.nd.append(np.sqrt(np.sum(dA**2) / (self.data_dim * self.num_comps)))
 
     def _optimize(self):
@@ -1170,6 +1202,7 @@ class AMICA:
         S = np.zeros((self.num_comps, data.shape[1], self.num_models))
         for h in range(self.num_models):
             idx = self.comp_list[:, h]
-            S[idx, :, h] = np.dot(self.W[:, :, h], data)
+            # W^T is the true unmixing (issue #24 transpose convention).
+            S[idx, :, h] = np.dot(self.W[:, :, h].T, data)
 
         return S

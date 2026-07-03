@@ -21,6 +21,16 @@ proven to machine precision and fixed. See `root_cause_Aupdate.py` (self-contain
 - Invisible at the fixed point because `G = g^T b ~ (g^T b)^T = G^T` when the natural gradient -> 0,
   so `corrected_mstep_prototype.py::fixed_point_test` passed while the free-running fit descended.
 
+**PORTED TO PRODUCTION & VALIDATED (2026-07-03).** All fixes are in the shipped backends
+`torch_impl/amica_torch_ng.py` (`AMICATorchNG`) and `pyAMICA.py` (`AMICA_NumPy`): the A-update
+transpose, exact-EM mu/beta (`fp` not `dpdf`), the digamma rho update (Bugs 1+2), the symmetric-ZCA
+sphere (cov/N), the Newton-path orientation (`A -= lrate*H^T @ A`), the W/A output transpose
+(get_*_matrix / transform), and the NumPy Jacobian LL (`sldet` + `logsumexp`, previously positive).
+Result: `AMICATorchNG` Newton fit ascends to LL -3.4017 / corr 0.997 (Fortran -3.4018 / 0.998),
+0 Newton fallbacks; NumPy trajectory is bit-identical (i100 LL -3.4110 both). The
+`test_end_to_end_correlation_vs_fortran` gate (>0.95) now PASSES (xfail removed); the NG<->NumPy
+sufficient-stat parity tests pass to 1e-8.
+
 **The two theories below are SUPERSEDED / an artifact** (kept for the record):
 - "Bug 3 mu/beta denominator" is **DISPROVEN as a formula bug.** The mu/beta exact-EM update is
   bit-exact with Fortran (~1e-13) once the *same sphere* is used (`root_cause_Aupdate.py` [2]). The
