@@ -3,6 +3,14 @@
 Fortran-vs-Python parity analysis. Fortran reference: `amica17.f90` (~3900 lines),
 `amica17_header.f90` (declarations), `funmod2.f90` (function modules).
 
+> **2026-07-02 - Issue #21 root cause (M-step diverges).** The NG backend's first-order
+> M-step uses the density derivative `dpdf = p'(y)` where Fortran uses the score
+> `fp = rho*sign(y)*|y|^(rho-1)`; since `p' = -fp*p`, the log-likelihood *descends* from
+> iteration 1. Plus gradient-style vs exact-EM mu/beta, PCA vs symmetric-ZCA sphere, and a
+> validation-metric artifact (sphered-space `W` vs basis-invariant `W@S`). Full analysis,
+> evidence, and fix recipe: [`issue-21/root_cause.md`](issue-21/root_cause.md); runnable
+> proof: `issue-21/reproduce_root_cause.py`.
+
 ## Core Data Structures (Fortran -> Python)
 | Fortran | Python | Status |
 |---|---|---|
