@@ -193,7 +193,8 @@ class TestGaussianMixtureICA(unittest.TestCase):
 
     @pytest.mark.xfail(
         reason="fit_em log-likelihood decreases across iterations, a genuine "
-        "M-step bug gated by epic #9 rewrite (not fixed in Phase 1)",
+        "M-step bug in the legacy mixture module (tracked in issue #31); the "
+        "epic delivered AMICATorchNG, which does not touch this module",
         strict=True,
         raises=AssertionError,
     )
