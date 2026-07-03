@@ -7,6 +7,7 @@ on Apple Silicon (MPS cannot represent float64). Real sample EEG data only
 (no synthetic/mock).
 """
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -72,16 +73,43 @@ def test_ng_save_not_implemented(fitted_ng, tmp_path):
         fitted_ng.save(str(tmp_path / "model.pt"))
 
 
-def test_ng_default_device_avoids_mps_float64(real_data):
+def test_ng_default_device_avoids_mps_float64(real_data, caplog):
     """The default float64 NG config must not crash when the auto-selected
     device is MPS; the wrapper falls back to CPU (regression for #29)."""
     model = AMICA(n_models=1, n_mix=3, verbose=False, backend="ng")  # device=None
-    model.fit(real_data[:, :2048], max_iter=2, block_size=1024, seed=42)
+    with caplog.at_level(logging.WARNING, logger="pyAMICA.amica"):
+        model.fit(real_data[:, :2048], max_iter=2, block_size=1024, seed=42)
 
     # float64 parity runs must never land on MPS.
     assert model.model_.device.type in ("cpu", "cuda")
     if torch.backends.mps.is_available():
         assert model.model_.device.type == "cpu"
+        # The downgrade must be announced even with verbose=False (not silent).
+        assert any("float64" in r.message for r in caplog.records)
+
+
+def test_ng_explicit_mps_float64_raises(real_data):
+    """A user-pinned device="mps" with the default float64 must NOT be
+    silently coerced to CPU; it should surface AMICATorchNG's ValueError.
+    Raised at construction (before device placement), so no MPS hardware
+    is needed."""
+    model = AMICA(device="mps", verbose=False, backend="ng")
+    with pytest.raises(ValueError, match="MPS does not support float64"):
+        model.fit(real_data[:, :256], max_iter=1, block_size=128, seed=1)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="requires MPS hardware"
+)
+def test_ng_mps_float32_escape_hatch(real_data):
+    """The documented workaround: dtype=torch.float32 lets the NG backend run
+    on MPS."""
+    model = AMICA(device="mps", verbose=False, backend="ng")
+    model.fit(
+        real_data[:, :2048], max_iter=2, block_size=1024, seed=42, dtype=torch.float32
+    )
+    assert model.model_.device.type == "mps"
+    assert model.model_.dtype == torch.float32
 
 
 def test_ng_wrapper_fit_transform_real_data(fitted_ng, real_data):
