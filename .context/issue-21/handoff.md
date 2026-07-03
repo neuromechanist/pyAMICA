@@ -1,5 +1,16 @@
 # Issue #21 implementation handoff
 
+> **[CORRECTION 2026-07-02 -- issue #24 disproved this doc's Newton framing.]**
+> This doc says the only remaining blocker is *Newton* curvature bit-parity at lrate=1.0.
+> That is WRONG. Issue #24 seeded Fortran and the corrected NG from the *identical* init and
+> found the first-order **natural-gradient M-step itself** drifts: from the same start Fortran
+> reaches -3.402 (corr 0.998) while Python reaches -3.460 (corr 0.51), and with Newton OFF and
+> lrate pinned at 0.05 Python tracks Fortran for ~5 iters then *descends*. The fit-loop lrate
+> ratchet was masking this as a "-3.46 plateau". Newton is a *secondary* blocker; the NG M-step
+> must be made per-iteration bit-faithful FIRST. Do not treat the natural-gradient phase as
+> "faithful". Evidence: `.context/issue-24/findings.md` + `verify_init_basin.py`. The claims
+> flagged **[WRONG #24]** below are superseded by that doc.
+
 Pick-up doc for implementing the NG-backend M-step fix (chosen path "b": implement the proven
 fixes in-code). Diagnosis is complete; this is the engineering plan.
 
@@ -12,6 +23,8 @@ diagnosed and validated against Fortran's converged solution. What remains is (1
 validated M-step into the production files and re-baselining the tests, and (2) the one open
 gate-blocker: Newton curvature bit-parity at lrate=1.0 (tracked as #24). See
 `root_cause.md` for the full evidence; this doc is the how-to.
+**[WRONG #24]** point (2) is superseded: the first-order NG M-step (not just Newton) drifts from
+Fortran; see the correction banner above and `.context/issue-24/findings.md`.
 
 ## Coordinates
 
@@ -81,7 +94,12 @@ class. Each change with its Fortran line ref:
    `_get_block_updates` ~611-755, `_update_parameters` ~757+). Keep NG and NumPy in sync.
 4. **Fix `validate_implementations.py::compare_results`** to compare the basis-invariant total
    spatial filter `W@sphere` (with the transpose), not raw sphered-space `W` rows.
-5. **Newton bit-parity (#24, the gate-blocker).** With 1-4 done, the natural-gradient phase is
+5. **Newton bit-parity (#24, the gate-blocker).** **[WRONG #24: mis-scoped.** The NG phase is NOT
+   faithful -- from the same init it drifts from Fortran with Newton OFF and lrate pinned
+   (`.context/issue-24/findings.md`). Fix the first-order NG M-step to per-iteration bit-parity
+   FIRST (suspects: the omitted `c` update, then column-scaling/mu-beta coupling); Newton is
+   secondary. The `load_*` per-iteration route below is right; the diagnosis target is wrong.]**
+   With 1-4 done, the natural-gradient phase is
    faithful (fixed-point stable) but plateaus ~-3.47; Fortran's Newton breaks through to -3.40 at
    lrate=1.0 while ours overshoots (the 2x2 solve `H=(sk1*dA[i,k]-dA[k,i])/(sk1*sk2-1)` amplifies
    the residual for near-marginal-posdef pairs). Ruled out: c-center (Fortran's converged c is
