@@ -9,7 +9,7 @@ algorithm. It handles:
    - Mean removal
    - Sphering (whitening) using PCA
    - Dimensionality reduction
-3. Result saving and loading with optional compression
+3. Loading saved results (raw Fortran binary format; see load_results)
 
 The preprocessing steps are crucial for AMICA's performance:
 - Mean removal centers the data, removing DC offset
@@ -194,96 +194,6 @@ def preprocess_data(
         sphere = np.eye(data_dim)
 
     return data, mean, sphere
-
-
-def save_results(
-    outdir: str,
-    A: np.ndarray,
-    W: np.ndarray,
-    c: np.ndarray,
-    mu: np.ndarray,
-    alpha: np.ndarray,
-    beta: np.ndarray,
-    rho: np.ndarray,
-    gm: np.ndarray,
-    mean: np.ndarray,
-    sphere: np.ndarray,
-    comp_list: np.ndarray,
-    ll: List[float],
-    nd: Optional[List[float]] = None,
-    compress: bool = False,
-):
-    """
-    Save AMICA results to disk.
-
-    Parameters
-    ----------
-    outdir : str
-        Output directory
-    A : ndarray
-        Mixing matrix
-    W : ndarray
-        Unmixing matrices
-    c : ndarray
-        Bias terms
-    mu : ndarray
-        Component means
-    alpha : ndarray
-        Mixture weights
-    beta : ndarray
-        Scale parameters
-    rho : ndarray
-        Shape parameters
-    gm : ndarray
-        Model weights
-    mean : ndarray
-        Data mean
-    sphere : ndarray
-        Sphering matrix
-    comp_list : ndarray
-        Component assignments
-    ll : list
-        Log likelihood history
-    nd : list, optional
-        Gradient norm history
-    compress : bool
-        Whether to compress saved files
-    """
-    outdir = Path(outdir)
-    if not outdir.exists():
-        outdir.mkdir(parents=True)
-
-    # Save parameters
-    params = {
-        "A": A,
-        "W": W,
-        "c": c,
-        "mu": mu,
-        "alpha": alpha,
-        "beta": beta,
-        "rho": rho,
-        "gm": gm,
-        "mean": mean,
-        "sphere": sphere,
-        "comp_list": comp_list,
-    }
-
-    for name, param in params.items():
-        if compress:
-            np.savez_compressed(outdir / f"{name}.npz", param)
-        else:
-            np.save(outdir / f"{name}.npy", param)
-
-    # Save optimization history
-    history = {"ll": np.array(ll)}
-    if nd is not None:
-        history["nd"] = np.array(nd)
-
-    for name, hist in history.items():
-        if compress:
-            np.savez_compressed(outdir / f"{name}.npz", hist)
-        else:
-            np.save(outdir / f"{name}.npy", hist)
 
 
 def load_results(indir: str, compressed: bool = False) -> dict:
