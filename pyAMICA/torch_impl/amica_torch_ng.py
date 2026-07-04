@@ -1,9 +1,10 @@
 """
 Natural-gradient EM PyTorch backend for AMICA (ADR 0001).
 
-Unlike ``amica_torch.py``/``amica_torch_v2.py``, which reframe AMICA as
-"minimize negative log-likelihood with Adam over reparameterized tensors",
-this module is a direct, vectorized port of the closed-form E-step/M-step
+Rather than reframing AMICA as "minimize negative log-likelihood with Adam
+over reparameterized tensors" (the approach of the earlier Adam/autograd
+backends, since removed in issue #32), this module is a direct, vectorized
+port of the closed-form E-step/M-step
 fixed-point updates used by the Fortran reference (``amica17.f90``) and the
 legacy NumPy implementation (``pyAMICA.pyAMICA.AMICA._get_block_updates`` /
 ``_update_parameters``, which is this module's line-by-line spec). There is

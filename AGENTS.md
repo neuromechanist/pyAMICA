@@ -3,29 +3,22 @@
 ## Project Context
 **Purpose:** Python implementation of AMICA (Adaptive Mixture Independent Component Analysis) that reproduces the results of the reference Fortran binary. Targets EEG/EMG source separation with GPU/MPS/CPU support.
 **Tech Stack:** Python 3.12+, PyTorch (primary backend, MPS/CUDA/CPU), NumPy/SciPy (legacy backend), matplotlib. Reference implementation is Fortran (`amica17.f90`, `funmod2.f90`).
-**Architecture:** The scikit-learn-style `AMICA` interface selects a PyTorch backend via `backend=`. `backend="torch"` (default) wraps the basic `AMICATorch` (`torch_impl/amica_torch.py`), which has Newton disabled and no adaptive PDF. `backend="ng"` wraps `AMICATorchNG` (`torch_impl/amica_torch_ng.py`), the natural-gradient EM port that reaches Fortran parity (Newton, exact-EM mixture updates, symmetric-ZCA sphere, Jacobian LL). The earlier `AMICATorchV2` (`torch_impl/amica_torch_v2.py`) is parked/superseded by `AMICATorchNG`. The legacy NumPy implementation (`pyAMICA.py`, retained as `AMICA_NumPy`) carries the same parity fixes plus baralpha and outlier rejection. Correctness is defined by parity with the Fortran binary, validated by `validate_implementations.py`.
+**Architecture:** The scikit-learn-style `AMICA` interface wraps `AMICATorchNG` (`torch_impl/amica_torch_ng.py`), the natural-gradient EM port that reaches Fortran parity (Newton, exact-EM mixture updates, symmetric-ZCA sphere, Jacobian LL). This is the single PyTorch backend: the earlier Adam/autograd backends (`AMICATorch`, `AMICATorchV2`) and their mixture/optimizer/PDF helper modules were removed in issue #32 as superseded. The legacy NumPy implementation (`pyAMICA.py`, retained as `AMICA_NumPy`) carries the same parity fixes plus baralpha and outlier rejection. Correctness is defined by parity with the Fortran binary, validated by `validate_implementations.py`.
 
 ## Architecture Map
 ```
 pyAMICA/
-├── amica.py                 # Main scikit-learn-style AMICA interface (PyTorch-backed)
+├── amica.py                 # Main scikit-learn-style AMICA interface (wraps AMICATorchNG)
 ├── __init__.py              # Exposes AMICA (PyTorch) and AMICA_NumPy (legacy)
 ├── torch_impl/              # PyTorch backend
-│   ├── amica_torch.py       #   Core AMICA module (basic; Newton disabled) - backs the default AMICA (backend="torch")
-│   ├── amica_torch_ng.py    #   Natural-gradient EM port (AMICATorchNG); Fortran-parity, backs backend="ng"
-│   ├── amica_torch_v2.py    #   PARKED/superseded by amica_torch_ng.py (experimental, not wired into AMICA)
-│   ├── adaptive_pdf.py      #   Adaptive PDF selection (Laplace/Student-t/GG)
-│   ├── newton_optimizer.py  #   Newton optimization with Fortran-style ramping
-│   ├── mixture_models.py    #   Mixture-of-densities components
-│   ├── optimizers.py        #   Natural-gradient / optimizer utilities
-│   ├── fortran_output.py    #   Fortran-style debug/log output
+│   ├── amica_torch_ng.py    #   Natural-gradient EM port (AMICATorchNG); Fortran-parity, sole backend
 │   └── utils.py             #   Preprocessing (sphering, PCA), device selection
 ├── pyAMICA.py, amica_*.py   # Legacy NumPy implementation + CLI/data/viz/pdf/newton
 ├── amica17.f90, funmod2.f90 # Fortran reference source (read-only, for parity)
 ├── sample_data/             # Sample EEG data + Fortran binary (amica15mac)
 └── tests/                   # Tests, incl. tests/torch_tests/ (vs-Fortran parity)
 
-validate_implementations.py  # Runs both backends, Hungarian component matching, reports
+validate_implementations.py  # Runs both implementations, Hungarian component matching, reports
 ```
 
 ## Environment Setup
@@ -42,10 +35,10 @@ computes in float64 for Fortran parity, which MPS cannot represent, so parity ru
 (the `AMICA` wrapper falls back to CPU automatically when a device is not pinned).
 
 ## Key Files
-- **Main interface:** `pyAMICA/amica.py` (`backend="torch"` default, `backend="ng"` opt-in)
-- **Default backend:** `pyAMICA/torch_impl/amica_torch.py` (`AMICATorch`, Newton disabled).
-- **Parity backend:** `pyAMICA/torch_impl/amica_torch_ng.py` (`AMICATorchNG`, natural-gradient EM,
-  Fortran-parity; ADR `.context/decisions/0001-torch-backend-natural-gradient-em.md`). Parked/superseded: `amica_torch_v2.py` (`AMICATorchV2`)
+- **Main interface:** `pyAMICA/amica.py` (thin wrapper over `AMICATorchNG`)
+- **PyTorch backend:** `pyAMICA/torch_impl/amica_torch_ng.py` (`AMICATorchNG`, natural-gradient EM,
+  Fortran-parity; ADR `.context/decisions/0001-torch-backend-natural-gradient-em.md`). This is the
+  only PyTorch backend; the basic `AMICATorch`/`AMICATorchV2` paths were removed in #32.
 - **Validation harness:** `validate_implementations.py`
 - **Fortran reference binary:** `pyAMICA/sample_data/amica15mac`
 - **Sample data:** `pyAMICA/sample_data/`
@@ -54,9 +47,10 @@ computes in float64 for Fortran parity, which MPS cannot represent, so parity ru
 - PyTorch backend with GPU/MPS/CPU support; the `AMICATorchNG` natural-gradient EM backend now
   matches the Fortran reference (LL ~ -3.40, component correlation ~0.997) with Newton enabled
   and positive-definite (issue #24).
-- Validation harness runs both backends and matches components via the Hungarian algorithm.
+- Validation harness runs both implementations (NG + NumPy) and matches components via the Hungarian
+  algorithm.
 - Newton and exact-EM updates are implemented in `AMICATorchNG` and the legacy NumPy `pyAMICA.py`
-  (both Fortran-faithful); adaptive PDF and multi-model remain experimental (`AMICATorchV2`).
+  (both Fortran-faithful); adaptive PDF (#26) and full multi-model matching (#27) remain open.
 - See `FEATURE_PARITY.md`, `MIGRATION_PLAN.md`, and `PROGRESS_SUMMARY.md` for detailed roadmaps.
 
 ## Known Issues (parity blockers)
@@ -80,12 +74,13 @@ open, fixable suspect.
 
 Remaining, non-blocking (tracked as follow-up issues):
 1. Newton stability was fixed for `AMICATorchNG` (posdef, 0 fallbacks on the sample data). The
-   separate experimental `AMICATorchV2` is parked/superseded and scheduled for removal (#32).
+   superseded Adam/autograd backends (`AMICATorch`, `AMICATorchV2`) were removed in #32, which also
+   made the basic-backend mixture M-step bug (#31) moot by deleting that module.
 2. The `AMICATorchNG` backend still lacks the adaptive-PDF selection present in the NumPy path
    (a feature beyond Fortran parity, which uses a fixed GG PDF; #26); outlier rejection IS
    implemented (`do_reject`).
 3. Full multi-model partition matching and the per-model bias `c` update (#27).
-4. Legacy `backend="torch"` bugs: mixture M-step LL descent (#31), CLI save/load format (#30).
+4. Legacy NumPy CLI save/load format mismatch (#30).
 
 ## Development Workflow
 1. **Check context:** `.context/plan.md` for current tasks and priorities.

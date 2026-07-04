@@ -44,8 +44,8 @@
 - **Multi-model** (`n_models>1`): M-step bit-exact vs Fortran; full-fit partition matching is
   partition-limited (~0.77), tracked in #27
 
-The pre-epic basic backend (`backend="torch"`, Adam) still shows the old ~0.78 correlation / ~13x
-LL scaling; it is retained but superseded by `backend="ng"` for parity work.
+The pre-epic basic backend (Adam/autograd) showed the old ~0.78 correlation / ~13x LL scaling; it
+was removed in #32, leaving `AMICATorchNG` as the sole PyTorch backend.
 
 ## Next Steps (Prioritized)
 
@@ -57,10 +57,10 @@ LL scaling; it is retained but superseded by `backend="ng"` for parity work.
 - Resolve the full-fit multi-model cross-correlation gap; includes the omitted per-model bias
   `c` update
 
-### 3. Retire the parked/superseded paths (issue #32)
-- `AMICATorchV2` is parked (superseded by `AMICATorchNG`); once `backend="ng"` is the de-facto
-  default, remove `AMICATorchV2` and promote `backend="ng"` to default, then reassess the basic
-  `backend="torch"` path (legacy mixture M-step bug tracked in #31)
+### 3. Retire the parked/superseded paths (issue #32) ✅ done
+- `AMICATorchV2` and the basic `AMICATorch` (Adam/autograd backends) were removed; `AMICATorchNG`
+  is now the sole PyTorch backend and `AMICA` wraps it directly. This also deleted the buggy
+  `GaussianMixtureICA` M-step, making #31 moot.
 
 ## Technical Achievements
 - Successfully handles MPS device limitations

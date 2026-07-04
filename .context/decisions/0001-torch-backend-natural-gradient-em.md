@@ -62,3 +62,13 @@ partition matching is tracked in #27, adaptive-PDF in #26.
 - Fortran per-source mixture reduction: `amica17.f90:1313-1360`.
 - NumPy reference updates: `pyAMICA.py:505-730` (block updates, natural-gradient + Newton).
 - Bug catalog and perf/memory analysis: `.context/research.md` (2026-07-02 design review).
+
+## Addendum (2026-07-04, issue #32)
+
+The superseded Adam/autograd backends this ADR argued against (`AMICATorch`,
+`AMICATorchV2`) and their helper modules (`mixture_models`, `optimizers`,
+`newton_optimizer`, `adaptive_pdf`, `fortran_output`) were removed. `AMICATorchNG`
+is now the sole PyTorch backend, and the public `AMICA` interface wraps it directly
+(the `backend=` selector and the basic-backend-only `debug`/`output_dir` fit args
+were dropped). The Context/Alternatives sections above describe the pre-removal state
+and are retained as the historical record.

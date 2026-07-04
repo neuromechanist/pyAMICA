@@ -17,9 +17,10 @@
 - [ ] Raise component correlation with Fortran (~0.46-0.9, run-dependent) to >0.95
 
 ### Priority 2: Missing core features
-- [ ] Port outlier rejection (`do_reject` / `reject_data`) to the torch backend (exists in legacy NumPy `pyAMICA.py`)
-- [ ] Wire up / stabilize Newton for the torch backend (`baralpha`, full Hessian, convergence checks; exists in legacy NumPy)
-- [~] Adaptive PDF selection (`do_choose_pdfs`) - in `amica_torch_v2.py`, not yet wired into the default `AMICA` interface
+- [x] Port outlier rejection (`do_reject` / `reject_data`) to the torch backend (done in `AMICATorchNG`)
+- [x] Wire up / stabilize Newton for the torch backend (done in `AMICATorchNG`, posdef, issue #24)
+- [ ] Adaptive PDF selection (`do_choose_pdfs`) for `AMICATorchNG` (issue #26; the old
+      `amica_torch_v2.py` prototype was removed in #32)
 - [ ] Multi-model AMICA - framework exists, needs testing
 - [ ] Component sharing
 

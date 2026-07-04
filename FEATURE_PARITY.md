@@ -1,15 +1,15 @@
 # Feature Parity Report: Fortran vs PyTorch AMICA
 
-> **Status (2026-07-03, epic #9 / issue #24):** the "PyTorch" column below tracks the pre-epic
-> basic backend (`AMICATorch`, `backend="torch"`, Adam/autograd). It has been **superseded for
-> parity by the natural-gradient EM backend `AMICATorchNG` (`backend="ng"`)**, which reaches
-> Fortran parity: single-model LL ~ -3.40 (vs Fortran -3.4018) and Hungarian component correlation
-> ~0.997 with Newton positive-definite (0 fallbacks). `AMICATorchNG` also implements Newton +
-> Fortran-style ramping and outlier rejection (`do_reject`). The rows below that still read
-> "Missing"/"Partial" describe the basic backend and no longer reflect `backend="ng"`. Remaining
-> gaps on the NG path: adaptive-PDF selection (#26) and full multi-model partition matching (#27,
-> M-step is already bit-exact vs Fortran). See `PROGRESS_SUMMARY.md` and ADR
-> `.context/decisions/0001-torch-backend-natural-gradient-em.md`.
+> **Status (2026-07-04, epic #9 / issue #24 / #32):** the "PyTorch" column in the older tables
+> below records the historical numbers of the pre-epic basic backend (`AMICATorch`, Adam/autograd),
+> which was **removed in #32**. The current and only PyTorch backend is the natural-gradient EM
+> port `AMICATorchNG`, which `AMICA` now wraps directly. It reaches Fortran parity: single-model
+> LL ~ -3.40 (vs Fortran -3.4018) and Hungarian component correlation ~0.997 with Newton
+> positive-definite (0 fallbacks), and implements Newton + Fortran-style ramping and outlier
+> rejection (`do_reject`). Rows below that still read "Missing"/"Partial" describe the removed
+> basic backend, not `AMICATorchNG`. Remaining gaps on the NG path: adaptive-PDF selection (#26)
+> and full multi-model partition matching (#27, M-step is already bit-exact vs Fortran). See
+> `PROGRESS_SUMMARY.md` and ADR `.context/decisions/0001-torch-backend-natural-gradient-em.md`.
 
 ## Implementation Status Overview
 
@@ -142,8 +142,8 @@
 | **Convergence Rate** | Fast | Fast | ✅ | Similar speed |
 | **Newton** | posdef | posdef | ✅ | 0 fallbacks on sample data |
 
-The pre-epic basic backend (`backend="torch"`) still shows the old offset (initial LL ~-46,
-final -44 to -46; ~0.78 correlation) and is superseded by `backend="ng"` for parity.
+The removed pre-epic basic backend showed the old offset (initial LL ~-46, final -44 to -46;
+~0.78 correlation); `AMICATorchNG` is now the sole backend and reaches parity.
 
 ### Component Quality (`backend="ng"`)
 
@@ -170,9 +170,10 @@ updates, symmetric-ZCA sphere, Jacobian LL, and outlier rejection (`do_reject`).
 - [ ] Restore the omitted per-model bias `c` update (no-op only for `n_models=1`)
 
 #### 3. Retire Superseded/Legacy Paths
-- [ ] Remove `AMICATorchV2` and promote `backend="ng"` to default (issue #32)
-- [ ] Reassess the basic `backend="torch"` path (legacy mixture M-step bug: #31; legacy CLI
-      save/load format: #30)
+- [x] Remove `AMICATorchV2` and the basic `AMICATorch`; `AMICATorchNG` is now the sole PyTorch
+      backend and `AMICA` wraps it directly (issue #32; also made the basic-backend mixture M-step
+      bug #31 moot by deleting the module)
+- [ ] Legacy NumPy CLI save/load format mismatch (#30)
 
 ## Migration Readiness
 
