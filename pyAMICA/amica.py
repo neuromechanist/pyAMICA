@@ -1,18 +1,18 @@
 """
-Main AMICA interface using PyTorch implementation.
+Main AMICA interface using the PyTorch natural-gradient EM backend.
 
-This module provides the primary AMICA class that uses the PyTorch
-implementation for GPU-accelerated ICA with adaptive mixtures.
+This module provides the primary :class:`AMICA` class, a scikit-learn-style
+wrapper over :class:`AMICATorchNG` (the natural-gradient EM port that reaches
+Fortran parity; see ``.context/decisions/0001-torch-backend-natural-gradient-em.md``).
 """
 
 import numpy as np
 import torch
 from typing import Optional, Union
 import inspect
-import json
 import logging
 
-from .torch_impl import AMICATorch, AMICATorchNG, setup_device
+from .torch_impl import AMICATorchNG, setup_device
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,12 @@ _NG_DEFAULT_DTYPE = inspect.signature(AMICATorchNG).parameters["dtype"].default
 
 class AMICA:
     """
-    Adaptive Mixture ICA using PyTorch backend.
+    Adaptive Mixture ICA using the PyTorch natural-gradient EM backend.
 
     This is the main interface for pyAMICA, providing a scikit-learn style
-    API while using the GPU-accelerated PyTorch implementation underneath.
+    API over :class:`AMICATorchNG`, the natural-gradient EM implementation
+    that matches the Fortran reference (Newton, exact-EM mixture updates,
+    symmetric-ZCA sphere, Jacobian LL).
 
     Parameters
     ----------
@@ -36,28 +38,18 @@ class AMICA:
     n_mix : int, default=3
         Number of mixture components per source
     device : str or torch.device, optional
-        Device to use ('cuda', 'mps', 'cpu', or None for auto). Note: with
-        ``backend="ng"`` and ``None`` (auto), an auto-selected MPS device is
-        redirected to CPU because the NG backend computes in float64 for
-        Fortran parity and MPS cannot represent it; pass ``dtype=torch.float32``
-        (with ``device="mps"``) to run on MPS instead.
+        Device to use ('cuda', 'mps', 'cpu', or None for auto). With ``None``
+        (auto), an auto-selected MPS device is redirected to CPU because the
+        backend computes in float64 for Fortran parity and MPS cannot
+        represent it; pass ``dtype=torch.float32`` (with ``device="mps"``) to
+        run on MPS instead.
     verbose : bool, default=True
         Whether to show progress during fitting
-    backend : {"torch", "ng"}, default="torch"
-        Which underlying implementation to use. ``"torch"`` (the default)
-        is ``AMICATorch``, the existing Adam/autograd-driven backend.
-        ``"ng"`` is ``AMICATorchNG`` (ADR 0001), a natural-gradient EM port
-        that matches the Fortran/NumPy fixed-point update rule; it is
-        opt-in and experimental (see ``.context/decisions/0001-torch-backend-natural-gradient-em.md``).
-        Because the two backends have different constructor/fit shapes,
-        ``**kwargs`` passed to :meth:`fit` are routed differently depending
-        on ``backend`` -- see :meth:`fit`.
 
     Attributes
     ----------
-    model_ : AMICATorch or AMICATorchNG
-        The underlying PyTorch model (``AMICATorchNG`` when
-        ``backend="ng"``, otherwise ``AMICATorch``)
+    model_ : AMICATorchNG
+        The underlying PyTorch model
     is_fitted_ : bool
         Whether the model has been fitted
     ll_history_ : list
@@ -88,16 +80,11 @@ class AMICA:
         n_mix: int = 3,
         device: Optional[Union[str, object]] = None,
         verbose: bool = True,
-        backend: str = "torch",
     ):
-        if backend not in ("torch", "ng"):
-            raise ValueError(f"backend must be 'torch' or 'ng', got {backend!r}")
-
         self.n_models = n_models
         self.n_mix = n_mix
         self.device = device
         self.verbose = verbose
-        self.backend = backend
 
         self.model_ = None
         self.is_fitted_ = False
@@ -111,8 +98,6 @@ class AMICA:
         do_mean: bool = True,
         do_sphere: bool = True,
         do_newton: bool = False,
-        output_dir: Optional[str] = None,
-        debug: bool = False,
         **kwargs,
     ) -> "AMICA":
         """
@@ -131,23 +116,12 @@ class AMICA:
         do_sphere : bool, default=True
             Whether to sphere (whiten) the data
         do_newton : bool, default=False
-            Whether to use Newton optimization. Functional only for
-            ``backend="ng"``, where it enables the Fortran-parity Newton
-            preconditioner (tune via ``newt_start``/``newtrate`` in
-            ``**kwargs``). The default ``backend="torch"`` (Adam) currently
-            ignores this flag.
-        output_dir : str, optional
-            Directory for debug output (only used if debug=True). Only
-            supported by ``backend="torch"``.
-        debug : bool, default=False
-            If True, use Fortran-style output; if False, use tqdm progress
-            bar. Only supported by ``backend="torch"``.
+            Whether to enable the Fortran-parity Newton preconditioner (tune
+            via ``newt_start``/``newtrate`` in ``**kwargs``).
         **kwargs
-            For ``backend="torch"``, additional parameters passed to
-            ``AMICATorch.fit()``. For ``backend="ng"``, additional
-            parameters passed to the ``AMICATorchNG`` constructor instead
-            (e.g. ``block_size``, ``rho0``, ``seed``, ``dtype``) -- the NG
-            backend's tunables are constructor arguments, not fit() kwargs.
+            Additional parameters passed to the :class:`AMICATorchNG`
+            constructor (e.g. ``block_size``, ``rho0``, ``seed``, ``dtype``) --
+            the backend's tunables are constructor arguments, not fit() kwargs.
 
         Returns
         -------
@@ -170,79 +144,39 @@ class AMICA:
         else:
             device = self.device
 
-        if self.backend == "ng":
-            # AMICATorchNG defaults to float64 for Fortran parity, which MPS
-            # cannot represent. When the device was auto-selected (the user
-            # did not pin one) and resolved to MPS for a float64 run, fall
-            # back to CPU so the default config runs instead of crashing.
-            # CUDA supports float64, so only MPS needs this. An explicit
-            # device="mps" is left untouched and surfaces AMICATorchNG's own
-            # ValueError; users wanting MPS pass dtype=torch.float32 too.
-            ng_dtype = kwargs.get("dtype", _NG_DEFAULT_DTYPE)
-            dev_type = getattr(device, "type", device)
-            if self.device is None and dev_type == "mps" and ng_dtype == torch.float64:
-                device = torch.device("cpu")
-                msg = (
-                    "backend='ng' uses float64 for Fortran parity; MPS lacks "
-                    "float64 support, so falling back to CPU. Pass "
-                    "dtype=torch.float32 with device='mps' to run on MPS."
-                )
-                logger.warning(msg)
-                if self.verbose:
-                    print(msg)
-
-            if debug:
-                raise ValueError(
-                    "debug=True (Fortran-style output) is not supported by "
-                    "backend='ng'."
-                )
-            if output_dir is not None:
-                raise ValueError(
-                    "output_dir is not supported by backend='ng' (no debug "
-                    "output path)."
-                )
-
-            self.model_ = AMICATorchNG(
-                n_channels=n_channels,
-                n_models=self.n_models,
-                n_mix=self.n_mix,
-                lrate=lrate,
-                do_mean=do_mean,
-                do_sphere=do_sphere,
-                do_newton=do_newton,
-                device=device,
-                **kwargs,
+        # AMICATorchNG defaults to float64 for Fortran parity, which MPS cannot
+        # represent. When the device was auto-selected (the user did not pin
+        # one) and resolved to MPS for a float64 run, fall back to CPU so the
+        # default config runs instead of crashing. CUDA supports float64, so
+        # only MPS needs this. An explicit device="mps" is left untouched and
+        # surfaces AMICATorchNG's own ValueError; users wanting MPS pass
+        # dtype=torch.float32 too.
+        ng_dtype = kwargs.get("dtype", _NG_DEFAULT_DTYPE)
+        dev_type = getattr(device, "type", device)
+        if self.device is None and dev_type == "mps" and ng_dtype == torch.float64:
+            device = torch.device("cpu")
+            msg = (
+                "AMICA uses float64 for Fortran parity; MPS lacks float64 "
+                "support, so falling back to CPU. Pass dtype=torch.float32 "
+                "with device='mps' to run on MPS."
             )
-            self.model_.fit(X, max_iter=max_iter, verbose=self.verbose)
+            logger.warning(msg)
+            if self.verbose:
+                print(msg)
 
-            self.ll_history_ = self.model_.ll_history
-            self.is_fitted_ = True
-
-            return self
-
-        # Create PyTorch model
-        self.model_ = AMICATorch(
+        self.model_ = AMICATorchNG(
             n_channels=n_channels,
-            n_sources=n_channels,  # Default to square mixing
             n_models=self.n_models,
             n_mix=self.n_mix,
-            device=device,
-        )
-
-        # Fit model
-        self.model_.fit(
-            X,
-            max_iter=max_iter,
             lrate=lrate,
             do_mean=do_mean,
             do_sphere=do_sphere,
             do_newton=do_newton,
-            debug=debug or not self.verbose,
-            output_dir=output_dir,
+            device=device,
             **kwargs,
         )
+        self.model_.fit(X, max_iter=max_iter, verbose=self.verbose)
 
-        # Store history
         self.ll_history_ = self.model_.ll_history
         self.is_fitted_ = True
 
@@ -330,78 +264,24 @@ class AMICA:
         """
         Save model to file.
 
-        Parameters
-        ----------
-        filepath : str
-            Path to save the model
+        Not yet implemented: :class:`AMICATorchNG` is not an ``nn.Module`` and
+        has no ``state_dict()``. A persistence format is tracked in issue #36.
         """
-        if not self.is_fitted_:
-            raise ValueError("Cannot save unfitted model")
-        if self.backend == "ng":
-            raise NotImplementedError(
-                "save() is not implemented for backend='ng': AMICATorchNG "
-                "is not an nn.Module and has no state_dict()."
-            )
-
-        torch.save(
-            {
-                "model_state": self.model_.state_dict(),
-                "n_models": self.n_models,
-                "n_mix": self.n_mix,
-                "n_channels": self.model_.n_channels,
-                "n_sources": self.model_.n_sources,
-                "ll_history": self.ll_history_,
-            },
-            filepath,
+        raise NotImplementedError(
+            "save() is not implemented: AMICATorchNG is not an nn.Module and "
+            "has no state_dict(). Tracked in issue #36."
         )
-
-        if self.verbose:
-            print(f"Model saved to {filepath}")
 
     def load(self, filepath: str):
         """
         Load model from file.
 
-        Parameters
-        ----------
-        filepath : str
-            Path to load the model from
+        Not yet implemented: see :meth:`save`. Tracked in issue #36.
         """
-        if self.backend == "ng":
-            raise NotImplementedError(
-                "load() is not implemented for backend='ng': AMICATorchNG "
-                "has no save()/state_dict() counterpart."
-            )
-
-        checkpoint = torch.load(filepath, map_location="cpu")
-
-        # Setup device
-        if self.device is None:
-            device = setup_device()
-        else:
-            device = self.device
-
-        # Create model with saved dimensions
-        self.model_ = AMICATorch(
-            n_channels=checkpoint["n_channels"],
-            n_sources=checkpoint["n_sources"],
-            n_models=checkpoint["n_models"],
-            n_mix=checkpoint["n_mix"],
-            device=device,
+        raise NotImplementedError(
+            "load() is not implemented: AMICATorchNG has no save()/state_dict() "
+            "counterpart. Tracked in issue #36."
         )
-
-        # Load state
-        self.model_.load_state_dict(checkpoint["model_state"])
-        self.model_.to(device)
-
-        # Update attributes
-        self.n_models = checkpoint["n_models"]
-        self.n_mix = checkpoint["n_mix"]
-        self.ll_history_ = checkpoint.get("ll_history", [])
-        self.is_fitted_ = True
-
-        if self.verbose:
-            print(f"Model loaded from {filepath}")
 
     @classmethod
     def from_params_file(cls, params_file: str, **kwargs) -> "AMICA":
@@ -420,6 +300,8 @@ class AMICA:
         amica : AMICA
             Configured AMICA instance
         """
+        import json
+
         with open(params_file, "r") as f:
             params = json.load(f)
 

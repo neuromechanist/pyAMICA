@@ -1,10 +1,9 @@
-"""Tests for the public ``AMICA`` wrapper driving ``backend="ng"``.
+"""Tests for the public ``AMICA`` wrapper over ``AMICATorchNG``.
 
 These cover the wiring the wrapper adds on top of ``AMICATorchNG``: the
-constructor/fit guards, the save/load NotImplementedError, and the
-device-selection fallback that keeps the float64 NG default from crashing
-on Apple Silicon (MPS cannot represent float64). Real sample EEG data only
-(no synthetic/mock).
+save/load NotImplementedError and the device-selection fallback that keeps
+the float64 parity default from crashing on Apple Silicon (MPS cannot
+represent float64). Real sample EEG data only (no synthetic/mock).
 """
 
 import logging
@@ -40,30 +39,13 @@ def real_data() -> np.ndarray:
 @pytest.fixture(scope="module")
 def fitted_ng(real_data) -> AMICA:
     """A small real-data NG fit reused across the fitted-model assertions."""
-    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False, backend="ng")
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
     model.fit(real_data[:, :4096], max_iter=3, block_size=1024, seed=42)
     return model
 
 
-def test_backend_invalid_raises():
-    with pytest.raises(ValueError, match="backend must be"):
-        AMICA(backend="bogus")
-
-
-def test_ng_debug_guard(real_data):
-    model = AMICA(device="cpu", verbose=False, backend="ng")
-    with pytest.raises(ValueError, match="debug=True"):
-        model.fit(real_data[:, :256], max_iter=1, debug=True)
-
-
-def test_ng_output_dir_guard(real_data, tmp_path):
-    model = AMICA(device="cpu", verbose=False, backend="ng")
-    with pytest.raises(ValueError, match="output_dir"):
-        model.fit(real_data[:, :256], max_iter=1, output_dir=str(tmp_path))
-
-
 def test_ng_load_not_implemented(tmp_path):
-    model = AMICA(verbose=False, backend="ng")
+    model = AMICA(verbose=False)
     with pytest.raises(NotImplementedError, match="load"):
         model.load(str(tmp_path / "model.pt"))
 
@@ -76,7 +58,7 @@ def test_ng_save_not_implemented(fitted_ng, tmp_path):
 def test_ng_default_device_avoids_mps_float64(real_data, caplog):
     """The default float64 NG config must not crash when the auto-selected
     device is MPS; the wrapper falls back to CPU (regression for #29)."""
-    model = AMICA(n_models=1, n_mix=3, verbose=False, backend="ng")  # device=None
+    model = AMICA(n_models=1, n_mix=3, verbose=False)  # device=None
     with caplog.at_level(logging.WARNING, logger="pyAMICA.amica"):
         model.fit(real_data[:, :2048], max_iter=2, block_size=1024, seed=42)
 
@@ -93,7 +75,7 @@ def test_ng_explicit_mps_float64_raises(real_data):
     silently coerced to CPU; it should surface AMICATorchNG's ValueError.
     Raised at construction (before device placement), so no MPS hardware
     is needed."""
-    model = AMICA(device="mps", verbose=False, backend="ng")
+    model = AMICA(device="mps", verbose=False)
     with pytest.raises(ValueError, match="MPS does not support float64"):
         model.fit(real_data[:, :256], max_iter=1, block_size=128, seed=1)
 
@@ -104,7 +86,7 @@ def test_ng_explicit_mps_float64_raises(real_data):
 def test_ng_mps_float32_escape_hatch(real_data):
     """The documented workaround: dtype=torch.float32 lets the NG backend run
     on MPS."""
-    model = AMICA(device="mps", verbose=False, backend="ng")
+    model = AMICA(device="mps", verbose=False)
     model.fit(
         real_data[:, :2048], max_iter=2, block_size=1024, seed=42, dtype=torch.float32
     )

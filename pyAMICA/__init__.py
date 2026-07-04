@@ -9,14 +9,13 @@ Main Features:
 - GPU acceleration (CUDA/ROCm/MPS)
 - Multiple source models
 - Mixture of Generalized Gaussians
-- Natural gradient optimization
-- Automatic differentiation
+- Natural-gradient EM with Newton (Fortran parity)
 - Data preprocessing (mean removal, sphering)
 """
 
 from .version import __version__
 from .amica import AMICA
-from .torch_impl import AMICATorch, AMICATorchNG
+from .torch_impl import AMICATorchNG
 from . import amica_utils
 from . import amica_data
 from . import amica_newton
@@ -28,7 +27,6 @@ from .pyAMICA import AMICA as AMICA_NumPy
 
 __all__ = [
     "AMICA",
-    "AMICATorch",
     "AMICATorchNG",
     "AMICA_NumPy",
     "amica_utils",

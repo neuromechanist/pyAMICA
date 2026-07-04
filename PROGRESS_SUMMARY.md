@@ -27,7 +27,7 @@
 - Documented critical missing features and priorities
 
 ### 5. Natural-gradient EM backend at Fortran parity ✅ (epic #9 / issue #24)
-- Added `AMICATorchNG` (`torch_impl/amica_torch_ng.py`), wired into `AMICA(backend="ng")`
+- Added `AMICATorchNG` (`torch_impl/amica_torch_ng.py`); `AMICA` wraps it directly
 - Root-caused the parity gap: the natural-gradient A-update was transposed / multiplied on the
   wrong side (proven machine-exact); plus exact-EM mixture updates, the digamma rho update, the
   symmetric-ZCA sphere, the output transpose, and the NumPy Jacobian LL
@@ -35,7 +35,7 @@
 
 ## Current Results
 
-### Validation Metrics (`backend="ng"`, issue #24)
+### Validation Metrics (issue #24)
 - **Log-likelihood**: LL ~ -3.40 (matches Fortran -3.4018; the earlier ~13x scaling gap was an
   artifact of the pre-parity basic backend)
 - **Component correlation**: ~0.997 (Hungarian-matched, Newton positive-definite) -- clears the
@@ -44,8 +44,8 @@
 - **Multi-model** (`n_models>1`): M-step bit-exact vs Fortran; full-fit partition matching is
   partition-limited (~0.77), tracked in #27
 
-The pre-epic basic backend (`backend="torch"`, Adam) still shows the old ~0.78 correlation / ~13x
-LL scaling; it is retained but superseded by `backend="ng"` for parity work.
+The pre-epic basic backend (Adam/autograd) showed the old ~0.78 correlation / ~13x LL scaling; it
+was removed in #32, leaving `AMICATorchNG` as the sole PyTorch backend.
 
 ## Next Steps (Prioritized)
 
@@ -57,10 +57,10 @@ LL scaling; it is retained but superseded by `backend="ng"` for parity work.
 - Resolve the full-fit multi-model cross-correlation gap; includes the omitted per-model bias
   `c` update
 
-### 3. Retire the parked/superseded paths (issue #32)
-- `AMICATorchV2` is parked (superseded by `AMICATorchNG`); once `backend="ng"` is the de-facto
-  default, remove `AMICATorchV2` and promote `backend="ng"` to default, then reassess the basic
-  `backend="torch"` path (legacy mixture M-step bug tracked in #31)
+### 3. Retire the parked/superseded paths (issue #32) ✅ done
+- `AMICATorchV2` and the basic `AMICATorch` (Adam/autograd backends) were removed; `AMICATorchNG`
+  is now the sole PyTorch backend and `AMICA` wraps it directly. This also deleted the buggy
+  `GaussianMixtureICA` M-step, making #31 moot.
 
 ## Technical Achievements
 - Successfully handles MPS device limitations
@@ -77,5 +77,5 @@ LL scaling; it is retained but superseded by `backend="ng"` for parity work.
 6. Update gitignore for validation output
 
 ## Repository Status
-- Epic #9 (PyTorch backend Fortran parity) delivered via `AMICATorchNG` / `backend="ng"`
+- Epic #9 (PyTorch backend Fortran parity) delivered via `AMICATorchNG`
 - Remaining follow-ups tracked as issues #26 (adaptive PDF), #27 (multi-model), #30/#31 (legacy)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import scipy.special as sp
 import torch
 
 from pyAMICA.torch_impl import AMICATorchNG
@@ -165,6 +166,71 @@ def test_reported_ll_includes_jacobian_near_fortran_at_init():
     ll0 = m.ll_history[0]
     assert -6.0 < ll0 < -2.0, (
         f"init LL {ll0:.3f} outside Fortran range; Jacobian likely missing"
+    )
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_forward_ll_per_source_factorization_order():
+    """`_forward` must logsumexp over mixture components *per source* and only
+    then sum over sources (amica17.f90:1313-1360).
+
+    Guards the historical "issue #11" factorization-order bug for the default
+    single-model NG path with a fast, deterministic, independent NumPy
+    reference (no fit, no Fortran binary). Building the reference from NG's own
+    parameters, a regression that swapped the reduction order (sum over sources
+    before the mixture logsumexp) would match neither NG nor Fortran; the two
+    orderings are asserted to differ so the check has teeth.
+    """
+    data = _load_real_data()
+    ng = _fresh_ng()
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+
+    block = X_t[:, :256].contiguous()
+    # NG's per-sample block LL (n_models=1 -> logsumexp over the single model
+    # collapses to the model-0 logV).
+    ng_ll = ng._block_sample_ll(block).cpu().numpy()
+
+    # Independent NumPy reference from NG's own tensors.
+    block_np = block.cpu().numpy()
+    W = ng.W.cpu().numpy()[:, :, 0]
+    c = ng.c.cpu().numpy()[:, 0]
+    idx = ng.comp_list.cpu().numpy()[:, 0]
+    mu = ng.mu.cpu().numpy()[:, idx]
+    beta = ng.beta.cpu().numpy()[:, idx]
+    rho = ng.rho.cpu().numpy()[:, idx]
+    alpha = ng.alpha.cpu().numpy()[:, idx]
+    gm = float(ng.gm.cpu().numpy()[0])
+    sldet = float(ng.sldet)
+
+    b = block_np.T @ W - c  # (batch, n_sources)
+    n_mix, n_sources = mu.shape
+    # z0[sample, source, mix] = log alpha + log beta + generalized-Gaussian
+    # log-pdf of beta*(b - mu), matching _log_pdf_and_deriv's branches.
+    z0 = np.empty((b.shape[0], n_sources, n_mix))
+    for k in range(n_mix):
+        y = beta[k][None, :] * (b - mu[k][None, :])
+        abs_y = np.abs(y)
+        gg = -(abs_y ** rho[k][None, :]) - np.log(2.0) - sp.gammaln(1.0 + 1.0 / rho[k])
+        lap = -abs_y - np.log(2.0)
+        gau = -y * y - 0.5 * np.log(np.pi)
+        log_pdf = np.where(rho[k] == 2.0, gau, np.where(rho[k] == 1.0, lap, gg))
+        z0[:, :, k] = np.log(alpha[k])[None, :] + np.log(beta[k])[None, :] + log_pdf
+
+    # slogdet emits benign RuntimeWarnings on some LAPACK backends even for
+    # well-conditioned matrices; silence them (the value is verified against
+    # NG's torch slogdet by the assert below).
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        _, logdet_W = np.linalg.slogdet(W)
+    base = np.log(gm) + logdet_W + sldet
+    # Correct order: logsumexp over mixture, then sum over sources.
+    ll_correct = base + sp.logsumexp(z0, axis=2).sum(axis=1)
+    # Swapped (buggy) order: sum over sources first, then logsumexp over mixture.
+    ll_swapped = base + sp.logsumexp(z0.sum(axis=1), axis=1)
+
+    np.testing.assert_allclose(ng_ll, ll_correct, rtol=1e-10, atol=1e-10)
+    assert np.max(np.abs(ll_correct - ll_swapped)) > 1.0, (
+        "correct and swapped factorization orders should differ substantially"
     )
 
 
