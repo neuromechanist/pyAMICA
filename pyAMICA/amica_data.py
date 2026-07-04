@@ -222,7 +222,7 @@ def load_results(indir: str, compressed: bool = False) -> dict:
     del compressed  # legacy no-op; the format is raw binary, never .npz
     indir = Path(indir)
 
-    def _read(name, dtype=np.float64):
+    def _read(name, dtype: type = np.float64):
         path = indir / name
         return np.fromfile(path, dtype=dtype) if path.exists() else None
 
@@ -276,5 +276,15 @@ def load_results(indir: str, compressed: bool = False) -> dict:
     ll = _read("LL")
     if ll is not None:
         results["ll"] = ll
+
+    # Fail loudly on a partially-written / interrupted output directory rather
+    # than letting a downstream KeyError surface deep in a viz helper.
+    required = {"A", "W", "alpha", "mu", "beta", "rho", "comp_list", "ll"}
+    missing = required - results.keys()
+    if missing:
+        raise FileNotFoundError(
+            f"Incomplete AMICA output in {indir}: missing {sorted(missing)}. "
+            "The directory may be from an interrupted or partial run."
+        )
 
     return results

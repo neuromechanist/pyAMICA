@@ -55,7 +55,8 @@ def plot_convergence(
     figsize : tuple
         Figure size (width, height)
     compressed : bool
-        Whether results are compressed
+        Legacy no-op kept for signature compatibility; results are read from the
+        raw Fortran binary format, never compressed .npz (issue #30).
     """
     results = load_results(results_dir, compressed)
 
@@ -102,7 +103,8 @@ def plot_components(
     figsize : tuple
         Figure size (width, height)
     compressed : bool
-        Whether results are compressed
+        Legacy no-op kept for signature compatibility; results are read from the
+        raw Fortran binary format, never compressed .npz (issue #30).
     """
     results = load_results(results_dir, compressed)
 
@@ -158,7 +160,8 @@ def plot_model_comparison(
     figsize : tuple
         Figure size (width, height)
     compressed : bool
-        Whether results are compressed
+        Legacy no-op kept for signature compatibility; results are read from the
+        raw Fortran binary format, never compressed .npz (issue #30).
     """
     results = load_results(results_dir, compressed)
 
@@ -211,7 +214,8 @@ def plot_component_sharing(
     results_dir : str or Path
         Directory containing results
     compressed : bool
-        Whether results are compressed
+        Legacy no-op kept for signature compatibility; results are read from the
+        raw Fortran binary format, never compressed .npz (issue #30).
     """
     results = load_results(results_dir, compressed)
 
@@ -257,7 +261,8 @@ def plot_pdf_fits(
     figsize : tuple
         Figure size (width, height)
     compressed : bool
-        Whether results are compressed
+        Legacy no-op kept for signature compatibility; results are read from the
+        raw Fortran binary format, never compressed .npz (issue #30).
     """
     from .amica_pdf import compute_pdf
 
@@ -345,7 +350,8 @@ def create_report(
     output_file : str, optional
         Output file path (if None, show plots)
     compressed : bool
-        Whether results are compressed
+        Legacy no-op kept for signature compatibility; results are read from the
+        raw Fortran binary format, never compressed .npz (issue #30).
     """
     if output_file is not None:
         import matplotlib

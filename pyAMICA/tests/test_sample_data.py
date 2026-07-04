@@ -245,8 +245,9 @@ def test_cli_output_format_roundtrip(tmp_path):
         do_opt_block=False,
         outdir=str(outdir),
     )
+    # fit() persists the final result even though max_iter (15) is not a
+    # writestep (10000) multiple -- exercises the unconditional final write.
     model.fit(data)
-    model._write_results()
 
     # loadmodout reads the Fortran-format output. Before issue #30 the CLI wrote
     # .npy, so this raised FileNotFoundError for 'W'.
@@ -261,10 +262,68 @@ def test_cli_output_format_roundtrip(tmp_path):
     assert r["comp_list"].shape == (32, 1)
     assert int(r["comp_list"].min()) == 0 and int(r["comp_list"].max()) == 31
 
+    # Value-level round-trip: the loaded arrays equal the in-memory ones. Guards
+    # against a transpose/axis-order or dtype regression that the shape checks
+    # above would miss.
+    np.testing.assert_allclose(r["W"], model.W)
+    np.testing.assert_allclose(r["A"], model.A)
+    np.testing.assert_allclose(r["alpha"], model.alpha)
+    np.testing.assert_array_equal(r["comp_list"], model.comp_list)
+
     # viz helpers run without error on the loaded results.
     amica_viz.plot_convergence(str(outdir))
     amica_viz.plot_components(str(outdir), data=None, max_comps=3)
     amica_viz.plot_pdf_fits(str(outdir), data, max_comps=2)
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_cli_subprocess_output_loadable(tmp_path):
+    """The actual amica_cli entrypoint writes loadmodout-readable output.
+
+    Runs the CLI as a module on a short, stable config (real sample data) and
+    confirms loadmodout reads the result -- the direct regression for the #30
+    FileNotFoundError (the CLI previously wrote .npy). Kept short (few
+    iterations, Newton off) so it stays fast and avoids the separate long-fit
+    NaN of #39; the full 2000-iter integration run is test_sample_data_cli.
+    """
+    import json
+    import subprocess
+    import sys
+
+    params = {
+        "files": [eeglab_data_file],
+        "data_dim": 32,
+        "field_dim": [30504],
+        "num_models": 1,
+        "num_mix": 3,
+        "max_iter": 8,
+        "writestep": 4,
+        "do_newton": False,
+        "do_opt_block": False,
+        "block_size": 512,
+    }
+    params_file = tmp_path / "params.json"
+    params_file.write_text(json.dumps(params))
+    outdir = tmp_path / "cli_out"
+
+    # amica_cli uses relative imports, so run it as a module from the repo root.
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pyAMICA.amica_cli",
+            str(params_file),
+            "--outdir",
+            str(outdir),
+        ],
+        check=True,
+        cwd=Path(__file__).parent.parent.parent,
+    )
+
+    # loadmodout reads the CLI output (previously raised FileNotFoundError).
+    out = loadmodout(outdir)
+    assert out.W.shape == (32, 32, 1)
+    assert np.all(np.isfinite(out.W))
 
 
 if __name__ == "__main__":

@@ -407,6 +407,15 @@ class AMICA:
         # Main optimization loop
         self._optimize()
 
+        # Always persist the final converged result. _write_results is otherwise
+        # only called on writestep boundaries during the loop, so a run whose
+        # last iteration is not a writestep multiple (or that stops early) would
+        # never save the final state. Guard on a finite likelihood so a run that
+        # diverged to a non-finite LL (issue #39) does not overwrite the last
+        # good on-disk result with NaNs.
+        if len(self.ll) > 0 and np.isfinite(self.ll[-1]):
+            self._write_results()
+
         return self
 
     def _preprocess_data(self, data: np.ndarray):
@@ -1173,10 +1182,18 @@ class AMICA:
         """Write current results to disk in the Fortran AMICA binary format.
 
         Writes raw little-endian float64 (and int32 ``comp_list``) files with no
-        extension, matching the byte layout that ``amica_load.loadmodout`` reads
-        and that the Fortran reference (``amicaout``) writes. This makes pyAMICA
-        output directly comparable to, and loadable by the same reader as, the
-        Fortran reference (issue #30). ``load_results`` reads this format back.
+        extension, in the layout that ``amica_load.loadmodout`` reads (and that
+        ``load_results`` reads back), so pyAMICA output is loadable by the same
+        reader as the Fortran reference (issue #30).
+
+        For ``num_models == 1`` (the CLI/sample-data case) the bytes are
+        identical to the Fortran ``amicaout`` ``W``/``c``/``comp_list`` files, so
+        the two are directly comparable. For ``num_models > 1`` the per-model
+        axis nesting differs from genuine Fortran column-major storage: the
+        output stays self-consistent (``loadmodout``/``load_results`` recover it
+        losslessly, matching ``loadmodout``'s own C-order model-axis convention),
+        but is not byte-identical to multi-model Fortran output. Multi-model
+        Fortran interop is out of scope here (see #27).
         """
         if not self.outdir.exists():
             self.outdir.mkdir(parents=True)
@@ -1190,9 +1207,11 @@ class AMICA:
         # (loadmodout derives A from W and S), but written here so load_results
         # can restore it directly for the viz helpers; loadmodout ignores it.
         _w("A", self.A)
-        # W: internal (nw, nw, num_models); a C-order dump matches the Fortran
-        # 'W' byte layout (the internal-vs-true-unmixing transpose of issue #24
-        # cancels against Fortran's column-major storage).
+        # W: internal (nw, nw, num_models). For a single model the C-order dump
+        # is byte-identical to Fortran's 'W' (the internal-vs-true-unmixing
+        # transpose of issue #24 cancels against Fortran's column-major storage);
+        # for num_models>1 only the model-axis nesting differs (see the docstring
+        # note), and loadmodout reads it back with the matching C-order.
         _w("W", self.W)
         # Sphering and mean.
         _w("S", self.sphere)
