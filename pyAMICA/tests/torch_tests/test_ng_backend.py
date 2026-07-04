@@ -682,3 +682,78 @@ def test_end_to_end_correlation_vs_fortran():
     # The docstring's headline claim: Newton is positive-definite and actually
     # firing, not silently falling back to natural gradient every iteration.
     assert m.n_newton_fallbacks == 0
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_full_fit_parity_numpy_vs_ng(tmp_path):
+    """Full-fit parity: independently fitting AMICA_NumPy and AMICATorchNG on
+    the real sample data (single model, matched config) converges to the same
+    solution. Locks the NumPy<->NG relationship end-to-end, on top of the
+    per-block sufficient-stat tests that already pin the update math to 1e-8.
+
+    Measured on the sample data (issue #37): Hungarian-matched total-spatial-
+    filter correlation is 1.000000 (32/32 bijective) and the per-sample-per-
+    channel LL agrees to ~1e-5. NumPy reports the *un-normalized* total LL while
+    NG reports it normalized by (n_samples * n_channels), so the NumPy value is
+    normalized here before comparing. A full fit is not bit-identical across
+    NumPy and PyTorch (float reduction order / BLAS vs ATen), hence tolerances
+    rather than exact equality.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    data = _load_real_data()  # (NW, FIELD) float64
+    n_samples = data.shape[1]
+
+    cfg = dict(
+        block_size=512,
+        lrate=0.05,
+        lratefact=0.5,
+        do_newton=True,
+        newt_start=50,
+        newtrate=1.0,
+        rho0=1.5,
+        minrho=1.0,
+        maxrho=2.0,
+        rholrate=0.05,
+        invsigmin=0.0,
+        invsigmax=100.0,
+        doscaling=True,
+        do_mean=True,
+        do_sphere=True,
+    )
+
+    npm = AMICA_NumPy(
+        use_tqdm=False,
+        writestep=10000,
+        num_models=1,
+        num_mix=NMIX,
+        seed=SEED,
+        max_decs=5,
+        max_iter=150,
+        outdir=str(tmp_path / "np_out"),
+        **cfg,
+    )
+    npm.fit(data)
+    filt_np = npm.get_weights() @ npm.sphere
+    ll_np = npm.ll[-1] / (n_samples * NW)  # -> per-sample-per-channel, like NG
+
+    ng = _fresh_ng(maxdecs=5, **cfg)
+    ng.fit(data, max_iter=150, verbose=False)
+    filt_ng = ng.get_unmixing_matrix(0) @ ng.sphere.cpu().numpy()
+    ll_ng = ng.ll_history[-1]
+
+    a = filt_np / np.linalg.norm(filt_np, axis=1, keepdims=True)
+    b = filt_ng / np.linalg.norm(filt_ng, axis=1, keepdims=True)
+    corr = np.abs(a @ b.T)
+    row, col = linear_sum_assignment(-corr)
+    matched = corr[row, col]
+
+    assert len(np.unique(col)) == NW, "NumPy<->NG component matching is not bijective"
+    assert matched.min() > 0.99, (
+        f"min NumPy<->NG matched filter correlation {matched.min():.4f} <= 0.99"
+    )
+    assert abs(ll_np - ll_ng) < 1e-2, (
+        f"normalized LL disagreement {abs(ll_np - ll_ng):.3e} (np={ll_np:.6f}, "
+        f"ng={ll_ng:.6f})"
+    )
