@@ -731,6 +731,11 @@ def test_full_fit_parity_numpy_vs_ng(tmp_path):
         seed=SEED,
         max_decs=5,
         max_iter=150,
+        # AMICA_NumPy defaults do_opt_block=True, which auto-retunes block_size
+        # from data-timing at fit(), overriding the shared block_size=512 (NG
+        # has no such auto-tune). Disable it so both backends genuinely run the
+        # matched block size.
+        do_opt_block=False,
         outdir=str(tmp_path / "np_out"),
         **cfg,
     )
@@ -746,10 +751,12 @@ def test_full_fit_parity_numpy_vs_ng(tmp_path):
     a = filt_np / np.linalg.norm(filt_np, axis=1, keepdims=True)
     b = filt_ng / np.linalg.norm(filt_ng, axis=1, keepdims=True)
     corr = np.abs(a @ b.T)
+    # linear_sum_assignment on a square matrix returns a full permutation, so
+    # `matched` is already a bijective NumPy<->NG pairing; the correlation gate
+    # below is the real check.
     row, col = linear_sum_assignment(-corr)
     matched = corr[row, col]
 
-    assert len(np.unique(col)) == NW, "NumPy<->NG component matching is not bijective"
     assert matched.min() > 0.99, (
         f"min NumPy<->NG matched filter correlation {matched.min():.4f} <= 0.99"
     )
