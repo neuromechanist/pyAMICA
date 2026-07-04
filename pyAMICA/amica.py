@@ -265,22 +265,22 @@ class AMICA:
         Save model to file.
 
         Not yet implemented: :class:`AMICATorchNG` is not an ``nn.Module`` and
-        has no ``state_dict()``. A persistence format is tracked in issue #15.
+        has no ``state_dict()``. A persistence format is tracked in issue #36.
         """
         raise NotImplementedError(
             "save() is not implemented: AMICATorchNG is not an nn.Module and "
-            "has no state_dict(). Tracked in issue #15."
+            "has no state_dict(). Tracked in issue #36."
         )
 
     def load(self, filepath: str):
         """
         Load model from file.
 
-        Not yet implemented: see :meth:`save`. Tracked in issue #15.
+        Not yet implemented: see :meth:`save`. Tracked in issue #36.
         """
         raise NotImplementedError(
             "load() is not implemented: AMICATorchNG has no save()/state_dict() "
-            "counterpart. Tracked in issue #15."
+            "counterpart. Tracked in issue #36."
         )
 
     @classmethod

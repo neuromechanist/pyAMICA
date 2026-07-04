@@ -5,6 +5,10 @@ Example of using the PyTorch AMICA implementation.
 Uses the public :class:`~pyAMICA.AMICA` interface, which wraps the
 natural-gradient EM backend (``AMICATorchNG``) that matches the Fortran
 reference.
+
+Note: model persistence (``AMICA.save``/``load``) is not yet implemented for
+this backend (issue #36), so this example fits and inspects the model
+in-process rather than writing it to disk.
 """
 
 import json

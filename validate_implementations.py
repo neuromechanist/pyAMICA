@@ -24,6 +24,29 @@ from pyAMICA.torch_impl.utils import load_eeglab_data
 # params.json down to what the natural-gradient backend understands.
 _NG_PARAMS = set(inspect.signature(AMICATorchNG).parameters) - {"n_channels"}
 
+# params.json keys consumed explicitly (as AMICA()/fit() args or run metadata)
+# rather than forwarded as AMICATorchNG constructor kwargs. Any key that is
+# neither here nor an AMICATorchNG kwarg is a setting the NG backend cannot
+# honor; run_pytorch_amica warns about those so a parity comparison against the
+# Fortran run can't silently diverge.
+_HANDLED_KEYS = {
+    "files",
+    "outdir",
+    "data_dim",
+    "field_dim",
+    "num_models",
+    "num_mix",
+    "num_comps",
+    "max_iter",
+    "max_decs",
+    "lrate",
+    "do_mean",
+    "do_sphere",
+    "do_newton",
+    "seed",
+    "device",
+}
+
 
 def set_all_seeds(seed: int):
     """Set all random seeds for reproducibility."""
@@ -230,18 +253,40 @@ def run_pytorch_amica(
     # Set seed for reproducibility (AMICATorchNG also seeds its own init).
     set_all_seeds(seed)
 
+    # AMICATorchNG cannot do PCA source reduction (n_sources == n_channels), so
+    # a Fortran run with num_comps < data_dim would not be an apples-to-apples
+    # comparison. Fail loudly rather than silently running full-rank.
+    n_comps = params.get("num_comps", params["data_dim"])
+    if n_comps != params["data_dim"]:
+        raise ValueError(
+            f"num_comps={n_comps} != data_dim={params['data_dim']}: "
+            "AMICATorchNG does not support PCA source reduction, so the "
+            "PyTorch<->Fortran comparison would not be apples-to-apples."
+        )
+
     # Map the sample params.json onto AMICATorchNG constructor kwargs. The
     # backend seeds init, builds the symmetric-ZCA sphere, and starts from an
-    # identity mixing matrix internally, so no manual parameter poking is
-    # needed (unlike the removed basic backend). AMICA.fit() handles device
-    # selection (and the MPS/float64 -> CPU fallback for the parity default).
+    # identity-plus-small-perturbation mixing matrix internally, so no manual
+    # parameter poking is needed (unlike the removed basic backend). AMICA.fit()
+    # handles device selection (and the MPS/float64 -> CPU fallback).
     ng_kwargs = {k: v for k, v in params.items() if k in _NG_PARAMS}
     if "max_decs" in params:  # json name -> AMICATorchNG's `maxdecs`
         ng_kwargs["maxdecs"] = params["max_decs"]
-    # lrate/do_mean/do_sphere/do_newton are passed explicitly to fit(); drop
-    # them from **kwargs to avoid duplicate keyword arguments.
-    for k in ("lrate", "do_mean", "do_sphere", "do_newton"):
+    # lrate/do_mean/do_sphere/do_newton/seed/device are passed explicitly to
+    # AMICA()/fit(); drop them from **kwargs to avoid duplicate keyword args.
+    for k in ("lrate", "do_mean", "do_sphere", "do_newton", "seed", "device"):
         ng_kwargs.pop(k, None)
+
+    # A parity harness must not silently ignore requested settings: warn about
+    # any params.json key the NG backend cannot honor (the Fortran run may use
+    # them, so the two runs would then be configured differently).
+    ignored = sorted(set(params) - set(ng_kwargs) - _HANDLED_KEYS)
+    if ignored:
+        print(
+            "WARNING: params.json settings with no AMICATorchNG equivalent are "
+            f"ignored (NG uses its own behavior): {ignored}. The Fortran run "
+            "may honor them, so a parity comparison can differ."
+        )
 
     model = AMICA(
         n_models=params.get("num_models", 1),

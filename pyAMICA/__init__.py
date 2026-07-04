@@ -9,8 +9,7 @@ Main Features:
 - GPU acceleration (CUDA/ROCm/MPS)
 - Multiple source models
 - Mixture of Generalized Gaussians
-- Natural gradient optimization
-- Automatic differentiation
+- Natural-gradient EM with Newton (Fortran parity)
 - Data preprocessing (mean removal, sphering)
 """
 

@@ -27,7 +27,7 @@
 - Documented critical missing features and priorities
 
 ### 5. Natural-gradient EM backend at Fortran parity ✅ (epic #9 / issue #24)
-- Added `AMICATorchNG` (`torch_impl/amica_torch_ng.py`), wired into `AMICA(backend="ng")`
+- Added `AMICATorchNG` (`torch_impl/amica_torch_ng.py`); `AMICA` wraps it directly
 - Root-caused the parity gap: the natural-gradient A-update was transposed / multiplied on the
   wrong side (proven machine-exact); plus exact-EM mixture updates, the digamma rho update, the
   symmetric-ZCA sphere, the output transpose, and the NumPy Jacobian LL
@@ -35,7 +35,7 @@
 
 ## Current Results
 
-### Validation Metrics (`backend="ng"`, issue #24)
+### Validation Metrics (issue #24)
 - **Log-likelihood**: LL ~ -3.40 (matches Fortran -3.4018; the earlier ~13x scaling gap was an
   artifact of the pre-parity basic backend)
 - **Component correlation**: ~0.997 (Hungarian-matched, Newton positive-definite) -- clears the
@@ -77,5 +77,5 @@ was removed in #32, leaving `AMICATorchNG` as the sole PyTorch backend.
 6. Update gitignore for validation output
 
 ## Repository Status
-- Epic #9 (PyTorch backend Fortran parity) delivered via `AMICATorchNG` / `backend="ng"`
+- Epic #9 (PyTorch backend Fortran parity) delivered via `AMICATorchNG`
 - Remaining follow-ups tracked as issues #26 (adaptive PDF), #27 (multi-model), #30/#31 (legacy)

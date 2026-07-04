@@ -133,7 +133,7 @@
 
 ## Validation Status
 
-### Convergence Behavior (`backend="ng"`, issue #24)
+### Convergence Behavior (issue #24)
 
 | Metric | Fortran | PyTorch NG | Match? | Notes |
 |--------|---------|-----------|--------|-------|
@@ -145,7 +145,7 @@
 The removed pre-epic basic backend showed the old offset (initial LL ~-46, final -44 to -46;
 ~0.78 correlation); `AMICATorchNG` is now the sole backend and reaches parity.
 
-### Component Quality (`backend="ng"`)
+### Component Quality
 
 | Metric | Status | Notes |
 |--------|--------|-------|
@@ -153,7 +153,7 @@ The removed pre-epic basic backend showed the old offset (initial LL ~-46, final
 | **Mixing Matrix Recovery** | ✅ | Ascends to Fortran fixed point |
 | **Source Separation** | ✅ real-data | Validated on sample EEG (no synthetic; NO-MOCK policy) |
 
-## Remaining Roadmap (`backend="ng"`)
+## Remaining Roadmap
 
 The epic (#9 / #24) delivered core parity on `AMICATorchNG`. Done on the NG path: natural-gradient
 EM at the Fortran fixed point, Newton + Fortran-style ramping (positive-definite), exact-EM mixture
@@ -177,13 +177,13 @@ updates, symmetric-ZCA sphere, Jacobian LL, and outlier rejection (`do_reject`).
 
 ## Migration Readiness
 
-### `backend="ng"` at Fortran parity ✅
+### AMICATorchNG at Fortran parity ✅
 - Single-model LL ~ -3.40 and component correlation ~0.997 vs Fortran (issue #24)
 - NumPy backend carries the same fixes
 - Multi-model M-step bit-exact; full-fit partition matching tracked in #27
 
 ### Recommendation
-1. Use `backend="ng"` for parity-critical work (default for that use case)
+1. `AMICATorchNG` is the sole PyTorch backend and reaches Fortran parity
 2. Keep `validate_implementations.py` (real sample data + Fortran binary) green as source of truth
 3. Close out adaptive-PDF (#26) and multi-model (#27) before removing the Fortran binary from the loop
 
