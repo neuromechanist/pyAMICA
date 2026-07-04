@@ -58,16 +58,6 @@ def test_sample_data_scikit(tmp_path):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason="legacy AMICA._optimize() writes results as .npy files "
-    "(save_results in pyAMICA.py) but loadmodout() expects raw "
-    "Fortran-format binary files with no extension; the round-trip "
-    "raises FileNotFoundError for 'W' before the correlation check is "
-    "even reached. Independent legacy-CLI bug tracked in issue #30; no "
-    "raises= constraint since the failure mode is not a clean "
-    "AssertionError.",
-    strict=True,
-)
 def test_sample_data_cli():
     """Test pyAMICA using CLI interface."""
     import subprocess
@@ -215,6 +205,57 @@ def test_sample_data_numpy_vs_fortran(tmp_path):
     rows, cols = linear_sum_assignment(1 - corr)
     mean_corr = float(corr[rows, cols].mean())
     assert mean_corr > 0.9, f"NumPy vs Fortran component corr {mean_corr:.3f} <= 0.9"
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_cli_output_format_roundtrip(tmp_path):
+    """The Fortran-format writer round-trips through loadmodout and load_results,
+    and the viz helpers consume the result (issue #30; viz smoke for #15).
+
+    Real sample data, short fit -- this checks the on-disk format contract and
+    array shapes, not convergence (the full CLI-vs-Fortran correlation is
+    test_sample_data_cli). Fast, so not marked slow.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from pyAMICA.amica_data import load_results
+    from pyAMICA import amica_viz
+
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )[:, :4096]
+    outdir = tmp_path / "out"
+    model = AMICA(
+        use_tqdm=False,
+        num_models=1,
+        num_mix=3,
+        seed=1,
+        max_iter=15,
+        writestep=10000,
+        do_opt_block=False,
+        outdir=str(outdir),
+    )
+    model.fit(data)
+    model._write_results()
+
+    # loadmodout reads the Fortran-format output. Before issue #30 the CLI wrote
+    # .npy, so this raised FileNotFoundError for 'W'.
+    out = loadmodout(outdir)
+    assert out.W.shape == (32, 32, 1)
+
+    # load_results returns AMICA's internal shapes for the viz helpers.
+    r = load_results(str(outdir))
+    assert r["A"].shape == (32, 32)
+    assert r["W"].shape == (32, 32, 1)
+    assert r["alpha"].shape == (3, 32)
+    assert r["comp_list"].shape == (32, 1)
+    assert int(r["comp_list"].min()) == 0 and int(r["comp_list"].max()) == 31
+
+    # viz helpers run without error on the loaded results.
+    amica_viz.plot_convergence(str(outdir))
+    amica_viz.plot_components(str(outdir), data=None, max_comps=3)
+    amica_viz.plot_pdf_fits(str(outdir), data, max_comps=2)
 
 
 if __name__ == "__main__":
