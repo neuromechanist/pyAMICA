@@ -59,26 +59,28 @@ def test_sample_data_scikit(tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="Progress, not passing: the #30 format bug is fixed (loadmodout reads "
-    "the CLI output) and the #39 NaN is handled (pinned seed=0 + restart-on-NaN "
-    "complete all 2000 iters with a finite LL, no early stop). The remaining "
-    "failure is the #41 long-run drift: at ~150 iters seed=0 matches Fortran "
-    "32/32 (min corr 0.92), but by 2000 iters the LL degrades (-3.404 -> -3.409) "
-    "and some component correlations drop below the 0.8 gate. Un-xfail once #41 "
-    "(long-run convergence-schedule parity) is fixed.",
+    reason="Progress, not passing. Fixed: the #30 format, the #39 NaN (seed pin + "
+    "restart), and the #41 LL degradation -- the lrate-ceiling ratchet "
+    "(_check_convergence) now keeps the long run improving (seed=0 LL -3.399 at "
+    "2000 iters, better than the ~150-iter -3.404 and Fortran's -3.402; 150-iter "
+    "mean-corr parity preserved). Remaining: this test's strict all-32-components "
+    ">0.8 gate still fails (~27/32) because pyAMICA converges to a comparable/"
+    "slightly-better-LL but different-partition solution than the Fortran "
+    "reference on a few ill-determined components -- a solution-basin difference "
+    "(cf. the single-model tail of #27), not a drift. The project's other parity "
+    "test (test_sample_data_numpy_vs_fortran) uses the more appropriate mean>0.9 "
+    "bar and passes.",
     strict=True,
 )
 def test_sample_data_cli():
     """Full CLI-vs-Fortran integration test (issue #30 format + #39/#41 stability).
 
     Runs the real amica_cli entrypoint for the full 2000-iter sample config and
-    Hungarian-matches the loadmodout-read W against the Fortran reference. A
-    fixed seed is pinned: the NumPy backend can diverge to a non-finite
-    likelihood on unlucky random inits (a stochastic instability shared with
-    Fortran, which restarts early NaNs and exits late ones; #39), so an
-    integration test must not depend on a random draw. seed=0 is a stable basin
-    that finishes 2000 iters; the restart-on-NaN mechanism (#39) additionally
-    recovers early NaNs. Currently xfail on the #41 long-run drift (see above).
+    Hungarian-matches the loadmodout-read W against the Fortran reference with a
+    strict all-32-components > 0.8 gate. A fixed seed is pinned so the test does
+    not depend on a random init (see #39). Currently xfail on a residual
+    solution-basin difference (see the xfail reason above); the LL-degradation
+    drift itself is fixed (#41).
     """
     import subprocess
     import sys

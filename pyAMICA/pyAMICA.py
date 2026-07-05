@@ -205,6 +205,9 @@ class AMICA:
         self.pcadb = params.get("pcadb")
         self.writestep = params.get("writestep", 100)
         self.max_decs = params.get("max_decs", 5)
+        # Consecutive small-increase iterations tolerated before stopping
+        # (Fortran maxincs, amica17.f90:1087).
+        self.maxincs = params.get("maxincs", 5)
         # Restart-on-NaN (Fortran amica17.f90:1027-1060): if the LL goes
         # non-finite at iter <= restartiter, reinitialize and start over, up to
         # maxrestarts times; a later NaN stops the fit (Fortran exits too).
@@ -1114,11 +1117,19 @@ class AMICA:
                         if self.verbose or not self.use_tqdm:
                             self.logger.info(detailed_log)
 
-                # Check convergence
-                converged, reason = self._check_convergence(numdecs, numincs)
+                # Check convergence (threads numdecs/numincs back so they
+                # accumulate across iterations, and ratchets the lrate ceiling).
+                converged, reason, numdecs, numincs = self._check_convergence(
+                    numdecs, numincs
+                )
                 if converged:
                     convergence_reason = reason
                     break
+
+                # Reset the decrease counter when Newton turns on (Fortran
+                # amica17.f90:1105-1108).
+                if self.do_newton and iter == self.newt_start:
+                    numdecs = 0
 
                 # Reject outliers if requested
                 if (
@@ -1181,61 +1192,106 @@ class AMICA:
 
     def _check_convergence(
         self, numdecs: int, numincs: int
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> Tuple[bool, Optional[str], int, int]:
         """
-        Check convergence criteria.
+        Check convergence criteria and ratchet the learning rate.
+
+        Mirrors Fortran's per-iteration convergence handling
+        (amica17.f90:1062-1103). On a likelihood decrease Fortran does NOT stop
+        at ``maxdecs``; it lowers the learning-rate *ceiling* (``lrate0``, and
+        ``newtrate``/``rholrate0`` under Newton) and continues, which is what
+        keeps a long run from oscillating and drifting past its converged
+        solution (issue #41). The updated ``numdecs``/``numincs`` counters are
+        returned so they accumulate across iterations (they previously did not).
 
         Parameters
         ----------
         numdecs : int
-            Number of consecutive likelihood decreases
+            Consecutive-decrease counter (Fortran ``numdecs``).
         numincs : int
-            Number of consecutive small likelihood increases
+            Consecutive small-increase counter (Fortran ``numincs``).
 
         Returns
         -------
         converged : bool
-            True if optimization should stop
+            True if optimization should stop.
         reason : str or None
-            Reason for convergence if converged, None otherwise
+            Reason for stopping, or None.
+        numdecs, numincs : int
+            The updated counters (must be threaded back into the loop).
         """
         if len(self.ll) == 0:
-            return False, None
+            return False, None, numdecs, numincs
 
         # Check for non-finite LL: a singular W makes logdet -> -inf (not NaN),
         # so guard on isfinite, not isnan alone, or a degenerate model would run
         # to max_iter undetected.
         if not np.isfinite(self.ll[-1]):
-            return True, "Non-finite likelihood (NaN/-inf) encountered"
+            return (
+                True,
+                "Non-finite likelihood (NaN/-inf) encountered",
+                numdecs,
+                numincs,
+            )
 
         # The remaining checks compare consecutive iterations; skip until there
         # are two LL values -- the first iteration, or the first iteration after
         # a restart cleared the LL history (guard on len, not self.iter, which
         # keeps counting across restarts).
         if len(self.ll) < 2:
-            return False, None
+            return False, None, numdecs, numincs
 
-        # Check for likelihood decrease
+        grad_norm = self.nd[-1] if (self.use_grad_norm and len(self.nd) > 0) else None
+
+        # Likelihood decrease (Fortran amica17.f90:1062-1083): reduce the current
+        # lrate, and once maxdecs decreases have accrued, ratchet the ceiling
+        # (lrate0, plus newtrate/rholrate0 under Newton) down and continue --
+        # NOT stop. Only a lrate/gradient floor terminates on a decrease.
         if self.ll[-1] < self.ll[-2]:
-            numdecs += 1
-            if self.lrate <= self.minlrate or numdecs >= self.max_decs:
-                return True, "Converged due to likelihood decrease"
+            if self.lrate <= self.minlrate or (
+                grad_norm is not None and grad_norm <= self.min_grad_norm
+            ):
+                return (
+                    True,
+                    "Converged: minimum change threshold met",
+                    numdecs,
+                    numincs,
+                )
             self.lrate *= self.lratefact
+            self.rholrate *= self.rholratefact
+            numdecs += 1
+            if numdecs >= self.max_decs:
+                self.lrate0 *= self.lratefact
+                if self.iter > self.newt_start:
+                    self.rholrate0 *= self.rholratefact
+                if self.do_newton and self.iter > self.newt_start:
+                    self.newtrate *= self.lratefact
+                numdecs = 0
 
-        # Check for small likelihood increase
+        # Small likelihood increase (Fortran :1084-1096): stop after maxincs
+        # consecutive tiny gains; reset on any larger gain.
         if self.use_min_dll:
             if self.ll[-1] - self.ll[-2] < self.min_dll:
                 numincs += 1
-                if numincs > self.max_decs:
-                    return True, "Converged due to small likelihood increase"
+                if numincs > self.maxincs:
+                    return (
+                        True,
+                        "Converged: small likelihood increase",
+                        numdecs,
+                        numincs,
+                    )
             else:
                 numincs = 0
 
-        # Check gradient norm
-        if self.use_grad_norm and self.nd[-1] < self.min_grad_norm:
-            return True, "Converged due to small gradient norm"
+        # Gradient-norm floor (Fortran :1097-1103).
+        if (
+            self.use_grad_norm
+            and grad_norm is not None
+            and grad_norm <= self.min_grad_norm
+        ):
+            return True, "Converged: small gradient norm", numdecs, numincs
 
-        return False, None
+        return False, None, numdecs, numincs
 
     def _reject_outliers(self):
         """Reject outlier data points based on likelihood."""
