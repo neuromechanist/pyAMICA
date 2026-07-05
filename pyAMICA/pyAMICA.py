@@ -211,6 +211,11 @@ class AMICA:
         self.restartiter = params.get("restartiter", 10)
         self.maxrestarts = params.get("maxrestarts", 3)
         self.numrestarts = 0
+        # Set by fit(): whether the fit ended with a finite likelihood, and the
+        # reason it stopped. converged=False signals a terminal non-finite LL
+        # (diverged, no results written), which callers/CLI must surface.
+        self.converged = False
+        self.stop_reason = None
         self.min_dll = params.get("min_dll", 1e-9)
         self.min_grad_norm = params.get("min_grad_norm", 1e-7)
         self.use_min_dll = params.get("use_min_dll", True)
@@ -413,13 +418,24 @@ class AMICA:
         # Main optimization loop
         self._optimize()
 
+        # Record the outcome: a terminal non-finite LL means the fit diverged
+        # (even restart-on-NaN could not recover), which callers/CLI must be
+        # able to detect rather than silently trusting model.A/W.
+        self.converged = len(self.ll) > 0 and bool(np.isfinite(self.ll[-1]))
+        if not self.converged:
+            self.logger.error(
+                "AMICA did not converge: the log-likelihood is non-finite "
+                "(diverged after %d restart(s)); results were not written.",
+                self.numrestarts,
+            )
+
         # Always persist the final converged result. _write_results is otherwise
         # only called on writestep boundaries during the loop, so a run whose
         # last iteration is not a writestep multiple (or that stops early) would
         # never save the final state. Guard on a finite likelihood so a run that
         # diverged to a non-finite LL (issue #39) does not overwrite the last
         # good on-disk result with NaNs.
-        if len(self.ll) > 0 and np.isfinite(self.ll[-1]):
+        if self.converged:
             self._write_results()
 
         return self
@@ -541,21 +557,19 @@ class AMICA:
         self._update_unmixing_matrices()
 
     def _reinitialize_for_restart(self):
-        """Draw a fresh initialization after a non-finite likelihood.
+        """Redraw the mixing matrix after a non-finite likelihood.
 
-        Mirrors Fortran's restart path (amica17.f90:1032-1053): clear the
-        learned parameters so ``_initialize_parameters`` re-draws them from the
-        (already-advanced) RNG -- a new random basin -- and reset the learning
-        rate and the LL/gradient-norm history so the restarted fit is judged
-        from scratch. Preprocessing (mean/sphere) and the RNG are preserved.
+        Matches Fortran's restart path (amica17.f90:1032-1053): it re-draws
+        *only* the mixing matrix ``A`` (from the already-advanced RNG, a new
+        random basin) and recomputes ``comp_list``/``W``; the last-successful
+        mixture parameters (``mu``/``alpha``/``beta``/``rho``/``gm``/``c``) are
+        kept, not cold-reset. The learning rate and the LL/gradient-norm history
+        are reset so the restarted run is judged from scratch; preprocessing
+        (mean/sphere) and the RNG are preserved.
         """
+        # Only A is nulled; _initialize_parameters redraws it (and unconditionally
+        # rebuilds comp_list and W) while leaving the still-finite mixture params.
         self.A = None
-        self.mu = None
-        self.alpha = None
-        self.beta = None
-        self.rho = None
-        self.gm = None
-        self.c = None
         self._initialize_parameters()
         self.lrate = self.lrate0
         self.ll = []
@@ -1008,9 +1022,9 @@ class AMICA:
         start_time = time.time()
         convergence_reason = None
         final_iter = 0
-        # Iteration at which the current (post-restart) run began; the
-        # restart-on-NaN window is restartiter iterations after each restart.
-        restart_offset = 0
+        # Per-fit restart counter (reset here so a refit on the same instance
+        # gets a fresh restart budget).
+        self.numrestarts = 0
 
         # Determine whether to use tqdm or per-line printing
         use_tqdm_progress = self.use_tqdm and not self.verbose
@@ -1045,17 +1059,20 @@ class AMICA:
                 self._update_parameters(updates)
 
                 # Restart-on-NaN (Fortran amica17.f90:1027-1056): an early
-                # non-finite LL usually means an unlucky init, so reinitialize
-                # and start over up to maxrestarts times. A later NaN falls
-                # through to _check_convergence, which stops (Fortran exits too).
+                # non-finite LL usually means an unlucky init, so redraw A and
+                # start over, up to maxrestarts times, within the first
+                # restartiter iterations (Fortran's absolute `iter <= restartiter`
+                # window; the iteration counter is not reset on restart here). A
+                # later NaN falls through to _check_convergence, which stops
+                # (Fortran exits too).
                 if (
                     len(self.ll) > 0
                     and not np.isfinite(self.ll[-1])
-                    and (iter - restart_offset) <= self.restartiter
+                    and iter <= self.restartiter
                     and self.numrestarts < self.maxrestarts
                 ):
                     self.numrestarts += 1
-                    self.logger.info(
+                    self.logger.warning(
                         "Non-finite LL at iter %d; reinitializing and starting "
                         "over (restart %d of %d).",
                         iter + 1,
@@ -1063,7 +1080,6 @@ class AMICA:
                         self.maxrestarts,
                     )
                     self._reinitialize_for_restart()
-                    restart_offset = iter + 1
                     continue
 
                 # Calculate metrics for logging/progress
@@ -1151,7 +1167,9 @@ class AMICA:
                     with open(self.file_path, "a") as f:
                         f.write(final_metrics + "\n")
 
-            # Log convergence reason if available
+            # Record and log the reason the loop stopped (None if it ran to
+            # max_iter). fit() uses self.converged for the terminal outcome.
+            self.stop_reason = convergence_reason
             if convergence_reason:
                 self.logger.info(convergence_reason)
                 with open(self.file_path, "a") as f:

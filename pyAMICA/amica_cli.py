@@ -27,6 +27,7 @@ And many others as documented in the AMICA class.
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, Any
 
@@ -47,31 +48,20 @@ def parse_args() -> argparse.Namespace:
         - seed: Random seed for reproducibility (optional)
         - verbose: Flag for detailed per-line progress output (disables tqdm progress bar)
     """
-    parser = argparse.ArgumentParser(
-        description='AMICA: Adaptive Mixture ICA'
-    )
+    parser = argparse.ArgumentParser(description="AMICA: Adaptive Mixture ICA")
 
     # Required arguments
-    parser.add_argument(
-        'paramfile',
-        help='Parameter file in JSON format'
-    )
+    parser.add_argument("paramfile", help="Parameter file in JSON format")
 
     # Optional arguments
     parser.add_argument(
-        '--outdir',
-        help='Output directory (default: output)',
-        default='output'
+        "--outdir", help="Output directory (default: output)", default="output"
     )
+    parser.add_argument("--seed", help="Random seed", type=int)
     parser.add_argument(
-        '--seed',
-        help='Random seed',
-        type=int
-    )
-    parser.add_argument(
-        '--verbose',
-        help='Verbose output with detailed per-line progress (disables tqdm progress bar)',
-        action='store_true'
+        "--verbose",
+        help="Verbose output with detailed per-line progress (disables tqdm progress bar)",
+        action="store_true",
     )
 
     return parser.parse_args()
@@ -114,16 +104,11 @@ def load_params(paramfile: str, default_paramfile: str = None) -> Dict[str, Any]
         params.update(user_params)
 
     # Required parameters
-    required = {
-        'files',
-        'data_dim',
-        'field_dim'
-    }
+    required = {"files", "data_dim", "field_dim"}
 
     missing = required - set(params.keys())
     if missing:
-        raise ValueError(
-            f"Missing required parameters: {', '.join(missing)}")
+        raise ValueError(f"Missing required parameters: {', '.join(missing)}")
 
     return params
 
@@ -148,7 +133,7 @@ def setup_logging(verbose: bool = False):
         root.removeHandler(handler)
 
     # Get the AMICA logger and remove any existing handlers
-    logger = logging.getLogger('AMICA')
+    logger = logging.getLogger("AMICA")
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
 
@@ -177,7 +162,7 @@ def main():
 
     # Setup logging
     setup_logging(args.verbose)
-    logger = logging.getLogger('AMICA')
+    logger = logging.getLogger("AMICA")
 
     # Load parameters
     logger.info(f"Loading parameters from {args.paramfile}")
@@ -185,14 +170,10 @@ def main():
 
     # Load data
     logger.info("Loading data files:")
-    for f in params['files']:
+    for f in params["files"]:
         logger.info(f"  {f}")
 
-    data = load_multiple_files(
-        params['files'],
-        params['data_dim'],
-        params['field_dim']
-    )
+    data = load_multiple_files(params["files"], params["data_dim"], params["field_dim"])
 
     # Create output directory
     outdir = Path(args.outdir)
@@ -205,15 +186,25 @@ def main():
         outdir=str(outdir),
         seed=args.seed,
         use_tqdm=not args.verbose,  # Use tqdm by default, but disable if verbose
-        verbose=args.verbose
+        verbose=args.verbose,
     )
 
     # Fit model
     logger.info("Fitting AMICA model")
     model.fit(data)
 
-    logger.info(f"Results saved to {outdir}")
+    # Report the outcome honestly: on a terminal non-finite likelihood the fit
+    # diverged and nothing was written, so do not claim success.
+    if getattr(model, "converged", True):
+        logger.info(f"Results saved to {outdir}")
+    else:
+        logger.error(
+            "AMICA did not converge (non-finite likelihood); no results were "
+            "written to %s. Try a different --seed.",
+            outdir,
+        )
+        sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

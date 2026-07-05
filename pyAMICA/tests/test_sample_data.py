@@ -329,8 +329,12 @@ def test_restart_on_early_nan_recovers(tmp_path):
 
     # One restart per injected-NaN iteration, then a normal finite fit.
     assert model.numrestarts == 2
+    assert model.converged is True
     assert len(model.ll) >= 1
     assert np.isfinite(model.ll[-1])
+    # The restart must be announced in the run log, not silent.
+    log_text = (tmp_path / "out" / "out.txt").read_text().lower()
+    assert "reinitializing" in log_text
 
 
 @pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
@@ -361,8 +365,10 @@ def test_restart_gives_up_after_maxrestarts(tmp_path):
         outdir=str(tmp_path / "out"),
     )
     model.fit(data)
-    # Restarts are capped, and the run stops on the persistent non-finite LL.
+    # Restarts are capped, the run stops on the persistent non-finite LL, and
+    # the terminal failure is surfaced (converged=False), not silently ignored.
     assert model.numrestarts == 2
+    assert model.converged is False
     assert not np.isfinite(model.ll[-1])
 
 
