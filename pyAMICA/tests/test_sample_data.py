@@ -59,13 +59,12 @@ def test_sample_data_scikit(tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="legacy AMICA._optimize() writes results as .npy files "
-    "(save_results in pyAMICA.py) but loadmodout() expects raw "
-    "Fortran-format binary files with no extension; the round-trip "
-    "raises FileNotFoundError for 'W' before the correlation check is "
-    "even reached. Independent legacy-CLI bug tracked in issue #30; no "
-    "raises= constraint since the failure mode is not a clean "
-    "AssertionError.",
+    reason="The #30 CLI save/load format mismatch is FIXED -- loadmodout now "
+    "reads the CLI output (covered by test_cli_output_format_roundtrip). This "
+    "full 2000-iter CLI run still fails because the NumPy backend diverges to a "
+    "non-finite likelihood ~iter 687 on the sample data (a separate long-fit "
+    "numerical-stability bug, issue #39); the early-stopped result no longer "
+    "matches Fortran.",
     strict=True,
 )
 def test_sample_data_cli():
@@ -215,6 +214,116 @@ def test_sample_data_numpy_vs_fortran(tmp_path):
     rows, cols = linear_sum_assignment(1 - corr)
     mean_corr = float(corr[rows, cols].mean())
     assert mean_corr > 0.9, f"NumPy vs Fortran component corr {mean_corr:.3f} <= 0.9"
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_cli_output_format_roundtrip(tmp_path):
+    """The Fortran-format writer round-trips through loadmodout and load_results,
+    and the viz helpers consume the result (issue #30; viz smoke for #15).
+
+    Real sample data, short fit -- this checks the on-disk format contract and
+    array shapes, not convergence (the full CLI-vs-Fortran correlation is
+    test_sample_data_cli). Fast, so not marked slow.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from pyAMICA.amica_data import load_results
+    from pyAMICA import amica_viz
+
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )[:, :4096]
+    outdir = tmp_path / "out"
+    model = AMICA(
+        use_tqdm=False,
+        num_models=1,
+        num_mix=3,
+        seed=1,
+        max_iter=15,
+        writestep=10000,
+        do_opt_block=False,
+        outdir=str(outdir),
+    )
+    # fit() persists the final result even though max_iter (15) is not a
+    # writestep (10000) multiple -- exercises the unconditional final write.
+    model.fit(data)
+
+    # loadmodout reads the Fortran-format output. Before issue #30 the CLI wrote
+    # .npy, so this raised FileNotFoundError for 'W'.
+    out = loadmodout(outdir)
+    assert out.W.shape == (32, 32, 1)
+
+    # load_results returns AMICA's internal shapes for the viz helpers.
+    r = load_results(str(outdir))
+    assert r["A"].shape == (32, 32)
+    assert r["W"].shape == (32, 32, 1)
+    assert r["alpha"].shape == (3, 32)
+    assert r["comp_list"].shape == (32, 1)
+    assert int(r["comp_list"].min()) == 0 and int(r["comp_list"].max()) == 31
+
+    # Value-level round-trip: the loaded arrays equal the in-memory ones. Guards
+    # against a transpose/axis-order or dtype regression that the shape checks
+    # above would miss.
+    np.testing.assert_allclose(r["W"], model.W)
+    np.testing.assert_allclose(r["A"], model.A)
+    np.testing.assert_allclose(r["alpha"], model.alpha)
+    np.testing.assert_array_equal(r["comp_list"], model.comp_list)
+
+    # viz helpers run without error on the loaded results.
+    amica_viz.plot_convergence(str(outdir))
+    amica_viz.plot_components(str(outdir), data=None, max_comps=3)
+    amica_viz.plot_pdf_fits(str(outdir), data, max_comps=2)
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_cli_subprocess_output_loadable(tmp_path):
+    """The actual amica_cli entrypoint writes loadmodout-readable output.
+
+    Runs the CLI as a module on a short, stable config (real sample data) and
+    confirms loadmodout reads the result -- the direct regression for the #30
+    FileNotFoundError (the CLI previously wrote .npy). Kept short (few
+    iterations, Newton off) so it stays fast and avoids the separate long-fit
+    NaN of #39; the full 2000-iter integration run is test_sample_data_cli.
+    """
+    import json
+    import subprocess
+    import sys
+
+    params = {
+        "files": [eeglab_data_file],
+        "data_dim": 32,
+        "field_dim": [30504],
+        "num_models": 1,
+        "num_mix": 3,
+        "max_iter": 8,
+        "writestep": 4,
+        "do_newton": False,
+        "do_opt_block": False,
+        "block_size": 512,
+    }
+    params_file = tmp_path / "params.json"
+    params_file.write_text(json.dumps(params))
+    outdir = tmp_path / "cli_out"
+
+    # amica_cli uses relative imports, so run it as a module from the repo root.
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pyAMICA.amica_cli",
+            str(params_file),
+            "--outdir",
+            str(outdir),
+        ],
+        check=True,
+        cwd=Path(__file__).parent.parent.parent,
+    )
+
+    # loadmodout reads the CLI output (previously raised FileNotFoundError).
+    out = loadmodout(outdir)
+    assert out.W.shape == (32, 32, 1)
+    assert np.all(np.isfinite(out.W))
 
 
 if __name__ == "__main__":

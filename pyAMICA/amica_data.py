@@ -9,7 +9,7 @@ algorithm. It handles:
    - Mean removal
    - Sphering (whitening) using PCA
    - Dimensionality reduction
-3. Result saving and loading with optional compression
+3. Loading saved results (raw Fortran binary format; see load_results)
 
 The preprocessing steps are crucial for AMICA's performance:
 - Mean removal centers the data, removing DC offset
@@ -196,139 +196,95 @@ def preprocess_data(
     return data, mean, sphere
 
 
-def save_results(
-    outdir: str,
-    A: np.ndarray,
-    W: np.ndarray,
-    c: np.ndarray,
-    mu: np.ndarray,
-    alpha: np.ndarray,
-    beta: np.ndarray,
-    rho: np.ndarray,
-    gm: np.ndarray,
-    mean: np.ndarray,
-    sphere: np.ndarray,
-    comp_list: np.ndarray,
-    ll: List[float],
-    nd: Optional[List[float]] = None,
-    compress: bool = False,
-):
-    """
-    Save AMICA results to disk.
-
-    Parameters
-    ----------
-    outdir : str
-        Output directory
-    A : ndarray
-        Mixing matrix
-    W : ndarray
-        Unmixing matrices
-    c : ndarray
-        Bias terms
-    mu : ndarray
-        Component means
-    alpha : ndarray
-        Mixture weights
-    beta : ndarray
-        Scale parameters
-    rho : ndarray
-        Shape parameters
-    gm : ndarray
-        Model weights
-    mean : ndarray
-        Data mean
-    sphere : ndarray
-        Sphering matrix
-    comp_list : ndarray
-        Component assignments
-    ll : list
-        Log likelihood history
-    nd : list, optional
-        Gradient norm history
-    compress : bool
-        Whether to compress saved files
-    """
-    outdir = Path(outdir)
-    if not outdir.exists():
-        outdir.mkdir(parents=True)
-
-    # Save parameters
-    params = {
-        "A": A,
-        "W": W,
-        "c": c,
-        "mu": mu,
-        "alpha": alpha,
-        "beta": beta,
-        "rho": rho,
-        "gm": gm,
-        "mean": mean,
-        "sphere": sphere,
-        "comp_list": comp_list,
-    }
-
-    for name, param in params.items():
-        if compress:
-            np.savez_compressed(outdir / f"{name}.npz", param)
-        else:
-            np.save(outdir / f"{name}.npy", param)
-
-    # Save optimization history
-    history = {"ll": np.array(ll)}
-    if nd is not None:
-        history["nd"] = np.array(nd)
-
-    for name, hist in history.items():
-        if compress:
-            np.savez_compressed(outdir / f"{name}.npz", hist)
-        else:
-            np.save(outdir / f"{name}.npy", hist)
-
-
 def load_results(indir: str, compressed: bool = False) -> dict:
     """
     Load saved AMICA results from disk.
 
+    Reads the raw little-endian binary files written by ``AMICA._write_results``
+    -- the Fortran AMICA output layout that ``amica_load.loadmodout`` and the
+    reference binary use (issue #30) -- and returns them in AMICA's internal
+    array shapes, which the ``amica_viz`` helpers consume.
+
     Parameters
     ----------
     indir : str
-        Input directory containing saved results
-    compressed : bool
-        Whether files are compressed
+        Input directory containing saved results.
+    compressed : bool, default=False
+        Accepted for call-site compatibility and ignored: the on-disk format is
+        uncompressed raw binary (issue #30), not ``.npz``.
 
     Returns
     -------
     results : dict
-        Dictionary of loaded parameters and history
+        Dictionary of loaded parameters (``A``, ``W``, ``c``, ``mu``, ``alpha``,
+        ``beta``, ``rho``, ``gm``, ``mean``, ``sphere``, ``comp_list``, ``ll``).
     """
+    del compressed  # legacy no-op; the format is raw binary, never .npz
     indir = Path(indir)
-    results = {}
 
-    # Parameter names to load
-    param_names = [
-        "A",
-        "W",
-        "c",
-        "mu",
-        "alpha",
-        "beta",
-        "rho",
-        "gm",
-        "mean",
-        "sphere",
-        "comp_list",
-        "ll",
-        "nd",
-    ]
+    def _read(name, dtype: type = np.float64):
+        path = indir / name
+        return np.fromfile(path, dtype=dtype) if path.exists() else None
 
-    # Load each parameter
-    for name in param_names:
-        filepath = indir / f"{name}.{'npz' if compressed else 'npy'}"
-        if filepath.exists():
-            if compressed:
-                results[name] = np.load(filepath)["arr_0"]
-            else:
-                results[name] = np.load(filepath)
+    gm = _read("gm")
+    if gm is None:
+        raise FileNotFoundError(f"No AMICA output in {indir} (missing 'gm')")
+    num_models = len(gm)
+
+    W = _read("W")
+    if W is None:
+        raise FileNotFoundError(f"No 'W' in {indir}")
+    nw = int(round(np.sqrt(len(W) / num_models)))
+    num_comps = nw * num_models
+
+    results = {"gm": gm, "W": W.reshape(nw, nw, num_models)}
+
+    A = _read("A")
+    if A is not None:
+        results["A"] = A.reshape(
+            len(A) // num_comps, num_comps
+        )  # (data_dim, num_comps)
+
+    # Mixture params are stored (num_mix, num_comps); Fortran names 'sbeta'.
+    for fname, key in (
+        ("alpha", "alpha"),
+        ("mu", "mu"),
+        ("sbeta", "beta"),
+        ("rho", "rho"),
+    ):
+        arr = _read(fname)
+        if arr is not None:
+            results[key] = arr.reshape(-1, num_comps)
+
+    comp_list = _read("comp_list", dtype=np.int32)
+    if comp_list is not None:
+        # Stored 1-based (Fortran convention); restore AMICA's 0-based indices.
+        results["comp_list"] = comp_list.reshape(nw, num_models) - 1
+
+    c = _read("c")
+    if c is not None:
+        results["c"] = c.reshape(nw, num_models)
+
+    mean = _read("mean")
+    if mean is not None:
+        results["mean"] = mean
+
+    S = _read("S")
+    if S is not None:
+        results["sphere"] = S.reshape(nw, nw)
+
+    ll = _read("LL")
+    if ll is not None:
+        results["ll"] = ll
+
+    # Fail loudly on a partially-written / interrupted output directory rather
+    # than letting a downstream KeyError surface deep in a viz helper.
+    required = {"A", "W", "alpha", "mu", "beta", "rho", "comp_list", "ll"}
+    missing = required - results.keys()
+    if missing:
+        raise FileNotFoundError(
+            f"Incomplete AMICA output in {indir}: missing {sorted(missing)}. "
+            "The directory may be from an interrupted or partial run."
+        )
 
     return results

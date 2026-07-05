@@ -407,6 +407,15 @@ class AMICA:
         # Main optimization loop
         self._optimize()
 
+        # Always persist the final converged result. _write_results is otherwise
+        # only called on writestep boundaries during the loop, so a run whose
+        # last iteration is not a writestep multiple (or that stops early) would
+        # never save the final state. Guard on a finite likelihood so a run that
+        # diverged to a non-finite LL (issue #39) does not overwrite the last
+        # good on-disk result with NaNs.
+        if len(self.ll) > 0 and np.isfinite(self.ll[-1]):
+            self._write_results()
+
         return self
 
     def _preprocess_data(self, data: np.ndarray):
@@ -1170,27 +1179,60 @@ class AMICA:
         self.logger.info(f"Rejected {np.sum(outliers)} samples")
 
     def _write_results(self):
-        """Write current results to disk."""
+        """Write current results to disk in the Fortran AMICA binary format.
+
+        Writes raw little-endian float64 (and int32 ``comp_list``) files with no
+        extension, in the layout that ``amica_load.loadmodout`` reads (and that
+        ``load_results`` reads back), so pyAMICA output is loadable by the same
+        reader as the Fortran reference (issue #30).
+
+        For ``num_models == 1`` (the CLI/sample-data case) the bytes are
+        identical to the Fortran ``amicaout`` ``W``/``c``/``comp_list`` files, so
+        the two are directly comparable. For ``num_models > 1`` the per-model
+        axis nesting differs from genuine Fortran column-major storage: the
+        output stays self-consistent (``loadmodout``/``load_results`` recover it
+        losslessly, matching ``loadmodout``'s own C-order model-axis convention),
+        but is not byte-identical to multi-model Fortran output. Multi-model
+        Fortran interop is out of scope here (see #27).
+        """
         if not self.outdir.exists():
             self.outdir.mkdir(parents=True)
 
-        # Save parameters
-        np.save(self.outdir / "A.npy", self.A)
-        np.save(self.outdir / "W.npy", self.W)
-        np.save(self.outdir / "c.npy", self.c)
-        np.save(self.outdir / "mu.npy", self.mu)
-        np.save(self.outdir / "alpha.npy", self.alpha)
-        np.save(self.outdir / "beta.npy", self.beta)
-        np.save(self.outdir / "rho.npy", self.rho)
-        np.save(self.outdir / "gm.npy", self.gm)
-        np.save(self.outdir / "mean.npy", self.mean)
-        np.save(self.outdir / "sphere.npy", self.sphere)
-        np.save(self.outdir / "comp_list.npy", self.comp_list)
+        def _w(name, arr, dtype=np.float64):
+            np.ascontiguousarray(arr, dtype=dtype).tofile(self.outdir / name)
 
-        # Save optimization history
-        np.save(self.outdir / "ll.npy", self.ll)
-        if self.use_grad_norm:
-            np.save(self.outdir / "nd.npy", self.nd)
+        # gm: (num_models,)
+        _w("gm", self.gm)
+        # A: mixing matrix (data_dim, num_comps). Not part of the Fortran output
+        # (loadmodout derives A from W and S), but written here so load_results
+        # can restore it directly for the viz helpers; loadmodout ignores it.
+        _w("A", self.A)
+        # W: internal (nw, nw, num_models). For a single model the C-order dump
+        # is byte-identical to Fortran's 'W' (the internal-vs-true-unmixing
+        # transpose of issue #24 cancels against Fortran's column-major storage);
+        # for num_models>1 only the model-axis nesting differs (see the docstring
+        # note), and loadmodout reads it back with the matching C-order.
+        _w("W", self.W)
+        # Sphering and mean.
+        _w("S", self.sphere)
+        _w("mean", self.mean)
+        # Per-model bias: (nw, num_models).
+        _w("c", self.c)
+        # Mixture params: (num_mix, num_comps). loadmodout maps columns to
+        # sources via comp_list, so column order is the component index.
+        _w("alpha", self.alpha)
+        _w("mu", self.mu)
+        _w("sbeta", self.beta)  # Fortran's 'sbeta' is pyAMICA's beta (scale)
+        _w("rho", self.rho)
+        # comp_list is 1-based in the Fortran format (loadmodout subtracts 1
+        # when indexing); pyAMICA stores it 0-based.
+        _w("comp_list", self.comp_list + 1, dtype=np.int32)
+        # Log-likelihood history (per iteration).
+        _w("LL", np.asarray(self.ll))
+        # Note: the Fortran 'nd' file is a per-component weight-change history
+        # (max_iter, nw, num_models); pyAMICA's self.nd is a per-iteration
+        # gradient-norm scalar, a different quantity, so it is not emitted in
+        # the Fortran format (loadmodout treats 'nd' as optional).
 
     def _write_history(self):
         """Write optimization history at current iteration."""
