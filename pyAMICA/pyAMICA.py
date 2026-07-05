@@ -205,6 +205,12 @@ class AMICA:
         self.pcadb = params.get("pcadb")
         self.writestep = params.get("writestep", 100)
         self.max_decs = params.get("max_decs", 5)
+        # Restart-on-NaN (Fortran amica17.f90:1027-1060): if the LL goes
+        # non-finite at iter <= restartiter, reinitialize and start over, up to
+        # maxrestarts times; a later NaN stops the fit (Fortran exits too).
+        self.restartiter = params.get("restartiter", 10)
+        self.maxrestarts = params.get("maxrestarts", 3)
+        self.numrestarts = 0
         self.min_dll = params.get("min_dll", 1e-9)
         self.min_grad_norm = params.get("min_grad_norm", 1e-7)
         self.use_min_dll = params.get("use_min_dll", True)
@@ -533,6 +539,27 @@ class AMICA:
 
         # Get initial unmixing matrices
         self._update_unmixing_matrices()
+
+    def _reinitialize_for_restart(self):
+        """Draw a fresh initialization after a non-finite likelihood.
+
+        Mirrors Fortran's restart path (amica17.f90:1032-1053): clear the
+        learned parameters so ``_initialize_parameters`` re-draws them from the
+        (already-advanced) RNG -- a new random basin -- and reset the learning
+        rate and the LL/gradient-norm history so the restarted fit is judged
+        from scratch. Preprocessing (mean/sphere) and the RNG are preserved.
+        """
+        self.A = None
+        self.mu = None
+        self.alpha = None
+        self.beta = None
+        self.rho = None
+        self.gm = None
+        self.c = None
+        self._initialize_parameters()
+        self.lrate = self.lrate0
+        self.ll = []
+        self.nd = []
 
     def _update_unmixing_matrices(self):
         """Update unmixing matrices from mixing matrix."""
@@ -981,6 +1008,9 @@ class AMICA:
         start_time = time.time()
         convergence_reason = None
         final_iter = 0
+        # Iteration at which the current (post-restart) run began; the
+        # restart-on-NaN window is restartiter iterations after each restart.
+        restart_offset = 0
 
         # Determine whether to use tqdm or per-line printing
         use_tqdm_progress = self.use_tqdm and not self.verbose
@@ -1013,6 +1043,28 @@ class AMICA:
 
                 # Update parameters
                 self._update_parameters(updates)
+
+                # Restart-on-NaN (Fortran amica17.f90:1027-1056): an early
+                # non-finite LL usually means an unlucky init, so reinitialize
+                # and start over up to maxrestarts times. A later NaN falls
+                # through to _check_convergence, which stops (Fortran exits too).
+                if (
+                    len(self.ll) > 0
+                    and not np.isfinite(self.ll[-1])
+                    and (iter - restart_offset) <= self.restartiter
+                    and self.numrestarts < self.maxrestarts
+                ):
+                    self.numrestarts += 1
+                    self.logger.info(
+                        "Non-finite LL at iter %d; reinitializing and starting "
+                        "over (restart %d of %d).",
+                        iter + 1,
+                        self.numrestarts,
+                        self.maxrestarts,
+                    )
+                    self._reinitialize_for_restart()
+                    restart_offset = iter + 1
+                    continue
 
                 # Calculate metrics for logging/progress
                 elapsed_time = time.time() - start_time
@@ -1129,7 +1181,7 @@ class AMICA:
         reason : str or None
             Reason for convergence if converged, None otherwise
         """
-        if self.iter == 0:
+        if len(self.ll) == 0:
             return False, None
 
         # Check for non-finite LL: a singular W makes logdet -> -inf (not NaN),
@@ -1137,6 +1189,13 @@ class AMICA:
         # to max_iter undetected.
         if not np.isfinite(self.ll[-1]):
             return True, "Non-finite likelihood (NaN/-inf) encountered"
+
+        # The remaining checks compare consecutive iterations; skip until there
+        # are two LL values -- the first iteration, or the first iteration after
+        # a restart cleared the LL history (guard on len, not self.iter, which
+        # keeps counting across restarts).
+        if len(self.ll) < 2:
+            return False, None
 
         # Check for likelihood decrease
         if self.ll[-1] < self.ll[-2]:
