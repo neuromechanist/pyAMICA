@@ -1006,12 +1006,14 @@ class AMICA:
         # Store likelihood
         self.ll.append(updates["ll"])
 
-        # Compute gradient norm
-        if self.use_grad_norm:
-            dA = np.zeros_like(self.A)
-            for h in range(self.num_models):
-                dA[:, self.comp_list[:, h]] += self.gm[h] * updates["dWtmp"][:, :, h]
-            self.nd.append(np.sqrt(np.sum(dA**2) / (self.data_dim * self.num_comps)))
+        # Compute the weight-gradient norm every iteration (Fortran's ndtmpsum
+        # is always computed). _check_convergence uses it as the gradient floor
+        # in the decrease-stop condition regardless of use_grad_norm; the flag
+        # only gates the separate final gradient-norm stop.
+        dA = np.zeros_like(self.A)
+        for h in range(self.num_models):
+            dA[:, self.comp_list[:, h]] += self.gm[h] * updates["dWtmp"][:, :, h]
+        self.nd.append(np.sqrt(np.sum(dA**2) / (self.data_dim * self.num_comps)))
 
     def _optimize(self):
         """Main optimization loop."""
@@ -1241,7 +1243,10 @@ class AMICA:
         if len(self.ll) < 2:
             return False, None, numdecs, numincs
 
-        grad_norm = self.nd[-1] if (self.use_grad_norm and len(self.nd) > 0) else None
+        # Gradient norm is computed every iteration, so it is the decrease-stop
+        # floor unconditionally (Fortran's ndtmpsum); use_grad_norm only gates
+        # the separate final gradient-norm stop below.
+        grad_norm = self.nd[-1] if len(self.nd) > 0 else None
 
         # Likelihood decrease (Fortran amica17.f90:1062-1083): reduce the current
         # lrate, and once maxdecs decreases have accrued, ratchet the ceiling
