@@ -49,22 +49,44 @@ from .utils import setup_device
 logger = logging.getLogger(__name__)
 
 _LOG2 = math.log(2.0)
+_LOG4 = math.log(4.0)
 _HALF_LOG_PI = 0.5 * math.log(math.pi)
+# Log-normalizers for the non-GG density families, using Fortran's exact literal
+# constants (amica15.f90:1315/1341/1353) so the log-density matches the reference
+# binary bit-for-bit: 2.506628274 = sqrt(2*pi) (Gaussian, pdtype 2); 4.132731354 /
+# 1.858073988 = the sub-/super-Gaussian cosh normalizers (pdtype 4 / 1).
+_LOG_SQRT_2PI = math.log(2.506628274)
+_LOG_NORM_COSH_SUB = math.log(4.132731354)
+_LOG_NORM_COSH_SUP = math.log(1.858073988)
 # Fortran's epsdble (amica17_header.f90:73): the drho-numerator underflow guard
 # zeros the rho*ln|y| term when |y|^rho falls below this, matching amica17.f90:1570.
 _EPSDBLE = 1e-16
 
 
-def _log_pdf_and_deriv(
-    y: torch.Tensor, rho: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Vectorized generalized-Gaussian log-density and density derivative.
+def _logcosh(x: torch.Tensor) -> torch.Tensor:
+    """Numerically stable ``log cosh(x) = |x| - log2 + log1p(exp(-2|x|))``."""
+    ax = x.abs()
+    return ax - _LOG2 + torch.log1p(torch.exp(-2.0 * ax))
 
-    Elementwise port of ``pyAMICA.pyAMICA.AMICA._compute_log_pdf``: branches
-    on ``rho`` via ``torch.where`` (Laplace/Gaussian/generalized-Gaussian)
-    instead of Python control flow so it runs over full
-    ``(block, source, mixture)`` tensors with no source/mixture loop. ``y``
-    and ``rho`` must be broadcastable to a common shape.
+
+def _log_pdf_and_deriv(
+    y: torch.Tensor, rho: torch.Tensor, pdtype: Optional[torch.Tensor] = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Vectorized source-density log-density and density derivative.
+
+    Elementwise port of ``pyAMICA.pyAMICA.AMICA._compute_log_pdf``: branches via
+    ``torch.where`` instead of Python control flow so it runs over full
+    ``(block, source, mixture)`` tensors with no source/mixture loop. ``y``,
+    ``rho`` and ``pdtype`` must be broadcastable to a common shape.
+
+    When ``pdtype is None`` (the default ``pdftype=0`` path) this computes only
+    the generalized-Gaussian (GG) family, branching on ``rho``
+    (Laplace/Gaussian/GG), and is bit-identical to the pre-#26 implementation.
+    When ``pdtype`` is given it additionally selects, per source, among the
+    fixed density families of ``amica15.f90`` (codes 0/2/3/4/1): GG, Gaussian,
+    logistic, sub-Gaussian cosh+, super-Gaussian cosh-. The density derivative
+    obeys ``dpdf = -fp * pdf`` for every family (``fp`` = the score from
+    ``_score``), which reproduces the GG ``dpdf`` exactly.
     """
     abs_y = y.abs()
     sign_y = torch.sign(y)
@@ -85,19 +107,47 @@ def _log_pdf_and_deriv(
         is_gau, log_pdf_gau, torch.where(is_lap, log_pdf_lap, log_pdf_gg)
     )
     dpdf = torch.where(is_gau, dpdf_gau, torch.where(is_lap, dpdf_lap, dpdf_gg))
+    if pdtype is None:
+        return log_pdf, dpdf
+
+    # Non-GG families (amica15.f90:1309-1353). Each is `-cost - log_norm`, and
+    # dpdf = -fp * exp(log_pdf).
+    log_pdf_2 = -0.5 * y * y - _LOG_SQRT_2PI  # Gaussian
+    log_pdf_3 = -2.0 * _logcosh(0.5 * y) - _LOG4  # logistic (sech^2)
+    lc = _logcosh(y)
+    log_pdf_4 = -0.5 * y * y + lc - _LOG_NORM_COSH_SUB  # sub-Gaussian cosh+
+    log_pdf_1 = -0.5 * y * y - lc - _LOG_NORM_COSH_SUP  # super-Gaussian cosh-
+
+    log_pdf = torch.where(
+        pdtype == 2,
+        log_pdf_2,
+        torch.where(
+            pdtype == 3,
+            log_pdf_3,
+            torch.where(
+                pdtype == 4, log_pdf_4, torch.where(pdtype == 1, log_pdf_1, log_pdf)
+            ),
+        ),
+    )
+    fp = _score(y, rho, pdtype)
+    dpdf = torch.where(pdtype == 0, dpdf, -fp * torch.exp(log_pdf))
     return log_pdf, dpdf
 
 
-def _score(y: torch.Tensor, rho: torch.Tensor) -> torch.Tensor:
-    """Generalized-Gaussian score ``fp = d|y|^rho/dy`` (Fortran ``fp``).
+def _score(
+    y: torch.Tensor, rho: torch.Tensor, pdtype: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """Source-density score ``fp = -d(log pdf)/dy`` (Fortran ``fp``).
 
-    This is the derivative of the *negative* log-density, ``fp(y) =
-    rho*sign(y)*|y|^(rho-1)`` (``sign(y)`` for Laplace, ``2y`` for Gaussian),
-    used by the Newton sufficient statistics (``amica17.f90:1455-1467``). It
-    is distinct from the density derivative ``dpdf`` returned by
-    ``_log_pdf_and_deriv`` (which carries an extra ``pdf`` factor); the Newton
-    curvature terms ``kappa``/``lambda`` are defined in terms of ``fp``, not
-    ``dpdf``.
+    For the GG family this is ``fp(y) = rho*sign(y)*|y|^(rho-1)`` (``sign(y)``
+    for Laplace, ``2y`` for Gaussian), used by the exact-EM and Newton
+    sufficient statistics (``amica15.f90:1449-1473``). It is distinct from the
+    density derivative ``dpdf`` (which carries an extra ``pdf`` factor).
+
+    With ``pdtype is None`` only the GG score is computed (bit-identical to the
+    pre-#26 path). With ``pdtype`` given it selects per source among the fixed
+    families: 2 Gaussian ``y``; 3 logistic ``tanh(y/2)``; 4 sub-Gaussian
+    ``y - tanh(y)``; 1 super-Gaussian ``y + tanh(y)``.
     """
     abs_y = y.abs()
     sign_y = torch.sign(y)
@@ -106,7 +156,23 @@ def _score(y: torch.Tensor, rho: torch.Tensor) -> torch.Tensor:
     fp_gg = rho * sign_y * abs_y.pow(rho - 1.0)
     is_lap = rho == 1.0
     is_gau = rho == 2.0
-    return torch.where(is_gau, fp_gau, torch.where(is_lap, fp_lap, fp_gg))
+    fp = torch.where(is_gau, fp_gau, torch.where(is_lap, fp_lap, fp_gg))
+    if pdtype is None:
+        return fp
+
+    tanh_half = torch.tanh(0.5 * y)
+    tanh_y = torch.tanh(y)
+    return torch.where(
+        pdtype == 2,
+        y,
+        torch.where(
+            pdtype == 3,
+            tanh_half,
+            torch.where(
+                pdtype == 4, y - tanh_y, torch.where(pdtype == 1, y + tanh_y, fp)
+            ),
+        ),
+    )
 
 
 class AMICATorchNG:
@@ -496,6 +562,16 @@ class AMICATorchNG:
         W_stack = torch.linalg.inv(A_stack)
         self.W = W_stack.permute(1, 2, 0).contiguous()
 
+    def _pdtype_h(self, h: int) -> Optional[torch.Tensor]:
+        """Per-source density-family codes for model ``h``, shaped for
+        broadcasting against ``(batch, n_channels, num_mix)`` tensors, or
+        ``None`` on the default ``pdftype=0`` (GG-only) fast path so the E-step
+        stays bit-identical to the pre-#26 implementation.
+        """
+        if self.pdftype == 0:
+            return None
+        return self.pdtype[:, h].view(1, -1, 1)
+
     # ------------------------------------------------------------------
     # E-step / M-step sufficient statistics (the hot path)
     # ------------------------------------------------------------------
@@ -538,8 +614,11 @@ class AMICATorchNG:
             alpha_h = self.alpha[:, idx].T.unsqueeze(0)
 
             y = beta_h * (b.unsqueeze(-1) - mu_h)  # (batch, n_channels, num_mix)
-            log_pdf, dpdf = _log_pdf_and_deriv(y, rho_h)
+            log_pdf, dpdf = _log_pdf_and_deriv(y, rho_h, self._pdtype_h(h))
 
+            # z0 = log(alpha) + log(beta) + log_pdf. For the single-component
+            # families (codes 1/4) n_mix==1 so alpha==1 and log(alpha)==0, which
+            # reproduces Fortran's alpha-free z0 (amica15.f90:1340/1352).
             z0 = torch.log(alpha_h) + torch.log(beta_h) + log_pdf
             ll_i = torch.logsumexp(
                 z0, dim=-1
@@ -624,7 +703,7 @@ class AMICATorchNG:
             v_h = v[:, h]
             beta_h = self.beta[:, idx].T.unsqueeze(0)  # sbeta, (1, n_ch, num_mix)
             rho_h = self.rho[:, idx].T  # (n_ch, num_mix)
-            fp = _score(y, rho_h.unsqueeze(0))  # score, NOT dpdf (:1467)
+            fp = _score(y, rho_h.unsqueeze(0), self._pdtype_h(h))  # score (:1449)
             u = v_h.unsqueeze(-1).unsqueeze(-1) * zr  # u = v*z (:1439)
             ufp = u * fp  # (:1485)
 
@@ -838,7 +917,13 @@ class AMICATorchNG:
         # dalpha_n (floored so a near-empty component cannot poison rho). A NaN
         # here (e.g. from upstream mu/beta corruption) is reset to rho0 -- but
         # logged first, so the reset does not silently erase the failure origin.
-        if not torch.all(self.rho == 1.0) and not torch.all(self.rho == 2.0):
+        # Skipped for every non-GG family: Fortran sets dorho=.false. when
+        # pdftype/=0 (amica15.f90:3682), freezing rho at rho0.
+        if (
+            self.dorho
+            and not torch.all(self.rho == 1.0)
+            and not torch.all(self.rho == 2.0)
+        ):
             drho = acc["drho_n"] / acc["dalpha_n"].clamp_min(1e-8)
             psi = torch.special.digamma(1.0 + 1.0 / self.rho)
             new_rho = self.rho + self.rholrate * (1.0 - (self.rho / psi) * drho)
