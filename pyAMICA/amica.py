@@ -90,6 +90,31 @@ class AMICA:
         self.is_fitted_ = False
         self.ll_history_ = []
 
+    def _select_device(self, ng_dtype) -> object:
+        """Resolve the compute device, applying the MPS/float64 fallback.
+
+        ``AMICATorchNG`` defaults to float64 for Fortran parity, which MPS
+        cannot represent. When the device was auto-selected (the user did not
+        pin one) and resolved to MPS for a float64 run, fall back to CPU so the
+        default config runs instead of crashing. CUDA supports float64, so only
+        MPS needs this. An explicit ``device="mps"`` is left untouched and
+        surfaces ``AMICATorchNG``'s own ValueError; users wanting MPS pass
+        ``dtype=torch.float32`` too.
+        """
+        device = setup_device() if self.device is None else self.device
+        dev_type = getattr(device, "type", device)
+        if self.device is None and dev_type == "mps" and ng_dtype == torch.float64:
+            device = torch.device("cpu")
+            msg = (
+                "AMICA uses float64 for Fortran parity; MPS lacks float64 "
+                "support, so falling back to CPU. Pass dtype=torch.float32 "
+                "with device='mps' to run on MPS."
+            )
+            logger.warning(msg)
+            if self.verbose:
+                print(msg)
+        return device
+
     def fit(
         self,
         X: np.ndarray,
@@ -138,31 +163,8 @@ class AMICA:
             print(f"Fitting AMICA with {n_channels} channels, {n_samples} samples")
             print(f"Models: {self.n_models}, Mixture components: {self.n_mix}")
 
-        # Setup device
-        if self.device is None:
-            device = setup_device()
-        else:
-            device = self.device
-
-        # AMICATorchNG defaults to float64 for Fortran parity, which MPS cannot
-        # represent. When the device was auto-selected (the user did not pin
-        # one) and resolved to MPS for a float64 run, fall back to CPU so the
-        # default config runs instead of crashing. CUDA supports float64, so
-        # only MPS needs this. An explicit device="mps" is left untouched and
-        # surfaces AMICATorchNG's own ValueError; users wanting MPS pass
-        # dtype=torch.float32 too.
-        ng_dtype = kwargs.get("dtype", _NG_DEFAULT_DTYPE)
-        dev_type = getattr(device, "type", device)
-        if self.device is None and dev_type == "mps" and ng_dtype == torch.float64:
-            device = torch.device("cpu")
-            msg = (
-                "AMICA uses float64 for Fortran parity; MPS lacks float64 "
-                "support, so falling back to CPU. Pass dtype=torch.float32 "
-                "with device='mps' to run on MPS."
-            )
-            logger.warning(msg)
-            if self.verbose:
-                print(msg)
+        # Setup device (with the MPS/float64 parity fallback, see _select_device).
+        device = self._select_device(kwargs.get("dtype", _NG_DEFAULT_DTYPE))
 
         self.model_ = AMICATorchNG(
             n_channels=n_channels,
@@ -260,28 +262,89 @@ class AMICA:
 
         return self.model_.get_unmixing_matrix(model_idx=model_idx)
 
-    def save(self, filepath: str):
+    def save(self, filepath: str) -> None:
         """
-        Save model to file.
+        Save the fitted model to ``filepath`` via ``torch.save``.
 
-        Not yet implemented: :class:`AMICATorchNG` is not an ``nn.Module`` and
-        has no ``state_dict()``. A persistence format is tracked in issue #36.
+        Persists the underlying :class:`AMICATorchNG` state (config + fitted
+        tensors) plus the wrapper's own configuration, so :meth:`load` can
+        fully reconstruct a transform-ready model. Everything written is a
+        tensor or plain Python primitive (see
+        :meth:`AMICATorchNG.state_dict`), so it reloads with
+        ``weights_only=True``.
+
+        Parameters
+        ----------
+        filepath : str
+            Destination path (a ``.pt`` file by convention).
         """
-        raise NotImplementedError(
-            "save() is not implemented: AMICATorchNG is not an nn.Module and "
-            "has no state_dict(). Tracked in issue #36."
+        if not self.is_fitted_:
+            raise ValueError("Model must be fitted before saving")
+
+        payload = {
+            "format_version": 1,
+            "wrapper": {
+                "n_models": self.n_models,
+                "n_mix": self.n_mix,
+                "verbose": self.verbose,
+            },
+            "backend": self.model_.state_dict(),
+        }
+        torch.save(payload, filepath)
+
+    @classmethod
+    def load(
+        cls, filepath: str, device: Optional[Union[str, object]] = None
+    ) -> "AMICA":
+        """
+        Load a fitted model saved by :meth:`save`.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to a file written by :meth:`save`.
+        device : str or torch.device, optional
+            Device to place the restored model on. With ``None`` (auto), the
+            same MPS/float64 fallback as :meth:`fit` applies so a float64
+            parity model never lands on MPS.
+
+        Returns
+        -------
+        amica : AMICA
+            A fitted model ready for :meth:`transform` / :meth:`get_mixing_matrix`.
+        """
+        payload = torch.load(filepath, weights_only=True)
+        version = payload.get("format_version")
+        if version != 1:
+            raise ValueError(
+                f"unsupported AMICA save format_version: {version!r} (expected 1)"
+            )
+        for key in ("wrapper", "backend"):
+            if key not in payload:
+                raise ValueError(
+                    f"malformed AMICA save file {filepath!r}: missing {key!r} "
+                    f"(format_version={version}); the file may be truncated or "
+                    f"corrupted."
+                )
+
+        wrapper = payload["wrapper"]
+        model = cls(
+            n_models=wrapper["n_models"],
+            n_mix=wrapper["n_mix"],
+            device=device,
+            verbose=wrapper["verbose"],
         )
 
-    def load(self, filepath: str):
-        """
-        Load model from file.
-
-        Not yet implemented: see :meth:`save`. Tracked in issue #36.
-        """
-        raise NotImplementedError(
-            "load() is not implemented: AMICATorchNG has no save()/state_dict() "
-            "counterpart. Tracked in issue #36."
+        # Resolve the device using the persisted backend dtype so the same
+        # MPS/float64 fallback as fit() applies to an auto-selected device.
+        ng_dtype = getattr(torch, payload["backend"]["config"]["dtype"])
+        resolved_device = model._select_device(ng_dtype)
+        model.model_ = AMICATorchNG.from_state_dict(
+            payload["backend"], device=resolved_device
         )
+        model.ll_history_ = model.model_.ll_history
+        model.is_fitted_ = True
+        return model
 
     @classmethod
     def from_params_file(cls, params_file: str, **kwargs) -> "AMICA":

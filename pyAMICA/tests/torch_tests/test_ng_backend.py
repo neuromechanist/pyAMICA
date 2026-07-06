@@ -632,6 +632,114 @@ def test_rejection_shrinks_good_sample_set():
     assert abs(m.ll_history[-1] - ll_per_good) < abs(m.ll_history[-1] - ll_per_total)
 
 
+def test_state_dict_requires_fit():
+    """A fresh (unfitted) backend cannot be serialized: state_dict() raises
+    rather than emitting a half-formed payload (no silent-failure)."""
+    m = _fresh_ng()
+    with pytest.raises(RuntimeError, match="fitted"):
+        m.state_dict()
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_state_dict_roundtrip_all_fields():
+    """Backend-level round-trip asserting EVERY persisted field, with Newton and
+    outlier rejection active so the mixture-PDF params, ``good_idx``, and the
+    mutated optimizer state are all non-trivial (issue #36).
+
+    The wrapper round-trip only exercises A/W/c/mean/sphere via transform(); this
+    guards the fields nothing downstream in the suite reads back: mu/alpha/beta/
+    rho/gm (the mixture PDF) and the do_reject ``good_idx`` tensor branch.
+    """
+    data = _load_real_data()
+    m = _fresh_ng(
+        do_reject=True,
+        rejsig=2.0,
+        rejstart=2,
+        rejint=3,
+        maxrej=2,
+        block_size=512,
+        do_newton=True,
+        newt_start=2,
+    )
+    m.fit(data, max_iter=12, verbose=False)
+
+    # Preconditions: the interesting state is actually populated.
+    assert m.good_idx is not None and int(m.good_idx.numel()) < data.shape[1]
+    assert m.iteration > 0
+
+    state = m.state_dict()
+    loaded = AMICATorchNG.from_state_dict(state, device="cpu")
+
+    assert loaded.dtype == m.dtype
+    for name in AMICATorchNG._PARAM_TENSORS:
+        orig, new = getattr(m, name), getattr(loaded, name)
+        assert new.dtype == orig.dtype, name  # comp_list stays integer
+        assert torch.equal(new.cpu(), orig.cpu()), name
+
+    assert loaded.good_idx is not None
+    assert torch.equal(loaded.good_idx.cpu(), m.good_idx.cpu())
+
+    for attr in (
+        "sldet",
+        "iteration",
+        "stop_reason",
+        "n_newton_fallbacks",
+        "numrej",
+        "lrate",
+        "lrate_cap",
+        "newtrate",
+        "rholrate",
+    ):
+        assert getattr(loaded, attr) == getattr(m, attr), attr
+    assert loaded.ll_history == m.ll_history
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_state_dict_refuses_degenerate_model():
+    """A fit that ended on a non-finite log-likelihood (stop_reason nan_ll/
+    singular_ll) must not be serialized: state_dict() raises rather than let a
+    NaN model round-trip silently and surface as all-NaN sources later."""
+    data = _load_real_data()
+    m = _fresh_ng(block_size=512)
+    m.fit(data[:, :2048], max_iter=2, verbose=False)
+
+    # A real divergence sets this marker (and leaves NaNs in the params); assert
+    # the guard fires on the marker deterministically, without needing to induce
+    # an actual blow-up.
+    m.stop_reason = "nan_ll"
+    with pytest.raises(RuntimeError, match="degenerate"):
+        m.state_dict()
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_state_dict_refuses_nonfinite_params():
+    """Defense-in-depth: even with a non-degenerate stop_reason, a non-finite
+    parameter tensor blocks serialization."""
+    data = _load_real_data()
+    m = _fresh_ng(block_size=512)
+    m.fit(data[:, :2048], max_iter=2, verbose=False)
+
+    m.stop_reason = "max_iter"  # not a degenerate marker
+    m.A[0, 0] = float("nan")
+    with pytest.raises(RuntimeError, match="non-finite"):
+        m.state_dict()
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_state_dict_snapshots_not_aliases():
+    """state_dict() must snapshot params, not alias live tensors: fit() mutates
+    A/mu/beta in place, so an aliased CPU snapshot would silently roll forward
+    if captured mid-fit. Mutating the model after capture must not touch it."""
+    data = _load_real_data()
+    m = _fresh_ng(block_size=512)
+    m.fit(data[:, :2048], max_iter=2, verbose=False)
+
+    state = m.state_dict()
+    captured = state["params"]["A"].clone()
+    m.A[0, 0] += 1.0  # the same in-place mutation fit() does each iteration
+    assert torch.equal(state["params"]["A"], captured)
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_end_to_end_correlation_vs_fortran():
