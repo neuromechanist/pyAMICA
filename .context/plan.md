@@ -20,8 +20,13 @@
 - [x] Port outlier rejection (`do_reject` / `reject_data`) to the torch backend (done in `AMICATorchNG`)
 - [x] Wire up / stabilize Newton for the torch backend (done in `AMICATorchNG`, posdef, issue #24)
 - [ ] Adaptive PDF selection (`do_choose_pdfs`) for `AMICATorchNG` (issue #26; the old
-      `amica_torch_v2.py` prototype was removed in #32)
-- [ ] Multi-model AMICA - framework exists, needs testing
+      `amica_torch_v2.py` prototype was removed in #32). NOTE: no Fortran/NumPy oracle exists
+      (reference binary is `pdftype 0`; `amica17.f90` only declares the pdtype/m2/m4 arrays,
+      never uses them). Chosen approach: Fortran-faithful kurtosis-driven GG-family switching,
+      validated by real-data LL + regression (no synthetic).
+- [x] Multi-model AMICA per-model bias `c` update (issue #27): ported to both backends, guarded
+      no-op for `n_models=1`; controlled A/B shows +0.011 cross-corr, gap is intrinsic partition
+      ambiguity (see `.context/issue-27/multimodel_c_update.md`).
 - [ ] Component sharing
 
 ### Priority 3: Testing & validation

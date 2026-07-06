@@ -115,7 +115,7 @@ def test_sufficient_stats_match_numpy_reference():
         "dbeta_d",
         "drho_n",
         "dWtmp",
-        "dc",
+        "dc_numer",
     ]
     for key in keys:
         a = np.asarray(ng_upd[key].cpu().numpy(), dtype=np.float64)
@@ -146,7 +146,7 @@ def test_blocking_invariance():
         "dbeta_d",
         "drho_n",
         "dWtmp",
-        "dc",
+        "dc_numer",
         "ll",
     ]
     for key in keys:
@@ -534,7 +534,7 @@ def test_multimodel_sufficient_stats_match_numpy_reference():
         "dbeta_d",
         "drho_n",
         "dWtmp",
-        "dc",
+        "dc_numer",
         "ll",
     ]
     for key in keys:
@@ -542,6 +542,55 @@ def test_multimodel_sufficient_stats_match_numpy_reference():
         b = np.asarray(np_upd[key], dtype=np.float64).reshape(a.shape)
         max_diff = float(np.max(np.abs(a - b)))
         assert max_diff < 1e-8, f"{key} differs from NumPy reference by {max_diff:.3e}"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_single_model_bias_c_stays_zero():
+    """Regression guard for issue #24 single-model parity: the per-model bias
+    ``c`` update (issue #27) is skipped for ``n_models=1``, so ``c`` must stay
+    exactly zero after fitting. A nonzero ``c`` here would mean the update leaked
+    a float-sum residual of the mean-removed data into the single-model
+    trajectory, perturbing the machine-exact Fortran parity."""
+    data = _load_real_data()[:, :2048]
+    ng = _fresh_ng(block_size=1024)  # n_models=1
+    ng.fit(data, max_iter=5, verbose=False)
+    assert torch.all(ng.c == 0.0), "single-model c must remain exactly zero"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_multimodel_bias_c_is_responsibility_weighted_data_mean():
+    """The multi-model ``c`` update equals Fortran's ``update_c``: for each model
+    ``h``, ``c[:,h] = sum_t v_h(t) x(:,t) / sum_t v_h(t)`` in the sphered-data
+    space (amica17.f90:1423-1429/1899-1901). Verifies the one M-step result
+    against the responsibility-weighted data mean computed independently from the
+    pre-update E-step, on a single block (so there is no accumulation ambiguity).
+    """
+    data = _load_real_data()[:, :512]
+    ng = AMICATorchNG(
+        n_channels=NW,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+        block_size=512,
+    )
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    # Model responsibilities from the pre-update E-step (c is still zero here).
+    logV, *_ = ng._forward(X_t)
+    v = torch.softmax(logV, dim=1)  # (batch, n_models)
+
+    acc = ng._accumulate_blocks(X_t)
+    ng._update_parameters(acc, X_t.shape[1])
+
+    for h in range(2):
+        expected = (X_t * v[:, h]).sum(dim=1) / v[:, h].sum()
+        assert torch.allclose(ng.c[:, h], expected, atol=1e-10), (
+            f"model {h}: c does not match the responsibility-weighted data mean"
+        )
+    # The two models must center differently (else the update is a no-op).
+    assert not torch.allclose(ng.c[:, 0], ng.c[:, 1], atol=1e-6)
 
 
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")

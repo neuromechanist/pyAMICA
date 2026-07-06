@@ -650,7 +650,7 @@ class AMICA:
             "dbeta_d": np.zeros((self.num_mix, self.num_comps)),
             "drho_n": np.zeros((self.num_mix, self.num_comps)),
             "dWtmp": np.zeros((self.data_dim, self.data_dim, self.num_models)),
-            "dc": np.zeros((self.data_dim, self.num_models)),
+            "dc_numer": np.zeros((self.data_dim, self.num_models)),
             "ll": 0.0,
         }
 
@@ -702,7 +702,7 @@ class AMICA:
             "dbeta_d": np.zeros((self.num_mix, self.num_comps)),
             "drho_n": np.zeros((self.num_mix, self.num_comps)),
             "dWtmp": np.zeros((self.data_dim, self.data_dim, self.num_models)),
-            "dc": np.zeros((self.data_dim, self.num_models)),
+            "dc_numer": np.zeros((self.data_dim, self.num_models)),
             "ll": 0.0,
         }
 
@@ -715,10 +715,12 @@ class AMICA:
                 }
             )
 
-        # Compute activations for each model
+        # Compute activations for each model. c is the per-model data-space
+        # center: b = W(x - c) (Fortran subtracts wc = W c, amica17.f90:1280-1292).
+        # For n_models=1, c == 0, so this is bit-identical to X.T @ W.
         b = np.zeros((batch_size, self.data_dim, self.num_models))
         for h in range(self.num_models):
-            b[:, :, h] = np.dot(X.T, self.W[:, :, h]) - self.c[:, h]
+            b[:, :, h] = np.dot((X - self.c[:, h][:, None]).T, self.W[:, :, h])
 
         # Compute mixture probabilities and responsibilities
         z = np.zeros((batch_size, self.data_dim, self.num_mix, self.num_models))
@@ -853,8 +855,12 @@ class AMICA:
 
             updates["dWtmp"][:, :, h] += np.dot(g.T, b[:, :, h])
 
-            # Bias terms
-            updates["dc"][:, h] += np.sum(g, axis=0)
+            # Data-space bias numerator dc_numer[i,h] = sum_t v_h(t)*x(i,t)
+            # (Fortran :1423-1429); denominator is dgm[h] = sum_t v_h(t). Replaces
+            # the old gradient-style bias sum(g), which was accumulated but never
+            # applied (c was frozen at 0); the Fortran update is the data-space
+            # responsibility-weighted mean (issue #27).
+            updates["dc_numer"][:, h] += np.dot(X, v[:, h])
 
         return updates
 
@@ -872,6 +878,16 @@ class AMICA:
             self.gm = updates["dgm"] / self.num_good_samples
         else:
             self.gm = updates["dgm"] / self.num_samples
+
+        # Per-model data-space bias c (Fortran update_c, amica17.f90:1423-1429/
+        # 1899-1901): c[i,h] = sum_t v_h*x / sum_t v_h, the responsibility-weighted
+        # data mean for model h (the E-step centers each model at its own mean,
+        # b = W(x - c)). Skipped for a single model to keep the issue #24 parity
+        # bit-exact: with v==1 the update would add a ~1e-13 float-sum residual of
+        # the (mean-removed) data. dgm[h] = sum_t v_h is the denominator; a dead
+        # model (dgm[h]==0) yields a NaN the LL check surfaces (Fortran unguarded).
+        if self.num_models > 1:
+            self.c = updates["dc_numer"] / updates["dgm"][None, :]
 
         # Update mixture weights
         self.alpha = updates["dalpha_n"] / np.sum(updates["dalpha_n"], axis=0)
@@ -988,8 +1004,7 @@ class AMICA:
                 directions[h].T, self.A[:, idx]
             )
 
-        # c is not updated: for mean-removed data Fortran's c stays at machine
-        # zero (issue #24), so the exact-EM update is a no-op.
+        # (c was updated above, before the mixture/A updates, from dc_numer/dgm.)
 
         # Rescale parameters if requested
         if self.doscaling and self.iter % self.scalestep == 0:
@@ -1423,7 +1438,8 @@ class AMICA:
         S = np.zeros((self.num_comps, data.shape[1], self.num_models))
         for h in range(self.num_models):
             idx = self.comp_list[:, h]
-            # W^T is the true unmixing (issue #24 transpose convention).
-            S[idx, :, h] = np.dot(self.W[:, :, h].T, data)
+            # W^T is the true unmixing (issue #24 transpose convention); c is the
+            # per-model data-space center, so unmix as W(x - c) (issue #27).
+            S[idx, :, h] = np.dot(self.W[:, :, h].T, data - self.c[:, h][:, None])
 
         return S

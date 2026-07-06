@@ -479,7 +479,12 @@ class AMICATorchNG:
 
         for h in range(num_models):
             idx = self.comp_list[:, h]
-            b = X.T @ self.W[:, :, h] - self.c[:, h]  # (batch, n_channels)
+            # Activation b = W(x - c): c is the per-model data-space center
+            # (Fortran subtracts wc = W c, amica17.f90:1280-1292). Subtracting c
+            # in data space before W is equivalent and keeps c's semantics
+            # identical to Fortran's. For n_models=1, c == 0, so this is
+            # bit-identical to the old X.T @ W.
+            b = (X - self.c[:, h].unsqueeze(1)).T @ self.W[:, :, h]  # (batch, n_ch)
 
             mu_h = self.mu[:, idx].T.unsqueeze(0)  # (1, n_channels, num_mix)
             beta_h = self.beta[:, idx].T.unsqueeze(0)
@@ -537,7 +542,8 @@ class AMICATorchNG:
         -------
         updates : dict with ``dgm`` (n_models,), ``dalpha_n``/``dmu_n``/``dmu_d``/
             ``dbeta_n``/``dbeta_d``/``drho_n`` (n_mix, n_comps), ``dWtmp``
-            (n_channels, n_channels, n_models), ``dc`` (n_channels, n_models),
+            (n_channels, n_channels, n_models), ``dc_numer`` (n_channels,
+            n_models; the data-space bias numerator ``sum_t v_h*x``, issue #27),
             ``ll`` (scalar), and -- when ``do_newton`` -- ``dsigma2_numer``,
             ``dkappa_numer``, ``dlambda_numer`` (see ``_finalize_newton_stats``).
         """
@@ -559,7 +565,7 @@ class AMICATorchNG:
         dbeta_d = zeros(num_mix, self.n_comps)
         drho_n = zeros(num_mix, self.n_comps)
         dWtmp = zeros(self.n_channels, self.n_channels, num_models)
-        dc = zeros(self.n_channels, num_models)
+        dc_numer = zeros(self.n_channels, num_models)
         if self.do_newton:
             dsigma2_numer = zeros(self.n_channels, num_models)
             dkappa_numer = zeros(num_mix, self.n_channels, num_models)
@@ -598,7 +604,12 @@ class AMICATorchNG:
 
             g = (beta_h * ufp).sum(-1)  # g_i = sum_j sbeta*ufp (:1493)
             dWtmp[:, :, h] = g.T @ b  # source-space sum g_t b_t^T (:1592)
-            dc[:, h] = g.sum(0)
+            # Data-space bias accumulator: dc_numer[i,h] = sum_t v_h(t)*x(i,t)
+            # (Fortran :1423-1429). The denominator is dgm[h] = sum_t v_h(t).
+            # NOTE: this replaces the old gradient-style bias g.sum(0), which was
+            # accumulated but never applied (c was frozen at 0); the Fortran
+            # update is the data-space responsibility-weighted mean (issue #27).
+            dc_numer[:, h] = X @ v_h
 
             if self.do_newton:
                 # Newton curvature accumulators (Fortran amica17.f90:1419,
@@ -618,7 +629,7 @@ class AMICATorchNG:
             "dbeta_d": dbeta_d,
             "drho_n": drho_n,
             "dWtmp": dWtmp,
-            "dc": dc,
+            "dc_numer": dc_numer,
             "ll": block_ll,
         }
         if self.do_newton:
@@ -713,14 +724,24 @@ class AMICATorchNG:
 
         The mixture parameters use exact-EM fixed-point updates (no ``lrate``);
         only the ``A``/``W`` step is scaled by ``lrate`` (Fortran amica17.f90:
-        1890-2035). ``c`` is not updated: for ``n_models=1`` on mean-removed data
-        Fortran's ``c = sum(v*x)/sum(v)`` collapses to the (zero) data mean since
-        ``v == 1``, so the update is a no-op and single-model parity is exact. For
-        ``n_models>1`` Fortran's per-model ``v`` is non-uniform and ``c`` does move;
-        porting that (a data-space accumulator, not the retained ``dc``) is tracked
-        as a multi-model follow-up (issue #27).
+        1890-2035). The per-model data-space bias ``c`` uses Fortran's exact-EM
+        ``update_c`` (amica17.f90:1423-1429/1899-1901): ``c[i,h] = sum_t v_h*x /
+        sum_t v_h``, the responsibility-weighted data mean for model ``h``. For
+        ``n_models=1`` on mean-removed data ``v == 1`` so ``c`` collapses to the
+        (zero) data mean; the update is skipped there so single-model parity stays
+        bit-exact (issue #24). For ``n_models>1`` the per-model ``v`` is
+        non-uniform and ``c`` moves each iteration (issue #27).
         """
         self.gm = acc["dgm"] / n_samples
+
+        # Per-model data-space bias (Fortran update_c). Skipped for a single model
+        # to keep the issue #24 parity bit-exact: with v==1 the update would add a
+        # ~1e-13 float-sum residual of the (mean-removed) data, perturbing the
+        # otherwise-exact single-model trajectory. dgm[h] = sum_t v_h(t) is the
+        # denominator (dc_denom); a fully-dead model (dgm[h]==0) yields a NaN that
+        # the fit-loop isfinite LL check surfaces, matching Fortran's unguarded div.
+        if self.n_models > 1:
+            self.c = acc["dc_numer"] / acc["dgm"].unsqueeze(0)
 
         self.alpha = acc["dalpha_n"] / acc["dalpha_n"].sum(dim=0, keepdim=True)
 
@@ -1013,7 +1034,8 @@ class AMICATorchNG:
         """
         X_t = torch.from_numpy(np.ascontiguousarray(X)).to(self.device, self.dtype)
         X_t = self.sphere @ (X_t - self.mean)
-        S = self.W[:, :, model_idx].T @ X_t - self.c[:, model_idx : model_idx + 1]
+        # c is the per-model data-space center: unmix as W(x - c) (issue #27).
+        S = self.W[:, :, model_idx].T @ (X_t - self.c[:, model_idx : model_idx + 1])
         return S.cpu().numpy()
 
     def get_mixing_matrix(self, model_idx: int = 0) -> np.ndarray:
