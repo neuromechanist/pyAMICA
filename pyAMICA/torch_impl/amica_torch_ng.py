@@ -1005,6 +1005,43 @@ class AMICATorchNG:
 
         self._update_unmixing_matrices()
 
+    def _choose_pdfs(self, X: torch.Tensor) -> None:
+        """Extended-Infomax adaptive PDF switch (Fortran ``do_choose_pdfs``).
+
+        Re-estimates each source's kurtosis from the current model activations
+        and sets its density family to the super-Gaussian (code 1) or
+        sub-Gaussian (code 4) cosh density by kurtosis sign. This is the
+        extended-Infomax rule that ``runamica15.m`` documents for the
+        ``kurt_start``/``num_kurt``/``kurt_int`` schedule (the super/sub-Gaussian
+        scores ``y +/- tanh(y)`` are exactly the two families 1/4). The
+        reference binary declares this (``pdftype==1`` sets ``do_choose_pdfs``,
+        amica15.f90:594) but never runs the switch (``m2sum``/``m4sum`` are
+        never accumulated), so there is no bit-exact oracle; validated by
+        real-data log-likelihood (must not decrease vs the fixed GG default).
+        """
+        n_ch, n_models = self.n_channels, self.n_models
+        m2 = torch.zeros(n_ch, n_models, dtype=self.dtype, device=self.device)
+        m4 = torch.zeros_like(m2)
+        nsub = torch.zeros(n_models, dtype=self.dtype, device=self.device)
+        n_samples = X.shape[1]
+        for start in range(0, n_samples, self.block_size):
+            block = X[:, start : start + self.block_size]
+            logV, b_list, *_ = self._forward(block)
+            v = torch.softmax(logV, dim=1)  # (batch, n_models)
+            for h in range(n_models):
+                b = b_list[h]  # (batch, n_ch)
+                vh = v[:, h].unsqueeze(1)
+                m2[:, h] += (vh * b.pow(2)).sum(0)
+                m4[:, h] += (vh * b.pow(4)).sum(0)
+                nsub[h] += v[:, h].sum()
+
+        # Kurtosis = E[b^4]/E[b^2]^2 - 3 = nsub * m4 / m2^2 - 3, per (source, model).
+        tiny = torch.finfo(self.dtype).tiny
+        kurt = nsub.unsqueeze(0) * m4 / m2.pow(2).clamp_min(tiny) - 3.0
+        ones = torch.ones_like(self.pdtype)
+        # Super-Gaussian (positive kurtosis) -> code 1; sub-Gaussian -> code 4.
+        self.pdtype = torch.where(kurt > 0.0, ones, ones * 4)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -1076,6 +1113,20 @@ class AMICATorchNG:
             reject_ll = self._sample_ll(self.good_idx, X_t) if will_reject else None
 
             self._update_parameters(acc, n_use)
+
+            # Extended-Infomax adaptive PDF switch (Fortran do_choose_pdfs). Runs
+            # on the kurt_start/num_kurt/kurt_int schedule using the just-updated
+            # W; the new per-source families take effect from the next E-step.
+            # itf is the Fortran-style 1-indexed iteration. num_kurt=0 disables
+            # switching (the family stays at its pdftype=1 super-Gaussian init).
+            if self.do_choose_pdfs and self.n_kurt_done < self.num_kurt:
+                itf = it + 1
+                if (
+                    itf >= self.kurt_start
+                    and (itf - self.kurt_start) % self.kurt_int == 0
+                ):
+                    self._choose_pdfs(X_use)
+                    self.n_kurt_done += 1
 
             ll = (acc["ll"] / (n_use * self.n_channels)).item()
             # A singular W makes logdet -> -inf (not NaN), so guard on isfinite,
