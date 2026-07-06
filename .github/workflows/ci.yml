@@ -1,9 +1,20 @@
 name: CI
 
+# Python jobs (lint/test/build) skip when a change touches only prose --
+# Markdown or docs (incl. a future mkdocs site). Spell-checking lives in the
+# separate typos.yml, which has no such filter so docs are always checked.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "mkdocs.yml"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "mkdocs.yml"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -24,13 +35,6 @@ jobs:
         run: uv run ruff check .
       - name: ruff format --check
         run: uv run ruff format --check .
-
-  typos:
-    name: Typos
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: crate-ci/typos@v1
 
   test:
     name: Test (Python 3.12)
