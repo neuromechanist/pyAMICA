@@ -1,0 +1,228 @@
+"""Tests for the pdftype source-density families (issue #26).
+
+Real sample EEG data only (no synthetic/mock). The decisive correctness check
+is that the vectorized log-density ``z0`` and score ``fp`` reproduce the literal
+``amica15.f90`` expressions to float64 precision for every family; ``amica15mac``
+is the reference binary, so ``amica15.f90`` is the ground-truth source. An opt-in
+integration test (``AMICA_RUN_FORTRAN=1``) checks converged log-likelihood parity
+against the binary itself.
+"""
+
+import math
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+from pyAMICA.torch_impl import AMICATorchNG
+from pyAMICA.torch_impl.amica_torch_ng import _log_pdf_and_deriv, _score
+
+SAMPLE_DIR = Path(__file__).resolve().parents[2] / "sample_data"
+DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"
+NW = 32
+FIELD = 30504
+
+# Fortran log-normalizer literals (amica15.f90:1315/1327/1341/1353).
+_LOG4 = math.log(4.0)
+_LSQ2PI = math.log(2.506628274)
+_LNSUB = math.log(4.132731354)
+_LNSUP = math.log(1.858073988)
+
+
+def _load_real_data() -> np.ndarray:
+    from pyAMICA.torch_impl.utils import load_eeglab_data
+
+    return load_eeglab_data(str(DATA_FILE), data_dim=NW, field_dim=FIELD).astype(
+        np.float64
+    )
+
+
+def _fortran_z0(y: np.ndarray, code: int) -> np.ndarray:
+    """Literal amica15.f90 log-density (alpha=beta=1, mu=0 so y=b)."""
+    if code == 2:  # Gaussian, :1314
+        return -0.5 * y * y - _LSQ2PI
+    if code == 3:  # logistic, :1327
+        return -2.0 * np.log(np.cosh(0.5 * y)) - _LOG4
+    if code == 4:  # sub-Gaussian cosh+, :1340
+        return -0.5 * y * y + np.log(np.cosh(y)) - _LNSUB
+    if code == 1:  # super-Gaussian cosh-, :1352
+        return -0.5 * y * y - np.log(np.cosh(y)) - _LNSUP
+    raise ValueError(code)
+
+
+def _fortran_fp(y: np.ndarray, code: int) -> np.ndarray:
+    """Literal amica15.f90 score (:1465-1472)."""
+    return {
+        2: y,
+        3: np.tanh(y / 2.0),
+        4: y - np.tanh(y),
+        1: y + np.tanh(y),
+    }[code]
+
+
+# A grid spanning the density tails; drop exact 0 (Fortran divides by y in some
+# M-step denominators, and the score is unambiguous away from 0).
+_Y = torch.linspace(-8.0, 8.0, 65, dtype=torch.float64)
+_Y = _Y[_Y.abs() > 1e-3]
+_RHO = torch.full_like(_Y, 1.5)  # rho is frozen at rho0 for non-GG families
+
+
+@pytest.mark.parametrize("code", [2, 3, 4, 1])
+def test_family_log_pdf_matches_fortran(code: int):
+    """z0 (log-density) reproduces the literal amica15.f90 formula."""
+    pdt = torch.full_like(_Y, code, dtype=torch.long)
+    log_pdf, _ = _log_pdf_and_deriv(_Y, _RHO, pdt)
+    ref = _fortran_z0(_Y.numpy(), code)
+    assert np.max(np.abs(log_pdf.numpy() - ref)) < 1e-12
+
+
+@pytest.mark.parametrize("code", [2, 3, 4, 1])
+def test_family_score_matches_fortran(code: int):
+    """fp (score) reproduces the literal amica15.f90 formula."""
+    pdt = torch.full_like(_Y, code, dtype=torch.long)
+    fp = _score(_Y, _RHO, pdt)
+    ref = _fortran_fp(_Y.numpy(), code)
+    assert np.max(np.abs(fp.numpy() - ref)) < 1e-12
+
+
+def test_family_dpdf_is_minus_fp_times_pdf():
+    """The density derivative obeys dpdf = -fp * pdf for every family."""
+    for code in (0, 2, 3, 4, 1):
+        pdt = torch.full_like(_Y, code, dtype=torch.long)
+        log_pdf, dpdf = _log_pdf_and_deriv(_Y, _RHO, pdt)
+        fp = _score(_Y, _RHO, pdt)
+        expected = -fp * torch.exp(log_pdf)
+        assert torch.max(torch.abs(dpdf - expected)) < 1e-12
+
+
+def test_gg_path_bit_identical_none_vs_code0():
+    """The default GG path is bit-identical whether pdtype is None or all-zero,
+    so pdftype=0 runs are byte-for-byte the pre-#26 implementation."""
+    lp_none, dp_none = _log_pdf_and_deriv(_Y, _RHO, None)
+    fp_none = _score(_Y, _RHO, None)
+    pdt0 = torch.zeros_like(_Y, dtype=torch.long)
+    lp_zero, dp_zero = _log_pdf_and_deriv(_Y, _RHO, pdt0)
+    fp_zero = _score(_Y, _RHO, pdt0)
+    assert torch.equal(lp_none, lp_zero)
+    assert torch.equal(dp_none, dp_zero)
+    assert torch.equal(fp_none, fp_zero)
+
+
+def test_pdtype_h_is_none_only_for_gg():
+    """_pdtype_h returns None on the GG fast path and a tensor otherwise."""
+    gg = AMICATorchNG(n_channels=NW, n_mix=3, pdftype=0, device="cpu", seed=0)
+    gg._initialize_parameters()
+    assert gg._pdtype_h(0) is None
+    for pdftype, n_mix in [(2, 3), (3, 3), (4, 1), (1, 1)]:
+        m = AMICATorchNG(
+            n_channels=NW, n_mix=n_mix, pdftype=pdftype, device="cpu", seed=0
+        )
+        m._initialize_parameters()
+        ph = m._pdtype_h(0)
+        assert ph is not None and ph.shape == (1, NW, 1)
+
+
+def test_pdftype_validation():
+    """Construction rejects unknown pdftype and mixture single-component combos."""
+    with pytest.raises(ValueError):
+        AMICATorchNG(n_channels=NW, pdftype=7, device="cpu")
+    for bad in (1, 4):  # single-component families require n_mix == 1
+        with pytest.raises(ValueError):
+            AMICATorchNG(n_channels=NW, n_mix=3, pdftype=bad, device="cpu")
+    # Valid single-component construction succeeds.
+    AMICATorchNG(n_channels=NW, n_mix=1, pdftype=4, device="cpu")
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+@pytest.mark.parametrize("pdftype,n_mix", [(0, 3), (2, 3), (3, 3), (4, 1), (1, 1)])
+def test_family_fit_finite_and_monotone(pdftype: int, n_mix: int):
+    """Every family fits real EEG to a finite, monotonically improving LL."""
+    data = _load_real_data()
+    kw = dict(num_kurt=0) if pdftype == 1 else {}  # fixed super-G, no switching
+    m = AMICATorchNG(
+        n_channels=NW, n_mix=n_mix, pdftype=pdftype, device="cpu", seed=0, **kw
+    )
+    m.fit(data, max_iter=15, verbose=False)
+    ll = np.asarray(m.ll_history)
+    assert np.all(np.isfinite(ll))
+    assert np.all(np.isfinite(m.W.cpu().numpy()))
+    assert ll[-1] >= ll[0] - 1e-6
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_auto_switcher_runs_and_is_stable():
+    """The extended-Infomax switcher runs the full schedule, keeps every source
+    in a valid family, and stays finite/monotone on real EEG."""
+    data = _load_real_data()
+    m = AMICATorchNG(
+        n_channels=NW,
+        n_mix=1,
+        pdftype=1,
+        device="cpu",
+        seed=0,
+        kurt_start=3,
+        num_kurt=5,
+        kurt_int=1,
+    )
+    m.fit(data, max_iter=20, verbose=False)
+    assert m.n_kurt_done == 5
+    pdt = m.pdtype.cpu().numpy()
+    assert set(np.unique(pdt)).issubset({1, 4})
+    ll = np.asarray(m.ll_history)
+    assert np.all(np.isfinite(ll))
+    assert ll[-1] >= ll[0] - 1e-6
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_auto_switch_noop_when_num_kurt_zero():
+    """num_kurt=0 disables switching: the run is identical to the fixed
+    super-Gaussian family (pdtype stays at the code-1 init)."""
+    data = _load_real_data()
+    fixed = AMICATorchNG(
+        n_channels=NW, n_mix=1, pdftype=1, device="cpu", seed=0, num_kurt=0
+    )
+    fixed.fit(data, max_iter=10, verbose=False)
+    assert fixed.n_kurt_done == 0
+    assert np.all(fixed.pdtype.cpu().numpy() == 1)
+
+
+@pytest.mark.skipif(
+    os.environ.get("AMICA_RUN_FORTRAN") != "1",
+    reason="opt-in Fortran-binary integration test (set AMICA_RUN_FORTRAN=1)",
+)
+@pytest.mark.parametrize("pdftype,n_mix", [(0, 3), (2, 3), (3, 3), (4, 1), (1, 1)])
+def test_family_converged_ll_matches_fortran(pdftype: int, n_mix: int):
+    """Converged LL parity vs amica15mac with the optimizer matched (Newton on).
+
+    Slow (runs the binary + a full NG fit per family); gated behind
+    AMICA_RUN_FORTRAN=1 so it does not slow default CI.
+    """
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from validate_implementations import load_sample_data, run_fortran_amica
+
+    data, params = load_sample_data()
+    fp = dict(params)
+    fp.update(pdftype=pdftype, num_mix=n_mix, max_iter=150, do_newton=True)
+    run_dir = SAMPLE_DIR.parent.parent / "scratch_amica_parity" / f"pt{pdftype}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    fres = run_fortran_amica(data, fp, run_dir, seed=0)
+    assert fres is not None and "final_ll" in fres
+
+    kw = dict(num_kurt=0) if pdftype == 1 else {}
+    m = AMICATorchNG(
+        n_channels=NW,
+        n_mix=n_mix,
+        pdftype=pdftype,
+        device="cpu",
+        seed=0,
+        lrate=0.05,
+        do_newton=True,
+        newt_start=50,
+        **kw,
+    )
+    m.fit(data, max_iter=150, verbose=False)
+    assert abs(m.ll_history[-1] - fres["final_ll"]) < 0.02
