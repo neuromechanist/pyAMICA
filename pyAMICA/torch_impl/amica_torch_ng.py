@@ -223,6 +223,10 @@ class AMICATorchNG:
         maxrho: float = 2.0,
         rholrate: float = 0.05,
         rholratefact: float = 0.1,
+        pdftype: int = 0,
+        kurt_start: int = 3,
+        num_kurt: int = 5,
+        kurt_int: int = 1,
         invsigmin: float = 1e-4,
         invsigmax: float = 1000.0,
         doscaling: bool = True,
@@ -274,6 +278,34 @@ class AMICATorchNG:
         self.rholrate0 = rholrate
         self.rholratefact = rholratefact
 
+        # Source-density family selection (Fortran ``pdftype``, amica15.f90). Values
+        # match Fortran's per-source ``pdtype`` codes: 0 generalized Gaussian (the
+        # default, GG-mixture with adaptive rho), 2 Gaussian mixture, 3 logistic
+        # (sech^2) mixture, 4 sub-Gaussian cosh+ (single component). pdftype=1 enables
+        # the extended-Infomax adaptive switcher (Fortran's do_choose_pdfs trigger),
+        # which flips each source between the super-Gaussian (code 1) and sub-Gaussian
+        # (code 4) cosh densities by kurtosis sign on the kurt_start/num_kurt/kurt_int
+        # schedule. Families 1 and 4 are single-component (no alpha mixture).
+        if pdftype not in (0, 1, 2, 3, 4):
+            raise ValueError(f"pdftype must be one of 0,1,2,3,4; got {pdftype}")
+        self.pdftype = pdftype
+        # Fortran freezes the GG shape update for every non-GG family (amica15.f90:
+        # `if (pdftype /= 0) dorho = .false.`, line 3682).
+        self.dorho = pdftype == 0
+        # pdftype==1 is Fortran's adaptive trigger (amica15.f90:594).
+        self.do_choose_pdfs = pdftype == 1
+        self.kurt_start = kurt_start
+        self.num_kurt = num_kurt
+        self.kurt_int = kurt_int
+        # Families 1/4 (and the adaptive mode, which uses only codes 1 and 4) are
+        # single-component densities: Fortran's z0 references only mixture component
+        # j=1 and omits log(alpha). They are meaningful only with n_mix == 1.
+        if pdftype in (1, 4) and n_mix != 1:
+            raise ValueError(
+                f"pdftype={pdftype} is a single-component density (adaptive mode "
+                f"uses codes 1 and 4); it requires n_mix=1, got n_mix={n_mix}."
+            )
+
         self.invsigmin = invsigmin
         self.invsigmax = invsigmax
 
@@ -317,6 +349,11 @@ class AMICATorchNG:
         # Populated by fit()/_initialize_parameters().
         self.A = self.W = self.c = None
         self.mu = self.alpha = self.beta = self.rho = None
+        # Per-source density-family codes (n_channels, n_models); set in
+        # _initialize_parameters and mutated by the adaptive switcher.
+        self.pdtype = None
+        # Number of adaptive-switch passes already performed (Fortran numchpdf).
+        self.n_kurt_done = 0
         self.gm = self.comp_list = None
         self.mean = self.sphere = None
         self.sldet = 0.0
@@ -432,6 +469,14 @@ class AMICATorchNG:
         self.rho = torch.from_numpy(rho_np).to(self.device, self.dtype)
         self.gm = torch.from_numpy(gm_np).to(self.device, self.dtype)
         self.c = torch.from_numpy(c_np).to(self.device, self.dtype)
+
+        # Per-source density-family codes, Fortran ``pdtype = pdftype`` (amica15.f90:
+        # 593). In adaptive mode (pdftype==1) every source starts as the
+        # super-Gaussian code 1 and the switcher may flip it to 4.
+        self.pdtype = torch.full(
+            (n, m), self.pdftype, dtype=torch.long, device=self.device
+        )
+        self.n_kurt_done = 0
 
         # Reset the mutable optimization state to the pristine constructor
         # values (lrate_cap, newtrate, rholrate are ratcheted down during
