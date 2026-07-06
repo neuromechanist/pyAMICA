@@ -1023,3 +1023,139 @@ class AMICATorchNG:
     def get_unmixing_matrix(self, model_idx: int = 0) -> np.ndarray:
         """True unmixing matrix ``W_fort`` = (stored W)^T (issue #24 convention)."""
         return self.W[:, :, model_idx].T.cpu().numpy()
+
+    # ------------------------------------------------------------------
+    # Persistence (issue #36)
+    # ------------------------------------------------------------------
+    # Fitted-parameter tensors that fully determine transform()/get_*matrix().
+    _PARAM_TENSORS = (
+        "A", "W", "c", "mu", "alpha", "beta", "rho", "gm",
+        "comp_list", "mean", "sphere",
+    )  # fmt: skip
+
+    def state_dict(self) -> dict:
+        """Serialize the fitted model to a plain, device-agnostic dict.
+
+        The returned dict has three parts: ``config`` (the constructor
+        arguments needed to rebuild the object), ``params`` (the fitted
+        tensors, moved to CPU), and ``extra`` (scalar/optimizer state). Every
+        value is a tensor or a plain Python primitive, so the dict round-trips
+        through ``torch.save``/``torch.load`` with ``weights_only=True`` (no
+        custom classes or ``torch.dtype`` objects: dtype is stored by name).
+        Rebuild with :meth:`from_state_dict`.
+        """
+        if self.A is None:
+            raise RuntimeError(
+                "AMICATorchNG.state_dict() requires a fitted model; call fit() first."
+            )
+        config = {
+            "n_channels": self.n_channels,
+            "n_models": self.n_models,
+            "n_mix": self.n_mix,
+            "block_size": self.block_size,
+            # lrate/newtrate/rholrate are annealed during fit; persist the
+            # original constructor values (lrate0/newtrate0/rholrate0) and
+            # restore the mutated ones from ``extra`` below.
+            "lrate": self.lrate0,
+            "minlrate": self.minlrate,
+            "lratefact": self.lratefact,
+            "maxdecs": self.maxdecs,
+            "newt_ramp": self.newt_ramp,
+            "do_newton": self.do_newton,
+            "newt_start": self.newt_start,
+            "newtrate": self.newtrate0,
+            "do_reject": self.do_reject,
+            "rejsig": self.rejsig,
+            "rejstart": self.rejstart,
+            "rejint": self.rejint,
+            "maxrej": self.maxrej,
+            "rho0": self.rho0,
+            "minrho": self.minrho,
+            "maxrho": self.maxrho,
+            "rholrate": self.rholrate0,
+            "rholratefact": self.rholratefact,
+            "invsigmin": self.invsigmin,
+            "invsigmax": self.invsigmax,
+            "doscaling": self.doscaling,
+            "scalestep": self.scalestep,
+            "do_mean": self.do_mean,
+            "do_sphere": self.do_sphere,
+            "do_approx_sphere": self.do_approx_sphere,
+            "pcakeep": self.pcakeep,
+            "pcadb": self.pcadb,
+            "seed": self.seed,
+            # Store dtype by name (e.g. "float64") to keep the payload
+            # weights_only-safe; rebuilt via getattr(torch, ...) on load.
+            "dtype": str(self.dtype).split(".")[-1],
+        }
+        params = {
+            name: getattr(self, name).detach().cpu() for name in self._PARAM_TENSORS
+        }
+        extra = {
+            "sldet": float(self.sldet),
+            "iteration": int(self.iteration),
+            "ll_history": [float(v) for v in self.ll_history],
+            "stop_reason": self.stop_reason,
+            "n_newton_fallbacks": int(self.n_newton_fallbacks),
+            "numrej": int(self.numrej),
+            "good_idx": None if self.good_idx is None else self.good_idx.detach().cpu(),
+            "lrate": float(self.lrate),
+            "lrate_cap": float(self.lrate_cap),
+            "newtrate": float(self.newtrate),
+            "rholrate": float(self.rholrate),
+        }
+        return {
+            "format_version": 1,
+            "config": config,
+            "params": params,
+            "extra": extra,
+        }
+
+    @classmethod
+    def from_state_dict(
+        cls, state: dict, device: Optional[Union[str, torch.device]] = None
+    ) -> "AMICATorchNG":
+        """Rebuild a fitted :class:`AMICATorchNG` from :meth:`state_dict` output.
+
+        ``device`` overrides where the restored tensors live (the constructor
+        picks a default when ``None``); ``dtype`` always comes from the saved
+        ``config``.
+        """
+        version = state.get("format_version")
+        if version != 1:
+            raise ValueError(
+                f"unsupported AMICATorchNG state format_version: {version!r} "
+                "(expected 1)"
+            )
+        config = dict(state["config"])
+        config["dtype"] = getattr(torch, config["dtype"])
+        obj = cls(device=device, **config)
+        obj._load_params(state)
+        return obj
+
+    def _load_params(self, state: dict) -> None:
+        """Restore fitted tensors/scalars from :meth:`state_dict` output onto
+        this instance's device/dtype."""
+        params = state["params"]
+        for name in self._PARAM_TENSORS:
+            tensor = params[name]
+            # comp_list holds integer component indices; preserve its dtype and
+            # only move devices. The float parameters follow self.dtype.
+            if name == "comp_list":
+                setattr(self, name, tensor.to(self.device))
+            else:
+                setattr(self, name, tensor.to(self.device, self.dtype))
+
+        extra = state["extra"]
+        self.sldet = extra["sldet"]
+        self.iteration = extra["iteration"]
+        self.ll_history = list(extra["ll_history"])
+        self.stop_reason = extra["stop_reason"]
+        self.n_newton_fallbacks = extra["n_newton_fallbacks"]
+        self.numrej = extra["numrej"]
+        good_idx = extra["good_idx"]
+        self.good_idx = None if good_idx is None else good_idx.to(self.device)
+        self.lrate = extra["lrate"]
+        self.lrate_cap = extra["lrate_cap"]
+        self.newtrate = extra["newtrate"]
+        self.rholrate = extra["rholrate"]

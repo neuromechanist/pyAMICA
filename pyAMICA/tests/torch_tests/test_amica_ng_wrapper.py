@@ -1,7 +1,7 @@
 """Tests for the public ``AMICA`` wrapper over ``AMICATorchNG``.
 
 These cover the wiring the wrapper adds on top of ``AMICATorchNG``: the
-save/load NotImplementedError and the device-selection fallback that keeps
+save/load round-trip (issue #36) and the device-selection fallback that keeps
 the float64 parity default from crashing on Apple Silicon (MPS cannot
 represent float64). Real sample EEG data only (no synthetic/mock).
 """
@@ -44,15 +44,49 @@ def fitted_ng(real_data) -> AMICA:
     return model
 
 
-def test_ng_load_not_implemented(tmp_path):
+def test_ng_save_requires_fit(tmp_path):
     model = AMICA(verbose=False)
-    with pytest.raises(NotImplementedError, match="load"):
-        model.load(str(tmp_path / "model.pt"))
+    with pytest.raises(ValueError, match="fitted"):
+        model.save(str(tmp_path / "model.pt"))
 
 
-def test_ng_save_not_implemented(fitted_ng, tmp_path):
-    with pytest.raises(NotImplementedError, match="save"):
-        fitted_ng.save(str(tmp_path / "model.pt"))
+def test_ng_save_load_roundtrip(fitted_ng, real_data, tmp_path):
+    """fit -> save -> load reconstructs a transform-ready model that reproduces
+    the original mixing/unmixing matrices and source estimates exactly."""
+    path = str(tmp_path / "model.pt")
+    fitted_ng.save(path)
+    assert Path(path).exists()
+
+    loaded = AMICA.load(path, device="cpu")
+
+    assert loaded.is_fitted_
+    assert loaded.n_models == fitted_ng.n_models
+    assert loaded.n_mix == fitted_ng.n_mix
+    assert loaded.ll_history_ == fitted_ng.ll_history_
+
+    # Restoring CPU float64 tensors is lossless, so matrices match exactly.
+    np.testing.assert_array_equal(
+        loaded.get_mixing_matrix(), fitted_ng.get_mixing_matrix()
+    )
+    np.testing.assert_array_equal(
+        loaded.get_unmixing_matrix(), fitted_ng.get_unmixing_matrix()
+    )
+
+    block = real_data[:, :4096]
+    np.testing.assert_array_equal(loaded.transform(block), fitted_ng.transform(block))
+
+
+def test_ng_load_rejects_unknown_version(fitted_ng, tmp_path):
+    """A payload with an unexpected format_version must fail loudly, not load a
+    half-formed model (no silent-failure)."""
+    path = str(tmp_path / "model.pt")
+    fitted_ng.save(path)
+    payload = torch.load(path, weights_only=True)
+    payload["format_version"] = 99
+    torch.save(payload, path)
+
+    with pytest.raises(ValueError, match="format_version"):
+        AMICA.load(path)
 
 
 def test_ng_default_device_avoids_mps_float64(real_data, caplog):
