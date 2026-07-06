@@ -54,33 +54,21 @@ computes in float64 for Fortran parity, which MPS cannot represent, so parity ru
 - See `FEATURE_PARITY.md`, `MIGRATION_PLAN.md`, and `PROGRESS_SUMMARY.md` for detailed roadmaps.
 
 ## Known Issues (parity blockers)
-The core parity blockers were RESOLVED by issue #24 (natural-gradient A-update transpose fix +
-exact-EM mixture updates + digamma rho update + symmetric-ZCA sphere + Jacobian LL). Both the
-`AMICATorchNG` backend and the legacy NumPy `pyAMICA.py` now ascend to Fortran's solution
-(LL ~ -3.40, Hungarian-matched component correlation ~0.997 with Newton, > 0.95 gate cleared).
-Root-cause writeup and machine-precision repro: `.context/issue-24/root_cause_Aupdate.py` +
-`drift_localization.md`.
+**Single-model parity: DONE (#24).** The natural-gradient A-update transpose fix (plus exact-EM
+mixture updates, digamma rho update, symmetric-ZCA sphere, Jacobian LL) brought both `AMICATorchNG`
+and the legacy NumPy `pyAMICA.py` to Fortran's solution (LL ~ -3.40, Hungarian-matched component
+correlation ~0.997, > 0.95 gate cleared; root cause in `.context/issue-24/`). Also resolved: Newton
+stability (posdef, 0 fallbacks), backend consolidation (#32/#31), NumPy CLI save/load format (#30),
+and NG save/load persistence (#36).
 
-Multi-model (`n_models>1`): the per-block sufficient statistics and model responsibilities are
-bit-exact vs Fortran (one seeded step matches unmixing to ~1e-15, including `gm`) and the sphere
-matches to ~1e-13; NG<->NumPy multi-model sufficient-stat parity is a suite test. A full 2-model fit
-reaches a comparable LL (NG -3.355 vs Fortran -3.345) but a lower Hungarian cross-correlation
-(~0.77). Two contributors, being separated in issue #27: (1) intrinsic partition ambiguity --
-multi-model AMICA has many near-degenerate partitions (unlike single-model's unique solution), and
-NG is self-consistent (cross-corr 1.0 across block sizes); (2) a genuine code gap -- the per-model
-bias `c` update is omitted (only a no-op for `n_models=1`), whereas Fortran moves `c` per model when
-`v` is non-uniform. So the multi-model gap is NOT purely partition ambiguity; the `c` update is an
-open, fixable suspect.
-
-Remaining, non-blocking (tracked as follow-up issues):
-1. Newton stability was fixed for `AMICATorchNG` (posdef, 0 fallbacks on the sample data). The
-   superseded Adam/autograd backends (`AMICATorch`, `AMICATorchV2`) were removed in #32, which also
-   made the basic-backend mixture M-step bug (#31) moot by deleting that module.
-2. The `AMICATorchNG` backend still lacks the adaptive-PDF selection present in the NumPy path
-   (a feature beyond Fortran parity, which uses a fixed GG PDF; #26); outlier rejection IS
-   implemented (`do_reject`).
-3. Full multi-model partition matching and the per-model bias `c` update (#27).
-4. Legacy NumPy CLI save/load format mismatch (#30).
+**Open (non-blocking, tracked):**
+- **Adaptive-PDF selection (#26):** `AMICATorchNG` uses a fixed generalized-Gaussian PDF (Fortran
+  parity) and lacks the per-source Laplace/Student-t/GG selection the NumPy path has (beyond Fortran
+  parity; the NumPy path is the validation oracle). Outlier rejection (`do_reject`) IS implemented.
+- **Multi-model (#27):** per-block sufficient stats are bit-exact vs Fortran, but a full 2-model fit
+  matches LL yet not Fortran's partition (~0.77 cross-corr). Two causes: intrinsic partition
+  ambiguity, and a genuine gap -- the per-model bias `c` update is omitted (no-op for `n_models=1`).
+  The `c` update is the open, fixable suspect.
 
 ## Development Workflow
 1. **Check context:** `.context/plan.md` for current tasks and priorities.
@@ -91,11 +79,13 @@ Remaining, non-blocking (tracked as follow-up issues):
 6. **Document failures:** Log dead ends in `.context/scratch_history.md`.
 7. **Commit:** Atomic, <50 chars, no emojis, no AI attribution.
 8. **PR + review:** Run `/review-pr` and address all findings (`.rules/code_review.md`).
+9. **Merge:** CI green first (see below), then **squash merge** (`gh pr merge <n> --squash --delete-branch`).
 
 ## [CRITICAL] Core Principles
 - **NO MOCKS:** Validate against real sample data and the Fortran binary, never fabricated data. Details: `.rules/testing.md`.
 - **No technical debt carried forward:** Address ALL PR review findings; replace, don't deprecate. Details: `.rules/code_review.md`.
 - **Numerical parity is the spec:** Correctness means matching Fortran output within tolerance, not merely "converging".
+- **Squash merge every PR** by default; use a regular merge commit **only** for PRs coming from an epic branch (to preserve the epic's per-phase history). Never merge until CI is green.
 
 ## [NEVER DO THIS]
 - Never use mocks, stubs, or fake/synthetic data as the basis for correctness tests.
