@@ -70,7 +70,8 @@ and NG save/load persistence (#36).
   `c[i,h] = sum_t v_h*x / sum_t v_h`, the responsibility-weighted data-space mean) is now ported to
   both `AMICATorchNG` and NumPy `pyAMICA.py`, guarded to a no-op for `n_models=1` (keeps single-model
   parity bit-exact). A controlled A/B (same config/seed, `c` toggled) shows it lifts the 2-model
-  Hungarian cross-corr by only ~0.011 with LL unchanged, so the omission was a minor contributor:
+  Hungarian cross-corr by only ~0.011 with LL comparable (~-3.376 vs -3.375), so the omission was a
+  minor contributor:
   the dominant residual gap is **intrinsic partition ambiguity** (NG is self-consistent, cross-corr
   1.0 across block sizes), and `>0.95` vs Fortran is not reachable via `c` alone. See
   `.context/issue-27/multimodel_c_update.md`.

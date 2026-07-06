@@ -1,8 +1,9 @@
 # Issue #27: per-model bias `c` update + 2-model partition re-measurement
 
 ## What was done
-Ported Fortran's `update_c` (amica17.f90:1423-1429 / 1899-1901) into both
-`AMICATorchNG` and the legacy NumPy `pyAMICA.py`:
+Ported the update gated by Fortran's `update_c` flag (numerator accumulation at
+amica17.f90:1423-1429, division at :1899-1901) into both `AMICATorchNG` and the
+legacy NumPy `pyAMICA.py`:
 
 - `c[i,h] = dc_numer[i,h] / dc_denom[i,h]`, with
   `dc_numer[i,h] = sum_t v_h(t) * x(i,t)` (sphered-data space) and
@@ -19,6 +20,11 @@ Ported Fortran's `update_c` (amica17.f90:1423-1429 / 1899-1901) into both
 - Replaced the old `dc = sum(g)` accumulator (gradient-style bias that was
   accumulated but never applied — `c` was frozen at 0) with the data-space
   `dc_numer`. `transform()` in both backends now unmixes as `W(x - c)`.
+- Dead-model containment: a model with zero total responsibility (`dgm[h]==0`)
+  would give `0/0`; the guard keeps that model's PRIOR `c` instead of writing a
+  NaN. A NaN `c` would poison the next iteration's cross-model `softmax` for
+  every model (unlike `log(gm[h])=-inf`, which `softmax` tolerates), so this
+  mirrors the existing mu/beta/rho non-finite guards in the same method.
 
 ## Controlled re-measurement (real sample EEG, 2 models, 100 iters)
 `scratchpad/measure_multimodel_xcorr.py`: Fortran binary (num_models=2) run to

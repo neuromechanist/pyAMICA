@@ -479,10 +479,11 @@ class AMICATorchNG:
 
         for h in range(num_models):
             idx = self.comp_list[:, h]
-            # Activation b = W(x - c): c is the per-model data-space center
-            # (Fortran subtracts wc = W c, amica17.f90:1280-1292). Subtracting c
-            # in data space before W is equivalent and keeps c's semantics
-            # identical to Fortran's. For n_models=1, c == 0, so this is
+            # Activation b = W(x - c): c is the per-model data-space center.
+            # Fortran subtracts wc in the E-step (amica17.f90:1280-1292), where
+            # wc = W@c is precomputed in get_unmixing_matrices (amica17.f90:2178).
+            # Subtracting c in data space before W is equivalent and keeps c's
+            # semantics identical to Fortran's. For n_models=1, c == 0, so this is
             # bit-identical to the old X.T @ W.
             b = (X - self.c[:, h].unsqueeze(1)).T @ self.W[:, :, h]  # (batch, n_ch)
 
@@ -734,14 +735,29 @@ class AMICATorchNG:
         """
         self.gm = acc["dgm"] / n_samples
 
-        # Per-model data-space bias (Fortran update_c). Skipped for a single model
-        # to keep the issue #24 parity bit-exact: with v==1 the update would add a
-        # ~1e-13 float-sum residual of the (mean-removed) data, perturbing the
+        # Per-model data-space bias (Fortran's `update_c` flag, amica17.f90:1423-
+        # 1429 numerator / :1899-1901 division). Skipped for a single model to keep
+        # the issue #24 parity bit-exact: with v==1 the update would add a ~1e-13
+        # float-sum residual of the (mean-removed) data, perturbing the
         # otherwise-exact single-model trajectory. dgm[h] = sum_t v_h(t) is the
-        # denominator (dc_denom); a fully-dead model (dgm[h]==0) yields a NaN that
-        # the fit-loop isfinite LL check surfaces, matching Fortran's unguarded div.
+        # denominator (Fortran `dc_denom`). A fully-dead model (dgm[h]==0 => v_h==0
+        # for all t, so dc_numer[:,h]==0 too) gives 0/0; keep its PRIOR c rather
+        # than write a NaN. A NaN c would poison the NEXT iteration's cross-model
+        # softmax for EVERY model (unlike log(gm[h])=-inf, which softmax tolerates,
+        # so a dead model was previously inert) -- this containment mirrors the
+        # mu/beta/rho non-finite guards below. `dgm>0` is also False for a NaN dgm
+        # from upstream corruption, so that is contained too.
         if self.n_models > 1:
-            self.c = acc["dc_numer"] / acc["dgm"].unsqueeze(0)
+            dgm = acc["dgm"]
+            live = dgm > 0.0
+            new_c = acc["dc_numer"] / dgm.clamp_min(torch.finfo(self.dtype).tiny)
+            self.c = torch.where(live.unsqueeze(0), new_c, self.c)
+            if not bool(live.all()):
+                logger.warning(
+                    "Zero-responsibility model(s) at iter %d; kept their prior "
+                    "bias c (dead-model guard).",
+                    self.iteration,
+                )
 
         self.alpha = acc["dalpha_n"] / acc["dalpha_n"].sum(dim=0, keepdim=True)
 
@@ -1029,8 +1045,10 @@ class AMICATorchNG:
         """Apply the learned unmixing matrix to (new) data.
 
         The internal ``W = inv(A)`` is stored transposed relative to the true
-        unmixing (the E-step forms activations as ``X^T @ W``), so the unmixing
-        applied here is ``W^T`` (issue #24 transpose convention).
+        unmixing (the E-step forms activations as ``(X-c)^T @ W``, see
+        ``_forward``), so the unmixing applied here is ``W^T`` (issue #24
+        transpose convention) with the per-model data-space center ``c``
+        subtracted first (issue #27).
         """
         X_t = torch.from_numpy(np.ascontiguousarray(X)).to(self.device, self.dtype)
         X_t = self.sphere @ (X_t - self.mean)

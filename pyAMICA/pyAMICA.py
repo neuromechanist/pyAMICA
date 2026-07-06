@@ -343,7 +343,10 @@ class AMICA:
         if self.W is None:
             raise RuntimeError("Model has not been fitted yet; call fit() first.")
         # Internal W = inv(A) is stored transposed relative to the true unmixing
-        # (the E-step forms activations as X^T @ W), so return W^T (issue #24).
+        # (the E-step forms activations as (X-c)^T @ W), so return W^T (issue #24).
+        # This is the raw unmixing matrix; it does not account for the per-model
+        # data-space center c (issue #27) -- use transform() for c-corrected
+        # sources. Harmless for model 0 single-model fits where c == 0.
         return self.W[:, :, 0].T
 
     def fit(self, data: Optional[np.ndarray] = None) -> "AMICA":
@@ -716,8 +719,10 @@ class AMICA:
             )
 
         # Compute activations for each model. c is the per-model data-space
-        # center: b = W(x - c) (Fortran subtracts wc = W c, amica17.f90:1280-1292).
-        # For n_models=1, c == 0, so this is bit-identical to X.T @ W.
+        # center: b = W(x - c). Fortran subtracts wc in the E-step
+        # (amica17.f90:1280-1292), where wc = W@c is precomputed in
+        # get_unmixing_matrices (amica17.f90:2178). For n_models=1, c == 0, so
+        # this is bit-identical to X.T @ W.
         b = np.zeros((batch_size, self.data_dim, self.num_models))
         for h in range(self.num_models):
             b[:, :, h] = np.dot((X - self.c[:, h][:, None]).T, self.W[:, :, h])
@@ -879,15 +884,29 @@ class AMICA:
         else:
             self.gm = updates["dgm"] / self.num_samples
 
-        # Per-model data-space bias c (Fortran update_c, amica17.f90:1423-1429/
-        # 1899-1901): c[i,h] = sum_t v_h*x / sum_t v_h, the responsibility-weighted
-        # data mean for model h (the E-step centers each model at its own mean,
-        # b = W(x - c)). Skipped for a single model to keep the issue #24 parity
-        # bit-exact: with v==1 the update would add a ~1e-13 float-sum residual of
-        # the (mean-removed) data. dgm[h] = sum_t v_h is the denominator; a dead
-        # model (dgm[h]==0) yields a NaN the LL check surfaces (Fortran unguarded).
+        # Per-model data-space bias c (Fortran's `update_c` flag, amica17.f90:1423-
+        # 1429 numerator / :1899-1901 division): c[i,h] = sum_t v_h*x / sum_t v_h,
+        # the responsibility-weighted data mean for model h (the E-step centers
+        # each model at its own mean, b = W(x - c)). Skipped for a single model to
+        # keep the issue #24 parity bit-exact: with v==1 the update would add a
+        # ~1e-13 float-sum residual of the (mean-removed) data. dgm[h] = sum_t v_h
+        # is the denominator (Fortran `dc_denom`). A dead model (dgm[h]==0) gives
+        # 0/0; keep its prior c so a NaN cannot poison the next iteration's
+        # cross-model softmax for every model (mirrors the mu/beta/rho guards).
         if self.num_models > 1:
-            self.c = updates["dc_numer"] / updates["dgm"][None, :]
+            dgm = updates["dgm"]
+            live = dgm > 0.0
+            new_c = (
+                updates["dc_numer"]
+                / np.maximum(dgm, np.finfo(np.float64).tiny)[None, :]
+            )
+            self.c = np.where(live[None, :], new_c, self.c)
+            if not np.all(live):
+                self.logger.warning(
+                    "Zero-responsibility model(s) at iter %d; kept prior bias c "
+                    "(dead-model guard).",
+                    self.iter,
+                )
 
         # Update mixture weights
         self.alpha = updates["dalpha_n"] / np.sum(updates["dalpha_n"], axis=0)

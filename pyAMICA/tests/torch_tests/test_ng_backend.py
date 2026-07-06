@@ -156,6 +156,37 @@ def test_blocking_invariance():
 
 
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_blocking_invariance_multimodel_bias():
+    """The data-space bias accumulator ``dc_numer`` (and the resulting ``c``) are
+    block-size independent for ``n_models=2``. The single-model
+    ``test_blocking_invariance`` cannot catch a dc_numer accumulation bug because
+    dc_numer is ~0 there regardless of block size; with two models it is nonzero
+    and a per-block reset/double-count would show up."""
+    data = _load_real_data()[:, :4096]
+
+    def accumulate(block_size):
+        m = AMICATorchNG(
+            n_channels=NW,
+            n_models=2,
+            n_mix=NMIX,
+            seed=SEED,
+            device="cpu",
+            dtype=torch.float64,
+            block_size=block_size,
+        )
+        X_t = m._preprocess(data)
+        m._initialize_parameters()
+        return m._accumulate_blocks(X_t)
+
+    acc_a = accumulate(256)
+    acc_b = accumulate(512)
+    da = acc_a["dc_numer"].cpu().numpy()
+    db = acc_b["dc_numer"].cpu().numpy()
+    assert not np.allclose(da, 0.0), "multi-model dc_numer should be nonzero"
+    assert np.allclose(da, db, atol=1e-8), "dc_numer depends on block_size"
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_reported_ll_includes_jacobian_near_fortran_at_init():
     """At initialization the reported per-sample-per-channel LL sits in
     Fortran's range (~ -3 to -4), which requires the log|det W| and sldet
@@ -623,8 +654,144 @@ def test_newton_multimodel_finite_and_shaped():
         assert torch.all(torch.isfinite(stat)), name
 
     ng.fit(data, max_iter=6, verbose=False)
+    # The fit must actually complete all 6 iterations (a c-driven NaN would
+    # break the loop early via the isfinite-LL stop) and leave a finite bias c
+    # for both models -- get_unmixing_matrix returns W, which never touches c,
+    # so assert isfinite(ng.c) directly to close that blind spot.
+    assert len(ng.ll_history) == 6
+    assert torch.all(torch.isfinite(ng.c))
     for h in range(2):
         assert np.all(np.isfinite(ng.get_unmixing_matrix(h)))
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_multimodel_bias_c_matches_numpy_reference():
+    """Cross-backend parity of the FINALIZED bias c (not just the accumulator):
+    NG's ``self.c`` after one M-step equals the NumPy reference's
+    ``dc_numer / dgm``. The existing sufficient-stats test proves the numerator
+    matches; this closes the accumulator-matches-but-finalize-differs failure
+    mode issue #27 already hit once for other statistics."""
+    data = _load_real_data()[:, :512]
+    ng = AMICATorchNG(
+        n_channels=NW,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+        block_size=512,
+    )
+    X_t = ng._preprocess(data)
+    ng._initialize_parameters()
+    # NumPy reference carrying NG's pre-update parameters.
+    npm = _numpy_ref_like(ng, 512)
+    np_upd = npm._get_block_updates(X_t.cpu().numpy())
+
+    acc = ng._get_block_updates(X_t)
+    ng._update_parameters(acc, X_t.shape[1])
+
+    expected = np_upd["dc_numer"] / np_upd["dgm"][None, :]
+    assert np.allclose(ng.c.cpu().numpy(), expected, atol=1e-8)
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_numpy_multimodel_bias_c_updates():
+    """The NumPy backend's own multi-model c update runs on real data: after a
+    short 2-model fit c is finite, nonzero, and the two models center
+    differently (guards the NumPy _get_block_updates/_update_parameters/transform
+    edits, which mirror the NG ones but had no direct multi-model coverage)."""
+    data = _load_real_data()[:, :512]
+    npm = AMICA_NumPy(
+        use_tqdm=False,
+        num_models=2,
+        num_mix=NMIX,
+        seed=SEED,
+        block_size=512,
+        lrate=0.05,
+        max_iter=3,
+        do_mean=True,
+        do_sphere=True,
+    )
+    npm.fit(data)
+    assert np.all(np.isfinite(npm.c))
+    assert not np.allclose(npm.c, 0.0)
+    assert not np.allclose(npm.c[:, 0], npm.c[:, 1], atol=1e-6)
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_multimodel_transform_applies_bias_c():
+    """transform() unmixes as W(x - c) with a nonzero per-model c (issue #27).
+    Every other transform test fits n_models=1 where c == 0, so ``X - c`` always
+    subtracts zero; here we verify each model's sources equal the hand-computed
+    W[:,:,h].T @ (sphered(x) - c[:,h]), catching a sign flip, a broadcast bug, or
+    model_idx selecting the wrong c column."""
+    data = _load_real_data()[:, :512]
+    ng = AMICATorchNG(
+        n_channels=NW,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+        block_size=512,
+        do_newton=True,
+        newt_start=0,
+    )
+    ng.fit(data, max_iter=4, verbose=False)
+    # c must actually be nonzero for this test to mean anything.
+    assert not np.allclose(ng.c.cpu().numpy(), 0.0)
+
+    Xs = (ng.sphere @ (torch.from_numpy(data).to(ng.dtype) - ng.mean)).cpu().numpy()
+    for h in range(2):
+        S = ng.transform(data, model_idx=h)
+        W_h = ng.W[:, :, h].cpu().numpy()
+        c_h = ng.c[:, h].cpu().numpy()[:, None]
+        expected = W_h.T @ (Xs - c_h)
+        assert np.allclose(S, expected, atol=1e-9), f"model {h} transform mismatch"
+
+
+def test_multimodel_dead_model_keeps_prior_c():
+    """Containment guard: a model with zero total responsibility (dgm[h]==0)
+    keeps its PRIOR bias c instead of writing 0/0 == NaN. A NaN c would poison
+    the next iteration's cross-model softmax for every model (unlike
+    log(gm[h])=-inf, which softmax tolerates)."""
+    ng = AMICATorchNG(
+        n_channels=4,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+    )
+    # Minimal fitted-shape state so _update_parameters can run one step.
+    ng._initialize_parameters()
+    prior_c = torch.tensor(
+        [[1.0, 7.0], [2.0, 8.0], [3.0, 9.0], [4.0, 10.0]], dtype=torch.float64
+    )
+    ng.c = prior_c.clone()
+    n_mix, n_comps = ng.n_mix, ng.n_comps
+    z = torch.zeros
+    # Model 1 is dead: dgm[1] == 0 and dc_numer[:,1] == 0 (v_h==0 => both zero).
+    acc = {
+        "dgm": torch.tensor([100.0, 0.0], dtype=torch.float64),
+        "dalpha_n": torch.ones(n_mix, n_comps, dtype=torch.float64),
+        "dmu_n": z(n_mix, n_comps, dtype=torch.float64),
+        "dmu_d": torch.ones(n_mix, n_comps, dtype=torch.float64),
+        "dbeta_n": torch.ones(n_mix, n_comps, dtype=torch.float64),
+        "dbeta_d": torch.ones(n_mix, n_comps, dtype=torch.float64),
+        "drho_n": z(n_mix, n_comps, dtype=torch.float64),
+        "dWtmp": torch.zeros(4, 4, 2, dtype=torch.float64),
+        "dc_numer": torch.tensor(
+            [[50.0, 0.0], [60.0, 0.0], [70.0, 0.0], [80.0, 0.0]], dtype=torch.float64
+        ),
+        "ll": torch.tensor(0.0, dtype=torch.float64),
+    }
+    ng._update_parameters(acc, 100)
+    c = ng.c.cpu().numpy()
+    assert np.all(np.isfinite(c)), "dead model must not introduce a NaN in c"
+    # Live model 0 got the responsibility-weighted mean; dead model 1 kept prior.
+    assert np.allclose(c[:, 0], np.array([0.5, 0.6, 0.7, 0.8]))
+    assert np.allclose(c[:, 1], prior_c[:, 1].numpy())
 
 
 def test_rejection_degenerate_ll_raises_clear_error():
@@ -679,6 +846,37 @@ def test_rejection_shrinks_good_sample_set():
     ll_per_good = float(acc["ll"] / (n_good * m.n_channels))
     ll_per_total = float(acc["ll"] / (n_total * m.n_channels))
     assert abs(m.ll_history[-1] - ll_per_good) < abs(m.ll_history[-1] - ll_per_total)
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_multimodel_rejection_keeps_bias_c_finite():
+    """do_reject + n_models=2: the per-model bias c (accumulated over the good
+    set, denominator dgm[h]) must never be left silently non-finite. A shrinking
+    good set can drive a model's responsibility mass toward zero, so verify the
+    fit either completes with finite c for both models or halts via a
+    stop_reason -- it never returns a NaN c while looking normal."""
+    data = _load_real_data()
+    m = AMICATorchNG(
+        n_channels=NW,
+        n_models=2,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float64,
+        block_size=512,
+        do_reject=True,
+        rejsig=2.0,
+        rejstart=2,
+        rejint=3,
+        maxrej=2,
+    )
+    m.fit(data, max_iter=12, verbose=False)
+    if m.stop_reason in ("nan_ll", "singular_ll"):
+        # A degenerate stop is acceptable (surfaced, not silent); nothing more
+        # to assert -- the point is it did not silently return a NaN model.
+        return
+    assert torch.all(torch.isfinite(m.c)), "bias c left non-finite without a stop"
+    assert np.all(np.isfinite(m.ll_history))
 
 
 def test_state_dict_requires_fit():
