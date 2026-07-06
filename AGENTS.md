@@ -50,7 +50,8 @@ computes in float64 for Fortran parity, which MPS cannot represent, so parity ru
 - Validation harness runs both implementations (NG + NumPy) and matches components via the Hungarian
   algorithm.
 - Newton and exact-EM updates are implemented in `AMICATorchNG` and the legacy NumPy `pyAMICA.py`
-  (both Fortran-faithful); adaptive PDF (#26) and full multi-model matching (#27) remain open.
+  (both Fortran-faithful). Adaptive PDF (#26) is DONE (all five `pdftype` families + ext-Infomax
+  switcher); full multi-model matching (#27) is validated by distributional equivalence.
 - See `FEATURE_PARITY.md`, `MIGRATION_PLAN.md`, and `PROGRESS_SUMMARY.md` for detailed roadmaps.
 
 ## Known Issues (parity blockers)
@@ -61,10 +62,20 @@ correlation ~0.997, > 0.95 gate cleared; root cause in `.context/issue-24/`). Al
 stability (posdef, 0 fallbacks), backend consolidation (#32/#31), NumPy CLI save/load format (#30),
 and NG save/load persistence (#36).
 
+**Adaptive-PDF selection: DONE (#26).** `AMICATorchNG` now supports all five `amica15.f90`
+source-density families via `pdftype`: 0 generalized Gaussian (default, unchanged), 2 Gaussian,
+3 logistic, 4 sub-Gaussian cosh+, and the extended-Infomax adaptive switcher (`pdftype=1`, which
+flips each source between super-Gaussian code 1 and sub-Gaussian code 4 by kurtosis sign on the
+`kurt_start`/`num_kurt`/`kurt_int` schedule). Key correction to the earlier "no oracle" finding: the
+validation binary is `amica15mac` = `amica15.f90` (now copied into `pyAMICA/`), which *does*
+implement the families; the repo's `amica17.f90` is a later GG-only trim, and the reference binary
+was never amica17. The fixed families are bit-exact vs the literal Fortran `z0`/`fp` (~1e-15) and
+converge to the binary within ~0.005 LL (Newton-matched). The dynamic `do_choose_pdfs` switch is
+dead code even in amica15 (the moment buffers are never accumulated), so the auto-switcher has no
+bit-exact oracle and is validated by real-data LL. `pdftype=0` stays the default and is
+byte-for-byte unchanged. See `.context/decisions/` and `tests/torch_tests/test_ng_pdf_families.py`.
+
 **Open (non-blocking, tracked):**
-- **Adaptive-PDF selection (#26):** `AMICATorchNG` uses a fixed generalized-Gaussian PDF (Fortran
-  parity) and lacks the per-source Laplace/Student-t/GG selection the NumPy path has (beyond Fortran
-  parity; the NumPy path is the validation oracle). Outlier rejection (`do_reject`) IS implemented.
 - **Multi-model (#27): VALIDATED by distributional equivalence.** Multi-model AMICA is not
   partition-identifiable, so exact partition parity with Fortran is the wrong acceptance bar (the
   `>0.95` cross-corr in #27's title asks the algorithm to be more identifiable than it is). The right

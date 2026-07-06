@@ -7,9 +7,10 @@
 > LL ~ -3.40 (vs Fortran -3.4018) and Hungarian component correlation ~0.997 with Newton
 > positive-definite (0 fallbacks), and implements Newton + Fortran-style ramping and outlier
 > rejection (`do_reject`). Rows below that still read "Missing"/"Partial" describe the removed
-> basic backend, not `AMICATorchNG`. Remaining gaps on the NG path: adaptive-PDF selection (#26)
-> and full multi-model partition matching (#27, M-step is already bit-exact vs Fortran). See
-> `PROGRESS_SUMMARY.md` and ADR `.context/decisions/0001-torch-backend-natural-gradient-em.md`.
+> basic backend, not `AMICATorchNG`. Adaptive-PDF selection (#26) is now DONE (five `pdftype`
+> families + ext-Infomax switcher, ADR 0002); the remaining NG gap is full multi-model partition
+> matching (#27, M-step is already bit-exact vs Fortran). See `PROGRESS_SUMMARY.md` and the ADRs in
+> `.context/decisions/`.
 
 ## Implementation Status Overview
 
@@ -60,7 +61,7 @@
 |---------|---------|---------|--------|-------|
 | **Outlier Rejection** | ✅ | ❌ | ❌ Missing | `do_reject` not implemented |
 | **Component Sharing** | ✅ | ❌ | ❌ Missing | `share_comps` not implemented |
-| **Adaptive PDF Selection** | ✅ | ❌ | ❌ Missing | Fixed PDF type only |
+| **Adaptive PDF Selection** | ✅ | ✅ | ✅ Complete | 5 `pdftype` families + ext-Infomax switcher (#26) |
 | **Block Size Optimization** | ✅ | ⚠️ | 🔧 Partial | Simple heuristic |
 | **History Tracking** | ✅ | ✅ | ✅ Complete | LL and gradient norms |
 
@@ -159,10 +160,14 @@ The epic (#9 / #24) delivered core parity on `AMICATorchNG`. Done on the NG path
 EM at the Fortran fixed point, Newton + Fortran-style ramping (positive-definite), exact-EM mixture
 updates, symmetric-ZCA sphere, Jacobian LL, and outlier rejection (`do_reject`). Open items:
 
-#### 1. Adaptive PDF Selection (issue #26)
-**Why**: different sources have different distributions; beyond strict Fortran parity (fixed GG PDF)
-- [ ] Laplace / Student-t / generalized-Gaussian selection on the NG path
-- [ ] Kurtosis-based selection and per-component PDF-fit monitoring
+#### 1. Adaptive PDF Selection (issue #26) — DONE
+The reference binary is `amica15mac` = `amica15.f90`, which implements five `pdtype` density
+families (the repo's `amica17.f90` is a later GG-only trim). All are ported to `AMICATorchNG`:
+- [x] `pdftype` 0 GG (default, unchanged) / 2 Gaussian / 3 logistic / 4 sub-Gaussian cosh+
+      — bit-exact vs the literal Fortran `z0`/`fp` (~1e-15), within ~0.005 LL of the binary
+- [x] Extended-Infomax kurtosis switcher (`pdftype=1`): per-source super-/sub-Gaussian on the
+      `kurt_start`/`num_kurt`/`kurt_int` schedule (dynamic switch is dead code in the binary, so
+      LL-validated on real data, not bit-exact)
 
 #### 2. Multi-Model Partition Matching (issue #27)
 **Why**: full 2-model fit is partition-limited (~0.77) though the M-step is bit-exact vs Fortran
