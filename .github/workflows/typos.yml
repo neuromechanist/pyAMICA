@@ -2,7 +2,12 @@ name: Typos
 
 # Spell-check runs on every change (including Markdown/docs), so it is a
 # separate workflow from ci.yml, whose Python jobs skip prose-only changes.
-on: [push, pull_request]
+# Push is limited to main (feature-branch pushes are covered by pull_request)
+# to avoid a duplicate run per push, matching ci.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 concurrency:
   group: typos-${{ github.workflow }}-${{ github.ref }}
