@@ -30,7 +30,9 @@ import numpy as np
 from scipy import special
 
 
-def compute_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.ndarray, np.ndarray]:
+def compute_pdf(
+    y: np.ndarray, rho: float, pdftype: int = 1
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute PDF value and its derivative for given activation values.
 
@@ -78,7 +80,8 @@ def compute_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.ndarray
         else:
             # General case
             pdf = np.exp(-np.power(np.abs(y), rho)) / (
-                2.0 * special.gammaln(1.0 + 1.0 / rho))
+                2.0 * special.gammaln(1.0 + 1.0 / rho)
+            )
             dpdf = -rho * np.power(np.abs(y), rho - 1) * np.sign(y) * pdf
 
     elif pdftype == 2:
@@ -106,7 +109,9 @@ def compute_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.ndarray
     return pdf, dpdf
 
 
-def compute_log_pdf(y: np.ndarray, rho: float, pdftype: int = 1) -> tuple[np.ndarray, np.ndarray]:
+def compute_log_pdf(
+    y: np.ndarray, rho: float, pdftype: int = 1
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute logarithm of PDF value and its derivative.
 

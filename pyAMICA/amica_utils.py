@@ -147,13 +147,14 @@ def identify_shared_components(A, W, comp_list, comp_thresh=0.99):
 
                     # Compute correlation
                     corr = np.abs(np.dot(A[:, k1], A[:, k2])) / (
-                        np.sqrt(np.sum(A[:, k1]**2) * np.sum(A[:, k2]**2)))
+                        np.sqrt(np.sum(A[:, k1] ** 2) * np.sum(A[:, k2] ** 2))
+                    )
 
                     if corr >= comp_thresh:
                         # Check if components appear together in any model
                         shared = False
                         for h in range(num_models):
-                            if (k1 in comp_list[:, h] and k2 in comp_list[:, h]):
+                            if k1 in comp_list[:, h] and k2 in comp_list[:, h]:
                                 shared = True
                                 break
 
