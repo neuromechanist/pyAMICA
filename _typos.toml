@@ -1,0 +1,17 @@
+# typos configuration (https://github.com/crate-ci/typos)
+# The read-only Fortran reference and generated data/output are not our source
+# to spellcheck; a handful of AMICA/Fortran abbreviations are valid identifiers.
+
+[files]
+extend-exclude = [
+    "*.f90",                  # read-only Fortran reference (amica17*.f90, funmod2.f90)
+    "pyAMICA/sample_data/",   # sample EEG + Fortran outputs + saved .npy results
+    "pytorch_debug_test/",    # generated debug output
+    "uv.lock",
+]
+
+[default.extend-words]
+# AMICA/Fortran domain abbreviations, not misspellings:
+nd = "nd"        # number of data samples (Fortran/AMICA naming)
+numer = "numer"  # numerator (paired with denom throughout the M-step)
+thr = "thr"      # threshold
