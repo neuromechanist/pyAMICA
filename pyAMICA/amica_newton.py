@@ -16,15 +16,10 @@ AMICA: An adaptive mixture of independent component analyzers with shared compon
 """
 
 import numpy as np
-from scipy import linalg
 
 
 def compute_newton_direction(
-    dA: np.ndarray,
-    sigma2: np.ndarray,
-    lambda_: np.ndarray,
-    kappa: np.ndarray,
-    h: int
+    dA: np.ndarray, sigma2: np.ndarray, lambda_: np.ndarray, kappa: np.ndarray, h: int
 ) -> np.ndarray:
     """
     Compute Newton direction for unmixing matrix update.
@@ -71,12 +66,7 @@ def compute_newton_direction(
 
 
 def compute_newton_parameters(
-    b: np.ndarray,
-    z: np.ndarray,
-    v: np.ndarray,
-    y: np.ndarray,
-    dpdf: np.ndarray,
-    h: int
+    b: np.ndarray, z: np.ndarray, v: np.ndarray, y: np.ndarray, dpdf: np.ndarray, h: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute parameters needed for Newton optimization.
@@ -114,7 +104,7 @@ def compute_newton_parameters(
     kappa : ndarray
         Kappa parameters
     """
-    batch_size = b.shape[0]
+    b.shape[0]
     data_dim = b.shape[1]
 
     # Initialize parameters
@@ -125,16 +115,14 @@ def compute_newton_parameters(
     # Compute parameters
     for i in range(data_dim):
         # Second moments
-        sigma2[i] = np.sum(v[:, h] * b[:, i]**2) / np.sum(v[:, h])
+        sigma2[i] = np.sum(v[:, h] * b[:, i] ** 2) / np.sum(v[:, h])
 
         # Lambda and kappa parameters
         for j in range(z.shape[2]):  # num_mix
             lambda_[i] += np.sum(
-                v[:, h] * z[:, i, j, h] * (dpdf[:, i, j, h] * y[:, i, j, h] - 1)**2
+                v[:, h] * z[:, i, j, h] * (dpdf[:, i, j, h] * y[:, i, j, h] - 1) ** 2
             )
-            kappa[i] += np.sum(
-                v[:, h] * z[:, i, j, h] * dpdf[:, i, j, h]**2
-            )
+            kappa[i] += np.sum(v[:, h] * z[:, i, j, h] * dpdf[:, i, j, h] ** 2)
 
         lambda_[i] /= np.sum(v[:, h])
         kappa[i] /= np.sum(v[:, h])
@@ -150,7 +138,7 @@ def update_unmixing_matrix(
     kappa: np.ndarray,
     comp_list: np.ndarray,
     h: int,
-    lrate: float
+    lrate: float,
 ) -> np.ndarray:
     """
     Update unmixing matrix using Newton direction.
