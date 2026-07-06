@@ -1,0 +1,17 @@
+name: Typos
+
+# Spell-check runs on every change (including Markdown/docs), so it is a
+# separate workflow from ci.yml, whose Python jobs skip prose-only changes.
+on: [push, pull_request]
+
+concurrency:
+  group: typos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@v1
