@@ -1027,26 +1027,58 @@ class AMICATorchNG:
     # ------------------------------------------------------------------
     # Persistence (issue #36)
     # ------------------------------------------------------------------
-    # Fitted-parameter tensors that fully determine transform()/get_*matrix().
+    # Full fitted-parameter snapshot. A/W/c/comp_list/mean/sphere are what
+    # transform()/get_*matrix() read back; mu/alpha/beta/rho/gm are the
+    # mixture-PDF EM state, included for a complete snapshot (and for parity/
+    # continued-analysis) even though no public method currently reads them.
     _PARAM_TENSORS = (
         "A", "W", "c", "mu", "alpha", "beta", "rho", "gm",
         "comp_list", "mean", "sphere",
     )  # fmt: skip
+
+    # Stop reasons that mark a fit as degenerate (non-finite log-likelihood).
+    # Such a model yields NaN sources, so state_dict() refuses to persist it
+    # rather than let it round-trip silently (silent-failure review, PR #44).
+    _DEGENERATE_STOP_REASONS = ("nan_ll", "singular_ll")
 
     def state_dict(self) -> dict:
         """Serialize the fitted model to a plain, device-agnostic dict.
 
         The returned dict has three parts: ``config`` (the constructor
         arguments needed to rebuild the object), ``params`` (the fitted
-        tensors, moved to CPU), and ``extra`` (scalar/optimizer state). Every
-        value is a tensor or a plain Python primitive, so the dict round-trips
-        through ``torch.save``/``torch.load`` with ``weights_only=True`` (no
-        custom classes or ``torch.dtype`` objects: dtype is stored by name).
-        Rebuild with :meth:`from_state_dict`.
+        tensors, moved to CPU), and ``extra`` (scalar/schedule state, plus the
+        optional ``good_idx`` index tensor). Every value is a tensor or a plain
+        Python primitive, so the dict round-trips through
+        ``torch.save``/``torch.load`` with ``weights_only=True`` (no custom
+        classes or ``torch.dtype`` objects: dtype is stored by name). Rebuild
+        with :meth:`from_state_dict`.
+
+        Raises if the model is unfitted or degenerate (a fit that ended on a
+        non-finite log-likelihood): a NaN model must not be persisted silently.
         """
         if self.A is None:
             raise RuntimeError(
                 "AMICATorchNG.state_dict() requires a fitted model; call fit() first."
+            )
+        if self.stop_reason in self._DEGENERATE_STOP_REASONS:
+            raise RuntimeError(
+                f"Refusing to serialize a degenerate model (stop_reason="
+                f"{self.stop_reason!r}): fit() hit a non-finite log-likelihood at "
+                f"iteration {self.iteration}. Fix the instability (lower lrate, "
+                f"disable Newton, or check data conditioning) before saving."
+            )
+        # Defense-in-depth: catch a non-finite parameter even if stop_reason
+        # bookkeeping ever misses it (the codebase has known NaN-suppression
+        # risks). isfinite on the integer comp_list is trivially all-True.
+        nonfinite = [
+            name
+            for name in self._PARAM_TENSORS
+            if not torch.isfinite(getattr(self, name)).all()
+        ]
+        if nonfinite:
+            raise RuntimeError(
+                f"Refusing to serialize a model with non-finite parameters "
+                f"{nonfinite} (stop_reason={self.stop_reason!r})."
             )
         config = {
             "n_channels": self.n_channels,
@@ -1088,8 +1120,13 @@ class AMICATorchNG:
             # weights_only-safe; rebuilt via getattr(torch, ...) on load.
             "dtype": str(self.dtype).split(".")[-1],
         }
+        # .clone() forces an independent copy even when self.device is already
+        # CPU (where .cpu() would alias): fit() mutates A/mu/beta in place each
+        # iteration, so an aliased snapshot would silently roll forward if
+        # state_dict() were ever called mid-fit (e.g. best-so-far checkpointing).
         params = {
-            name: getattr(self, name).detach().cpu() for name in self._PARAM_TENSORS
+            name: getattr(self, name).detach().cpu().clone()
+            for name in self._PARAM_TENSORS
         }
         extra = {
             "sldet": float(self.sldet),
@@ -1098,7 +1135,9 @@ class AMICATorchNG:
             "stop_reason": self.stop_reason,
             "n_newton_fallbacks": int(self.n_newton_fallbacks),
             "numrej": int(self.numrej),
-            "good_idx": None if self.good_idx is None else self.good_idx.detach().cpu(),
+            "good_idx": None
+            if self.good_idx is None
+            else self.good_idx.detach().cpu().clone(),
             "lrate": float(self.lrate),
             "lrate_cap": float(self.lrate_cap),
             "newtrate": float(self.newtrate),
@@ -1127,6 +1166,12 @@ class AMICATorchNG:
                 f"unsupported AMICATorchNG state format_version: {version!r} "
                 "(expected 1)"
             )
+        for section in ("config", "params", "extra"):
+            if section not in state:
+                raise ValueError(
+                    f"malformed AMICATorchNG state: missing {section!r} section "
+                    f"(format_version={version}); the payload may be truncated."
+                )
         config = dict(state["config"])
         config["dtype"] = getattr(torch, config["dtype"])
         obj = cls(device=device, **config)
@@ -1137,6 +1182,23 @@ class AMICATorchNG:
         """Restore fitted tensors/scalars from :meth:`state_dict` output onto
         this instance's device/dtype."""
         params = state["params"]
+        missing = [name for name in self._PARAM_TENSORS if name not in params]
+        if missing:
+            raise ValueError(f"malformed AMICATorchNG state: missing params {missing}")
+        # Guard against config/params drift: A and comp_list must match the
+        # dimensions the constructor just derived, or transform()/the E-step
+        # would fail later with a confusing matmul error far from load().
+        if tuple(params["A"].shape) != (self.n_channels, self.n_comps):
+            raise ValueError(
+                f"restored A has shape {tuple(params['A'].shape)}, expected "
+                f"{(self.n_channels, self.n_comps)} for n_channels="
+                f"{self.n_channels}, n_models={self.n_models}"
+            )
+        if tuple(params["comp_list"].shape) != (self.n_channels, self.n_models):
+            raise ValueError(
+                f"restored comp_list has shape {tuple(params['comp_list'].shape)}, "
+                f"expected {(self.n_channels, self.n_models)}"
+            )
         for name in self._PARAM_TENSORS:
             tensor = params[name]
             # comp_list holds integer component indices; preserve its dtype and

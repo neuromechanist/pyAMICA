@@ -319,6 +319,13 @@ class AMICA:
             raise ValueError(
                 f"unsupported AMICA save format_version: {version!r} (expected 1)"
             )
+        for key in ("wrapper", "backend"):
+            if key not in payload:
+                raise ValueError(
+                    f"malformed AMICA save file {filepath!r}: missing {key!r} "
+                    f"(format_version={version}); the file may be truncated or "
+                    f"corrupted."
+                )
 
         wrapper = payload["wrapper"]
         model = cls(

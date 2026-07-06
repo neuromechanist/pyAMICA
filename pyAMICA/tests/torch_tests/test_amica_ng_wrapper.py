@@ -64,7 +64,9 @@ def test_ng_save_load_roundtrip(fitted_ng, real_data, tmp_path):
     assert loaded.n_mix == fitted_ng.n_mix
     assert loaded.ll_history_ == fitted_ng.ll_history_
 
-    # Restoring CPU float64 tensors is lossless, so matrices match exactly.
+    # torch.save/load restores tensors bit-exactly and CPU matmul is
+    # deterministic, so transform() on the restored tensors reproduces the
+    # original output exactly (not guaranteed on non-deterministic GPU reductions).
     np.testing.assert_array_equal(
         loaded.get_mixing_matrix(), fitted_ng.get_mixing_matrix()
     )
