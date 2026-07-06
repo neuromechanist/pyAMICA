@@ -91,11 +91,13 @@ Remaining, non-blocking (tracked as follow-up issues):
 6. **Document failures:** Log dead ends in `.context/scratch_history.md`.
 7. **Commit:** Atomic, <50 chars, no emojis, no AI attribution.
 8. **PR + review:** Run `/review-pr` and address all findings (`.rules/code_review.md`).
+9. **Merge:** CI green first (see below), then **squash merge** (`gh pr merge <n> --squash --delete-branch`).
 
 ## [CRITICAL] Core Principles
 - **NO MOCKS:** Validate against real sample data and the Fortran binary, never fabricated data. Details: `.rules/testing.md`.
 - **No technical debt carried forward:** Address ALL PR review findings; replace, don't deprecate. Details: `.rules/code_review.md`.
 - **Numerical parity is the spec:** Correctness means matching Fortran output within tolerance, not merely "converging".
+- **Squash merge every PR** by default; use a regular merge commit **only** for PRs coming from an epic branch (to preserve the epic's per-phase history). Never merge until CI is green.
 
 ## [NEVER DO THIS]
 - Never use mocks, stubs, or fake/synthetic data as the basis for correctness tests.
