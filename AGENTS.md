@@ -65,10 +65,21 @@ and NG save/load persistence (#36).
 - **Adaptive-PDF selection (#26):** `AMICATorchNG` uses a fixed generalized-Gaussian PDF (Fortran
   parity) and lacks the per-source Laplace/Student-t/GG selection the NumPy path has (beyond Fortran
   parity; the NumPy path is the validation oracle). Outlier rejection (`do_reject`) IS implemented.
-- **Multi-model (#27):** per-block sufficient stats are bit-exact vs Fortran, but a full 2-model fit
-  matches LL yet not Fortran's partition (~0.77 cross-corr). Two causes: intrinsic partition
-  ambiguity, and a genuine gap -- the per-model bias `c` update is omitted (no-op for `n_models=1`).
-  The `c` update is the open, fixable suspect.
+- **Multi-model (#27): VALIDATED by distributional equivalence.** Multi-model AMICA is not
+  partition-identifiable, so exact partition parity with Fortran is the wrong acceptance bar (the
+  `>0.95` cross-corr in #27's title asks the algorithm to be more identifiable than it is). The right
+  test is whether the two implementations sample the same distribution over solutions. On an
+  N=20-each ensemble (real sample EEG, `n_models=2`), the NG-vs-Fortran partition cross-corr
+  distribution is **statistically equivalent to Fortran's own run-to-run distribution** (Mann-Whitney
+  p=0.97, TOST equivalent within ±0.05; within-Fortran/within-NG/between all ~0.63-0.64). The
+  single-run ~0.64 cross-corr is intrinsic estimator spread, not a defect -- Fortran agrees with
+  *itself* at 0.63. See `.context/issue-27/multimodel_distributional_equivalence.md` (+ figure).
+  Supporting: per-block sufficient stats are bit-exact vs Fortran; the per-model bias `c` update
+  (Fortran `update_c`: `c[i,h] = sum_t v_h*x / sum_t v_h`) is ported to both backends, guarded to a
+  no-op for `n_models=1` (single-model parity stays bit-exact), see
+  `.context/issue-27/multimodel_c_update.md`. **Open residual (#51):** NG's LL distribution is ~0.02
+  lower and more variable than Fortran's (optimizer quality, not a correctness bug -- one M-step is
+  bit-exact).
 
 ## Development Workflow
 1. **Check context:** `.context/plan.md` for current tasks and priorities.

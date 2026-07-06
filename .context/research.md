@@ -143,3 +143,13 @@ faithful port and is the spec.
    (ADR 0001); parameterize `W` directly; validate in float64.
 4. Port Newton verbatim from NumPy (H from sigma2/kappa/lambda); delete the autograd Newton.
 5. Add the numerical-stability bounds and epsilon guards; complete outlier rejection.
+
+## Multi-model parity (how to validate a non-identifiable estimator)
+Single-model ICA is identifiable, so parity = Hungarian cross-corr ~0.997 vs Fortran. Multi-model
+AMICA is **not partition-identifiable** (many near-degenerate partitions), so exact partition
+parity is the wrong bar. The correct test is **distributional equivalence**: run ensembles of both
+implementations and check whether NG-vs-Fortran agreement is statistically indistinguishable from
+Fortran's own run-to-run agreement. It is (N=20 each, TOST-equivalent within ±0.05; even Fortran vs
+itself is only ~0.63). Full method, results, figure, and the multi-model acceptance criteria:
+`.context/issue-27/multimodel_distributional_equivalence.md`. The per-model bias `c` update that
+this built on: `.context/issue-27/multimodel_c_update.md`.
