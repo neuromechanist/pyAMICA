@@ -51,7 +51,17 @@ class AMICA:
     model_ : AMICATorchNG
         The underlying PyTorch model
     is_fitted_ : bool
-        Whether the model has been fitted
+        Whether a *usable* model is available. ``fit`` sets this True only when
+        the fit converged normally; a degenerate fit (see ``converged_``) leaves
+        it False, and ``transform``/``get_mixing_matrix``/``get_unmixing_matrix``/
+        ``save`` refuse such a model (issue #50).
+    converged_ : bool
+        Whether the last ``fit`` ended on a usable stop rather than a degenerate
+        one (``stop_reason_`` not in ``nan_ll``/``singular_ll``). A degenerate fit
+        holds non-finite parameters and would produce NaN sources (issue #50).
+    stop_reason_ : str or None
+        Why the last ``fit`` stopped (the backend ``stop_reason``): e.g.
+        ``"max_iter"``, ``"lrate_floor"``, ``"nan_ll"``, ``"singular_ll"``.
     ll_history_ : list
         Log-likelihood history during training (the true per-iteration
         trajectory; may dip below its peak on a late overshoot)
@@ -95,6 +105,8 @@ class AMICA:
         self.is_fitted_ = False
         self.ll_history_ = []
         self.final_ll_ = None
+        self.stop_reason_ = None
+        self.converged_ = False
 
     def _select_device(self, ng_dtype) -> object:
         """Resolve the compute device, applying the MPS/float64 fallback.
@@ -187,9 +199,41 @@ class AMICA:
 
         self.ll_history_ = self.model_.ll_history
         self.final_ll_ = self.model_.final_ll_
-        self.is_fitted_ = True
+        self.stop_reason_ = self.model_.stop_reason
+        self.converged_ = self.stop_reason_ not in AMICATorchNG._DEGENERATE_STOP_REASONS
+        # A degenerate fit (nan_ll/singular_ll) holds non-finite parameters and
+        # would return NaN sources, so it is not a usable model: is_fitted_ stays
+        # False and the output methods refuse it (issue #50). stop_reason_/
+        # converged_ stay set for inspection.
+        self.is_fitted_ = self.converged_
+        if not self.converged_:
+            logger.warning(
+                "AMICA.fit ended degenerate (stop_reason=%r) at iteration %d: the "
+                "model holds non-finite parameters and cannot transform. Inspect "
+                "stop_reason_/ll_history_; lower lrate, disable Newton, or check "
+                "data conditioning, then refit.",
+                self.stop_reason_,
+                self.model_.iteration,
+            )
 
         return self
+
+    def _check_usable(self, action: str) -> None:
+        """Raise if the model cannot produce valid output: either never fitted,
+        or the fit ended degenerate (``nan_ll``/``singular_ll``), leaving
+        non-finite parameters that would yield NaN sources. This mirrors
+        :meth:`AMICATorchNG.state_dict`'s refusal to serialize a degenerate model
+        (issue #50): a diverged fit fails loudly here instead of silently
+        returning garbage."""
+        if self.model_ is None:
+            raise ValueError(f"Model must be fitted before {action}.")
+        if self.stop_reason_ in AMICATorchNG._DEGENERATE_STOP_REASONS:
+            raise RuntimeError(
+                f"Refusing to {action}: fit ended degenerate "
+                f"(stop_reason={self.stop_reason_!r}), so the model holds "
+                f"non-finite parameters and would produce NaN output. Lower "
+                f"lrate, disable Newton, or check data conditioning, then refit."
+            )
 
     def transform(self, X: np.ndarray, model_idx: int = 0) -> np.ndarray:
         """
@@ -207,8 +251,7 @@ class AMICA:
         S : np.ndarray
             Sources of shape (n_sources, n_samples)
         """
-        if not self.is_fitted_:
-            raise ValueError("Model must be fitted before transform")
+        self._check_usable("transform")
 
         return self.model_.transform(X, model_idx=model_idx)
 
@@ -245,8 +288,7 @@ class AMICA:
         A : np.ndarray
             Mixing matrix of shape (n_channels, n_sources)
         """
-        if not self.is_fitted_:
-            raise ValueError("Model must be fitted before getting mixing matrix")
+        self._check_usable("get the mixing matrix")
 
         return self.model_.get_mixing_matrix(model_idx=model_idx)
 
@@ -264,8 +306,7 @@ class AMICA:
         W : np.ndarray
             Unmixing matrix of shape (n_sources, n_channels)
         """
-        if not self.is_fitted_:
-            raise ValueError("Model must be fitted before getting unmixing matrix")
+        self._check_usable("get the unmixing matrix")
 
         return self.model_.get_unmixing_matrix(model_idx=model_idx)
 
@@ -285,8 +326,7 @@ class AMICA:
         filepath : str
             Destination path (a ``.pt`` file by convention).
         """
-        if not self.is_fitted_:
-            raise ValueError("Model must be fitted before saving")
+        self._check_usable("save")
 
         payload = {
             "format_version": 1,
@@ -351,7 +391,13 @@ class AMICA:
         )
         model.ll_history_ = model.model_.ll_history
         model.final_ll_ = model.model_.final_ll_
-        model.is_fitted_ = True
+        # state_dict() refuses to serialize a degenerate model, so a loaded model
+        # is always usable; carry its stop_reason through for inspection anyway.
+        model.stop_reason_ = model.model_.stop_reason
+        model.converged_ = (
+            model.stop_reason_ not in AMICATorchNG._DEGENERATE_STOP_REASONS
+        )
+        model.is_fitted_ = model.converged_
         return model
 
     @classmethod

@@ -60,7 +60,9 @@ mixture updates, digamma rho update, symmetric-ZCA sphere, Jacobian LL) brought 
 and the legacy NumPy `pyAMICA.py` to Fortran's solution (LL ~ -3.40, Hungarian-matched component
 correlation ~0.997, > 0.95 gate cleared; root cause in `.context/issue-24/`). Also resolved: Newton
 stability (posdef, 0 fallbacks), backend consolidation (#32/#31), NumPy CLI save/load format (#30),
-and NG save/load persistence (#36).
+NG save/load persistence (#36), and the degenerate-fit contract (#50: the `AMICA` wrapper marks a
+degenerate fit unusable via `converged_`/`stop_reason_` and refuses `transform`/`get_*`/`save`,
+instead of returning NaN sources).
 
 **Adaptive-PDF selection: DONE (#26).** `AMICATorchNG` now supports all five `amica15.f90`
 source-density families via `pdftype`: 0 generalized Gaussian (default, unchanged), 2 Gaussian,
