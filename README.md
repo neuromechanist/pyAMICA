@@ -1,5 +1,8 @@
 # [WIP] AMICA: Adaptive Mixture ICA
 
+[![CI](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/neuromechanist/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/neuromechanist/pyAMICA)
+
 Python implementation of the Adaptive Mixture ICA algorithm, based on the original Fortran implementation. This implementation is designed to be more user-friendly and easier to integrate with other Python libraries.
 
 NOTE: This is a work in progress and may not be fully functional yet. User should not rely on this implementation for any research or production purposes, as the results may not be accurate or reliable.
