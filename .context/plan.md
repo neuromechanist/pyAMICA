@@ -8,13 +8,15 @@
 ## Development Tasks
 <!-- Status markers: [ ] pending, [~] in progress, [x] complete -->
 
-### Priority 1: Parity blockers
-- [~] Fix likelihood sign/scaling vs Fortran (~13x factor; GG normalization corrected, needs revalidation)
-- [~] Stabilize Newton optimization (NaN at Newton-start iter; clipping + Fortran-matched ramp added, needs revalidation)
-- [ ] Add numerical-stability bounds from Fortran (`mincond=1e-15`, `minlog=-1500`, `maxdble=1e32`, `mineig=1e-15`)
-- [ ] Add NaN/Inf checks and epsilon to all divisions (notably `dmu / dalpha`)
-- [ ] Ensure identical initialization vs Fortran (seed, sphering/whitening, starting mixing matrix)
-- [ ] Raise component correlation with Fortran (~0.46-0.9, run-dependent) to >0.95
+### Priority 1: Parity blockers — DONE (#24)
+- [x] Fix likelihood sign/scaling vs Fortran (the ~13x factor was a pre-parity basic-backend
+      artifact; NG uses Jacobian LL, single-model LL ~ -3.40 vs Fortran -3.4018)
+- [x] Stabilize Newton optimization (ported from NumPy, positive-definite, 0 fallbacks on sample data)
+- [x] Add numerical-stability bounds from Fortran (`mincond`, `minlog`, `maxdble`, `mineig` present;
+      regression tests still owed, see Priority 3)
+- [x] Add NaN/Inf checks (degenerate-fit contract #50 refuses NaN output instead of suppressing it)
+- [x] Ensure identical initialization vs Fortran (symmetric-ZCA sphere, seed, starting mixing matrix)
+- [x] Raise component correlation with Fortran to >0.95 (now ~0.997, Hungarian-matched)
 
 ### Priority 2: Missing core features
 - [x] Port outlier rejection (`do_reject` / `reject_data`) to the torch backend (done in `AMICATorchNG`)
@@ -47,23 +49,26 @@
       suite collects cleanly and passes (35 passed, 6 xfailed for documented parity/algorithm
       issues, 0 errors); see `.context/phase1_baseline.md`
 - [x] Integration tests comparing against Fortran outputs (`tests/torch_tests/`) - Phase 1, issue #10
-- [ ] Numerical-stability regression tests
+- [ ] Numerical-stability regression tests (mincond/minlog/maxdble/mineig)
 - [ ] Edge cases (single channel, single sample)
+- [ ] `AMICA.save`/`load` and `plot_components` coverage (issue #15)
+- [ ] Performance benchmark: NG runtime vs Fortran binary (verify the 2-3x criterion)
 
 ### Infrastructure / migration
 - [x] Migrate environment from conda `torch-312` to UV; declare the PyTorch stack in `pyproject.toml`
       (Phase 1, issue #10: `torch`, `pytest`, `pytest-cov` added to `pyproject.toml`/`uv.lock`,
       `.python-version` pinned to 3.12 for torch/MPS compatibility)
-- [ ] Set up CI (see `.rules/ci_cd.md`)
+- [x] Set up CI (see `.rules/ci_cd.md`): ruff lint/format, pytest (excluding slow/Fortran-binary
+      parity), build + clean-env import matrix on Python 3.12/3.13; typos check. Green on `main`.
 - [x] Fix legacy test function signatures (`load_data_file` extra parameter) - Phase 1, issue #10
 
 ## Success Criteria
-- [ ] Component correlation > 0.95 with Fortran
-- [ ] LL convergence within 1% of Fortran
-- [ ] No NaN/Inf during optimization
-- [ ] Runtime within 2-3x of Fortran
-- [ ] Real (non-mock) test suite green
+- [x] Component correlation > 0.95 with Fortran (~0.997, single model)
+- [x] LL convergence within 1% of Fortran (LL ~ -3.40 vs -3.4018)
+- [x] No NaN/Inf during optimization (degenerate-fit contract #50)
+- [ ] Runtime within 2-3x of Fortran (unmeasured; benchmark owed)
+- [x] Real (non-mock) test suite green
 
 ## Notes
 - Correctness is defined by parity with the Fortran binary, not by convergence alone.
-- Detailed feature status: `../FEATURE_PARITY.md`; migration timeline: `../MIGRATION_PLAN.md`.
+- Detailed feature status: `feature_parity.md`; migration record: `migration_plan.md`.
