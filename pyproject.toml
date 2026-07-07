@@ -49,5 +49,26 @@ package-data = {"pyAMICA" = ["data/*"], "pyAMICA.numpy_impl" = ["params.json"]}
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.6.1",
     "ruff>=0.15.0",
+]
+
+[tool.coverage.run]
+source = ["pyAMICA"]
+branch = true
+omit = [
+    "pyAMICA/tests/*",
+    # argparse CLI entrypoint: exercised via subprocess, not unit-covered here.
+    "pyAMICA/numpy_impl/cli.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
 ]

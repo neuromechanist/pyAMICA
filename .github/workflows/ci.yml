@@ -52,8 +52,18 @@ jobs:
       # Exclude the "slow" parity tests: they invoke the macOS-only Fortran
       # reference binary (pyAMICA/sample_data/amica15mac), which cannot run on
       # the Linux runner. MPS-specific tests self-skip when MPS is absent.
+      # -n auto parallelizes the (independent) torch fits across runner cores;
+      # pytest-cov combines per-worker branch coverage automatically. Coverage
+      # config + the fail-under gate live in pyproject.toml / the flag below.
       - name: pytest (excluding slow / Fortran-binary parity tests)
-        run: uv run pytest -m "not slow"
+        run: uv run pytest -m "not slow" -n auto --cov-fail-under=80
+      - name: Upload coverage HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 14
 
   build:
     name: Build + import (Python ${{ matrix.python-version }})

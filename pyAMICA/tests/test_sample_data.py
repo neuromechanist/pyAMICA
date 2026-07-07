@@ -288,6 +288,9 @@ def test_cli_output_format_roundtrip(tmp_path):
     # viz helpers run without error on the loaded results.
     viz.plot_convergence(str(outdir))
     viz.plot_components(str(outdir), data=None, max_comps=3)
+    # Also exercise the activation branch (data provided), not just the
+    # mixing-vector-only path.
+    viz.plot_components(str(outdir), data=data, max_comps=3)
     viz.plot_pdf_fits(str(outdir), data, max_comps=2)
 
 
