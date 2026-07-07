@@ -58,7 +58,8 @@ computes in float64 for Fortran parity, which MPS cannot represent, so parity ru
 - Newton and exact-EM updates are implemented in `AMICATorchNG` and the legacy NumPy `numpy_impl/core.py`
   (both Fortran-faithful). Adaptive PDF (#26) is DONE (all five `pdftype` families + ext-Infomax
   switcher); full multi-model matching (#27) is validated by distributional equivalence.
-- See `FEATURE_PARITY.md`, `MIGRATION_PLAN.md`, and `PROGRESS_SUMMARY.md` for detailed roadmaps.
+- See `.context/feature_parity.md`, `.context/migration_plan.md`, and `.context/progress_summary.md`
+  for detailed roadmaps.
 
 ## Known Issues (parity blockers)
 **Single-model parity: DONE (#24).** The natural-gradient A-update transpose fix (plus exact-EM
@@ -149,12 +150,12 @@ byte-for-byte unchanged. See `.context/decisions/` and `tests/torch_tests/test_n
 - `.context/research.md` - Fortran-vs-Python parity analysis (data structures, subroutines, divergence causes)
 - `.context/ideas.md` - PyTorch design decisions and library options
 - `.context/scratch_history.md` - Debugging notes, failed attempts, lessons
+- `.context/feature_parity.md` - Feature comparison and implementation roadmap
+- `.context/migration_plan.md` - NumPy to PyTorch migration record (complete)
+- `.context/progress_summary.md` - Achievements and validation metrics snapshot
 - `.context/decisions/` - Architecture Decision Records (copy `0000-template.md` to start one)
 
 ## Project Docs (top-level)
-- `FEATURE_PARITY.md` - Feature comparison and implementation roadmap
-- `MIGRATION_PLAN.md` - NumPy to PyTorch migration timeline
-- `PROGRESS_SUMMARY.md` - Achievements and validation metrics snapshot
 - `README.md` - Overview and quick start
 
 ---
