@@ -27,7 +27,7 @@
 - Documented critical missing features and priorities
 
 ### 5. Natural-gradient EM backend at Fortran parity ✅ (epic #9 / issue #24)
-- Added `AMICATorchNG` (`torch_impl/amica_torch_ng.py`); `AMICA` wraps it directly
+- Added `AMICATorchNG` (`torch_impl/core.py`); `AMICA` wraps it directly
 - Root-caused the parity gap: the natural-gradient A-update was transposed / multiplied on the
   wrong side (proven machine-exact); plus exact-EM mixture updates, the digamma rho update, the
   symmetric-ZCA sphere, the output transpose, and the NumPy Jacobian LL

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pyAMICA
 from pyAMICA import AMICA_NumPy as AMICA
-from pyAMICA.amica_data import load_data_file
-from pyAMICA.amica_load import loadmodout
+from pyAMICA.numpy_impl.data import load_data_file
+from pyAMICA.numpy_impl.load import loadmodout
 
 # Setup sample data paths
 sample_data_path = op.join(pyAMICA.__path__[0], "sample_data")
@@ -75,7 +75,7 @@ def test_sample_data_scikit(tmp_path):
 def test_sample_data_cli():
     """Full CLI-vs-Fortran integration test (issue #30 format + #39/#41 stability).
 
-    Runs the real amica_cli entrypoint for the full 2000-iter sample config and
+    Runs the real cli entrypoint for the full 2000-iter sample config and
     Hungarian-matches the loadmodout-read W against the Fortran reference with a
     strict all-32-components > 0.8 gate. A fixed seed is pinned so the test does
     not depend on a random init (see #39). Currently xfail on a residual
@@ -85,7 +85,7 @@ def test_sample_data_cli():
     import subprocess
     import sys
 
-    # amica_cli.py uses relative imports, so it must be run as a module
+    # cli.py uses relative imports, so it must be run as a module
     # (see its module docstring), not as a direct script path.
     test_outdir = Path("test_output")
 
@@ -94,7 +94,7 @@ def test_sample_data_cli():
             [
                 sys.executable,
                 "-m",
-                "pyAMICA.amica_cli",
+                "pyAMICA.numpy_impl.cli",
                 sample_params_file,
                 "--outdir",
                 str(test_outdir),
@@ -243,8 +243,8 @@ def test_cli_output_format_roundtrip(tmp_path):
     import matplotlib
 
     matplotlib.use("Agg")
-    from pyAMICA.amica_data import load_results
-    from pyAMICA import amica_viz
+    from pyAMICA.numpy_impl.data import load_results
+    from pyAMICA.numpy_impl import viz
 
     data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
         np.float64
@@ -286,9 +286,9 @@ def test_cli_output_format_roundtrip(tmp_path):
     np.testing.assert_array_equal(r["comp_list"], model.comp_list)
 
     # viz helpers run without error on the loaded results.
-    amica_viz.plot_convergence(str(outdir))
-    amica_viz.plot_components(str(outdir), data=None, max_comps=3)
-    amica_viz.plot_pdf_fits(str(outdir), data, max_comps=2)
+    viz.plot_convergence(str(outdir))
+    viz.plot_components(str(outdir), data=None, max_comps=3)
+    viz.plot_pdf_fits(str(outdir), data, max_comps=2)
 
 
 @pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
@@ -413,7 +413,7 @@ def test_check_convergence_ratchets_lrate_on_decrease():
 
 @pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
 def test_cli_subprocess_output_loadable(tmp_path):
-    """The actual amica_cli entrypoint writes loadmodout-readable output.
+    """The actual cli entrypoint writes loadmodout-readable output.
 
     Runs the CLI as a module on a short, stable config (real sample data) and
     confirms loadmodout reads the result -- the direct regression for the #30
@@ -441,12 +441,12 @@ def test_cli_subprocess_output_loadable(tmp_path):
     params_file.write_text(json.dumps(params))
     outdir = tmp_path / "cli_out"
 
-    # amica_cli uses relative imports, so run it as a module from the repo root.
+    # cli uses relative imports, so run it as a module from the repo root.
     subprocess.run(
         [
             sys.executable,
             "-m",
-            "pyAMICA.amica_cli",
+            "pyAMICA.numpy_impl.cli",
             str(params_file),
             "--outdir",
             str(outdir),

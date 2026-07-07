@@ -43,7 +43,7 @@ pip install -e .
 
 2. Run AMICA:
 ```bash
-python amica_cli.py params.json --outdir results
+python -m pyAMICA.numpy_impl.cli params.json --outdir results
 ```
 
 ## Parameters
@@ -109,10 +109,10 @@ python amica_cli.py params.json --outdir results
 ## File Structure
 
 - `amica.py`: Main AMICA implementation
-- `amica_pdf.py`: PDF type implementations
-- `amica_newton.py`: Newton optimization
-- `amica_data.py`: Data loading/preprocessing
-- `amica_cli.py`: Command-line interface
+- `numpy_impl/pdf.py`: PDF type implementations
+- `numpy_impl/newton.py`: Newton optimization
+- `numpy_impl/data.py`: Data loading/preprocessing
+- `numpy_impl/cli.py`: Command-line interface
 - `params.json`: Example parameter file
 
 ## Output Files

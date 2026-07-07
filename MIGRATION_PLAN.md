@@ -53,7 +53,7 @@ Replace the NumPy-based AMICA implementation with the PyTorch version to leverag
    ```
 
 2. **Update CLI**
-   - Modify `amica_cli.py` to use PyTorch implementation
+   - Modify `numpy_impl/cli.py` to use PyTorch implementation
    - Keep same interface for backward compatibility
 
 3. **Update Tests**
@@ -127,7 +127,7 @@ model = AMICA(n_channels=32, device='cpu')
 pytest pyAMICA/tests/
 
 # Save reference results
-python -m pyAMICA.amica_cli sample_params.json --outdir numpy_reference
+python -m pyAMICA.numpy_impl.cli sample_params.json --outdir numpy_reference
 ```
 
 ### After Migration

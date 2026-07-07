@@ -57,10 +57,10 @@ The algorithm automatically:
 
 See Also
 --------
-amica_pdf : PDF implementations
-amica_utils : Utility functions
-amica_viz : Visualization tools
-amica_cli : Command-line interface
+pdf : PDF implementations
+utils : Utility functions
+viz : Visualization tools
+cli : Command-line interface
 
 References
 ----------
@@ -79,7 +79,7 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from tqdm import tqdm
-from .amica_utils import (
+from .utils import (
     gammaln,
     determine_block_size,
     identify_shared_components,
@@ -385,7 +385,7 @@ class AMICA:
                     "(a length mismatch would silently truncate to the "
                     "shorter list via zip())."
                 )
-            from .amica_data import load_multiple_files
+            from .data import load_multiple_files
 
             data = load_multiple_files(
                 self._config_files, self._config_data_dim, self._config_field_dim
@@ -1354,7 +1354,7 @@ class AMICA:
         """Write current results to disk in the Fortran AMICA binary format.
 
         Writes raw little-endian float64 (and int32 ``comp_list``) files with no
-        extension, in the layout that ``amica_load.loadmodout`` reads (and that
+        extension, in the layout that ``load.loadmodout`` reads (and that
         ``load_results`` reads back), so pyAMICA output is loadable by the same
         reader as the Fortran reference (issue #30).
 

@@ -4,9 +4,9 @@ import numpy as np
 from pathlib import Path
 import unittest
 
-from pyAMICA.amica_data import load_data_file, preprocess_data
-from pyAMICA.amica_pdf import compute_pdf
-from pyAMICA.amica_newton import compute_newton_direction
+from pyAMICA.numpy_impl.data import load_data_file, preprocess_data
+from pyAMICA.numpy_impl.pdf import compute_pdf
+from pyAMICA.numpy_impl.newton import compute_newton_direction
 
 
 class TestAMICA(unittest.TestCase):

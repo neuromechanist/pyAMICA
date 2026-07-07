@@ -37,7 +37,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Optional, Union, Tuple
 
-from .amica_data import load_results
+from .data import load_results
 
 
 def plot_convergence(
@@ -264,7 +264,7 @@ def plot_pdf_fits(
         Legacy no-op kept for signature compatibility; results are read from the
         raw Fortran binary format, never compressed .npz (issue #30).
     """
-    from .amica_pdf import compute_pdf
+    from .pdf import compute_pdf
 
     results = load_results(results_dir, compressed)
 

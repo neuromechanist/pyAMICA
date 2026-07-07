@@ -8,8 +8,8 @@ import shutil
 
 import pyAMICA
 from pyAMICA import AMICA_NumPy as AMICA
-from pyAMICA.amica_data import load_data_file, preprocess_data
-from pyAMICA.amica_pdf import compute_pdf
+from pyAMICA.numpy_impl.data import load_data_file, preprocess_data
+from pyAMICA.numpy_impl.pdf import compute_pdf
 
 # Setup test data path
 data_path = op.join(pyAMICA.__path__[0], "data")
