@@ -8,8 +8,7 @@ and CLI. Living status is in `../AGENTS.md` (Known Issues); ADRs are in `decisio
 **Headline:** single-model parity is done (LL ~ -3.40 vs Fortran -3.4018; Hungarian component
 correlation ~0.997 with Newton positive-definite, 0 fallbacks). Adaptive PDF (#26), multi-model
 (#27, distributional equivalence), best-iterate (#51), and the degenerate-fit contract (#50) are
-done. The one unimplemented Fortran feature is component sharing; the one unverified success
-criterion is runtime.
+done, as is component sharing (#60). The one unverified success criterion is runtime.
 
 ## Core AMICA features
 
@@ -45,7 +44,7 @@ criterion is runtime.
 |---------|---------|--------------|--------|-------|
 | Outlier rejection | yes | yes | Complete | `do_reject` |
 | Adaptive PDF selection | yes | yes | Complete | 5 `pdftype` families + ext-Infomax switcher (#26) |
-| Component sharing | yes | **no** | **Missing** | `share_comps` reassignment not ported (torch `comp_list` is trivial per-model layout) |
+| Component sharing | yes | yes | Complete | `share_comps` multi-model merge ported (#60); off by default, behavior-validated (no bit-exact oracle) |
 | History tracking | yes | yes | Complete | `ll_history`, grad norms |
 
 ## Input/output
@@ -91,7 +90,7 @@ indistinguishable from Fortran's run-to-run distribution (#27, `.context/issue-2
 
 - [ ] **Performance benchmark** vs the Fortran binary (CPU/CUDA/MPS); verify or revise the 2-3x
       runtime criterion.
-- [ ] **Component sharing** (`share_comps`, `share_start`/`share_int`, `load_comp_list`,
-      `comp_used`) ported to `AMICATorchNG` and validated on real data.
+- [x] **Component sharing** (`share_comps`, `share_start`/`share_iter`, `comp_thresh`) ported to
+      `AMICATorchNG` (#60), off by default, behavior-validated on real data.
 - [ ] **Test hardening:** single-channel / single-sample edge cases, numerical-stability
       regression tests, and `save`/`load` + `plot_components` coverage (#15).

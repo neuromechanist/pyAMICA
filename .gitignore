@@ -29,3 +29,7 @@ pyAMICA/tests/torch_tests/_ng_e2e_tmp/
 
 # Benchmark run artifacts
 benchmarks/results/
+
+# Local secrets (never commit)
+.env
+.env.*

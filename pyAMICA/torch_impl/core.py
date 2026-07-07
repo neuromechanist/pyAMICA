@@ -293,6 +293,23 @@ class AMICATorchNG:
     doscaling, scalestep : bool, int
         Whether/how often to rescale ``A`` columns to unit norm each
         iteration (with matching ``mu``/``beta`` rescale).
+    share_comps : bool, default=False
+        Enable multi-model component sharing (Fortran ``share_comps`` /
+        ``identify_shared_comps``, amica15.f90:1898): components that are
+        near-collinear across different models are merged so they share one
+        mixing column and one density. Requires ``n_models >= 2`` (a model
+        cannot share with itself); a no-op otherwise. OFF by default, so
+        single-model (#24) and default multi-model (#27) results are unchanged.
+        There is no bit-exact oracle -- the reference's similarity metric is
+        never initialized (like ``do_choose_pdfs``, #26) -- so this implements
+        the intended algorithm, validated by real-data behavior.
+    share_start, share_iter : int
+        Sharing schedule: first iteration to attempt merges and the interval
+        between attempts (Fortran ``share_start``/``share_iter``). The A-update
+        is held for ~6 iterations after each merge so densities can settle.
+    comp_thresh : float, default=0.99
+        Cosine-similarity cutoff (in the de-sphered/sensor-space metric) above
+        which two mixing columns are identified and merged.
     do_mean, do_sphere, do_approx_sphere : bool
         Preprocessing options, matching ``pyAMICA.AMICA._preprocess_data``.
     pcakeep, pcadb : int, float, optional
@@ -345,6 +362,10 @@ class AMICATorchNG:
         invsigmax: float = 1000.0,
         doscaling: bool = True,
         scalestep: int = 1,
+        share_comps: bool = False,
+        share_start: int = 100,
+        share_iter: int = 100,
+        comp_thresh: float = 0.99,
         do_mean: bool = True,
         do_sphere: bool = True,
         do_approx_sphere: bool = True,
@@ -442,6 +463,29 @@ class AMICATorchNG:
 
         self.doscaling = doscaling
         self.scalestep = scalestep
+
+        # Component sharing (Fortran share_comps / identify_shared_comps,
+        # amica15.f90:1838-1945): periodically merge mixing columns that are
+        # near-collinear across DIFFERENT models so they share one density and
+        # one mixing column. Multi-model only (a model cannot share with
+        # itself); OFF by default so single-model (#24) and default multi-model
+        # (#27) parity stay byte-for-byte. There is no bit-exact oracle -- the
+        # reference's similarity metric (Spinv2) is never initialized, so its
+        # reassignment never fires (the do_choose_pdfs situation, #26); this is
+        # the intended algorithm, validated by real-data behavior (unique-count
+        # drops, log-likelihood does not degrade).
+        self.share_comps = share_comps
+        self.share_start = share_start
+        self.share_iter = share_iter
+        self.comp_thresh = comp_thresh
+        self._spinv = None  # cached de-sphering metric, built on first share
+        if share_comps:
+            if share_start < 1:
+                raise ValueError(f"share_start must be >= 1, got {share_start}")
+            if share_iter < 1:
+                raise ValueError(f"share_iter must be >= 1, got {share_iter}")
+            if not 0.0 < comp_thresh <= 1.0:
+                raise ValueError(f"comp_thresh must be in (0, 1], got {comp_thresh}")
 
         self.do_mean = do_mean
         self.do_sphere = do_sphere
@@ -956,7 +1000,19 @@ class AMICATorchNG:
                     self.iteration,
                 )
 
-        self.alpha = acc["dalpha_n"] / acc["dalpha_n"].sum(dim=0, keepdim=True)
+        # Component sharing (#60): a component that was merged away is no longer
+        # referenced by comp_list, so no sufficient statistic accumulates into
+        # its column (dalpha_n/dmu_d/dbeta_d == 0) and the divisions below would
+        # be 0/0 = NaN. Update only USED columns and freeze the rest at their
+        # last finite value (Fortran carries NaN there harmlessly behind its
+        # comp_used mask; we keep them finite so save/the degenerate guard are
+        # not tripped). With the default full comp_list every column is used, so
+        # ``used`` is all-True and every update below is byte-for-byte unchanged.
+        used = self.comp_used.unsqueeze(0)  # (1, n_comps)
+
+        self.alpha = torch.where(
+            used, acc["dalpha_n"] / acc["dalpha_n"].sum(dim=0, keepdim=True), self.alpha
+        )
 
         # Finalize the Newton curvature with the PRE-update mu. Fortran folds the
         # mu^2 term into lambda during E-step accumulation, before the M-step
@@ -968,11 +1024,16 @@ class AMICATorchNG:
             sigma2, lambda_, kappa = self._finalize_newton_stats(acc)
 
         # Exact-EM mixture location/scale (Fortran :1978/:1993). No lrate.
-        self.mu = self.mu + acc["dmu_n"] / acc["dmu_d"]
-        self.beta = torch.clamp(
-            self.beta * torch.sqrt(acc["dbeta_n"] / acc["dbeta_d"]),
-            self.invsigmin,
-            self.invsigmax,
+        # ``used`` masks merged-away columns (no-op for the default comp_list).
+        self.mu = torch.where(used, self.mu + acc["dmu_n"] / acc["dmu_d"], self.mu)
+        self.beta = torch.where(
+            used,
+            torch.clamp(
+                self.beta * torch.sqrt(acc["dbeta_n"] / acc["dbeta_d"]),
+                self.invsigmin,
+                self.invsigmax,
+            ),
+            self.beta,
         )
         # Fortran keeps a live "NaN in sbeta!" canary here (amica17.f90:1996-2000).
         # The exact-EM mu/beta divisions are unguarded (matching Fortran, whose own
@@ -1012,7 +1073,9 @@ class AMICATorchNG:
                 new_rho = torch.where(
                     nan_mask, torch.full_like(new_rho, self.rho0), new_rho
                 )
-            self.rho = torch.clamp(new_rho, self.minrho, self.maxrho)
+            self.rho = torch.where(
+                used, torch.clamp(new_rho, self.minrho, self.maxrho), self.rho
+            )
 
         # --- A / W update: natural gradient, optionally Newton-preconditioned.
         # A is stored as Fortran's A^T (the true unmixing is W^T = inv(A)^T), so
@@ -1052,22 +1115,33 @@ class AMICATorchNG:
                 self.iteration,
             )
 
-        # Learning-rate ramp: toward newtrate while Newton is active and stable,
-        # otherwise toward lrate0 (Fortran amica17.f90:1906-1917). Ramped after
-        # mu/beta/rho (which are exact-EM, lrate-free) and before A.
-        if newton_active and not no_newt:
-            self.lrate = min(
-                self.newtrate, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
-            )
-        else:
-            self.lrate = min(
-                self.lrate_cap, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
-            )
+        # A-update. Accumulate each model's natural-gradient/Newton contribution
+        # per mixing COLUMN (Fortran dAk, amica15.f90:1735) via index_add, then
+        # apply once. Routing through comp_list makes columns SHARED across
+        # models (issue #60) sum their gradients; with the default disjoint
+        # comp_list it is identical to a per-model in-place update, so single-/
+        # multi-model parity stays byte-for-byte. Both the lrate ramp and the A
+        # step are held for ~6 iterations after each share event (Fortran
+        # A-freeze, amica15.f90:1785); _a_frozen is always False when sharing is
+        # off, so the default path is unchanged.
+        if not self._a_frozen():
+            # Learning-rate ramp: toward newtrate while Newton is active and
+            # stable, otherwise toward lrate0 (Fortran amica17.f90:1906-1917).
+            # Ramped after mu/beta/rho (exact-EM, lrate-free) and before A.
+            if newton_active and not no_newt:
+                self.lrate = min(
+                    self.newtrate, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
+                )
+            else:
+                self.lrate = min(
+                    self.lrate_cap, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
+                )
 
-        for h in range(self.n_models):
-            idx = self.comp_list[:, h]
-            A_cols = self.A[:, idx]
-            self.A[:, idx] = A_cols - self.lrate * (directions[h].T @ A_cols)
+            dAk = torch.zeros_like(self.A)
+            for h in range(self.n_models):
+                idx = self.comp_list[:, h]
+                dAk.index_add_(1, idx, directions[h].T @ self.A[:, idx])
+            self.A = self.A - self.lrate * dAk
 
         if self.doscaling and (self.iteration % self.scalestep == 0):
             scale = torch.sqrt((self.A**2).sum(dim=0))  # (n_comps,)
@@ -1077,6 +1151,103 @@ class AMICATorchNG:
             self.beta[:, nonzero] = self.beta[:, nonzero] / scale[nonzero]
 
         self._update_unmixing_matrices()
+
+    def _a_frozen(self) -> bool:
+        """Whether the A-update (and its lrate ramp) is held this iteration.
+
+        The Fortran reference freezes A for the first ~6 iterations of each
+        ``share_iter`` cycle after ``share_start`` (amica15.f90:1785) so the
+        density parameters can settle onto a freshly merged component before the
+        mixing matrix moves again. Gated behind ``share_comps`` here (the
+        reference gates only on the schedule, but freezing A when sharing is off
+        would change the validated default trajectory), so with ``share_comps``
+        off this is always False and the default path is untouched.
+        """
+        if not self.share_comps or self.n_models < 2:
+            return False
+        itf = self.iteration + 1  # Fortran-style 1-indexed iteration
+        return itf >= self.share_start and (itf % self.share_iter) <= 5
+
+    def _identify_shared_comps(self) -> None:
+        """Merge near-collinear mixing columns across models (Fortran
+        ``identify_shared_comps``, amica15.f90:1898).
+
+        Two components (model ``h`` source ``i`` and model ``hh`` source ``ii``,
+        ``h < hh``) are identified when the angle between their mixing columns,
+        measured in the original (de-sphered) data space, is below the
+        ``comp_thresh`` cutoff::
+
+            t0 = |a . b| / (||a|| ||b||),   a = Spinv A[:,ci], b = Spinv A[:,cj]
+
+        where ``Spinv = sphere^-1`` de-spheres the columns back to sensor space
+        (so the similarity compares scalp maps). On a match, ``cj`` is folded
+        into ``ci``: every ``comp_list`` entry equal to ``cj`` is reassigned to
+        ``ci``, so the two now share one mixing column and one density (the
+        M-step already accumulates every sufficient statistic through
+        ``comp_list`` via index_add, so shared components sum automatically).
+
+        Greedy and order-dependent, matching the reference's quadruple loop.
+        Skips a pair already merged, or one whose two columns coexist in some
+        single model (a model cannot share a component with itself).
+
+        No bit-exact oracle: the reference's ``Spinv2`` metric is never
+        initialized (like ``do_choose_pdfs``, #26), so its reassignment never
+        actually fires. This implements the intended algorithm; correctness is
+        validated by real-data behavior, not byte parity.
+        """
+        if self.n_models < 2:
+            return
+        if self._spinv is None:
+            self._spinv = torch.linalg.inv(self.sphere)
+        # De-sphered mixing columns in sensor space, on CPU for the small greedy
+        # scan (n_models^2 * n_channels^2 pairs; avoids per-element GPU syncs).
+        atil = (self._spinv @ self.A).detach().cpu().numpy()
+        norms = np.linalg.norm(atil, axis=0)
+        cl = self.comp_list.detach().cpu().numpy().copy()  # (nw, n_models)
+        nw, m = cl.shape
+        tiny = np.finfo(atil.dtype).tiny
+        merged = 0
+        for h in range(m):
+            for hh in range(h + 1, m):
+                for i in range(nw):
+                    for ii in range(nw):
+                        ci, cj = int(cl[i, h]), int(cl[ii, hh])
+                        if ci == cj:
+                            continue
+                        t0 = abs(atil[:, ci] @ atil[:, cj]) / (
+                            norms[ci] * norms[cj] + tiny
+                        )
+                        if t0 < self.comp_thresh:
+                            continue
+                        # A model cannot share a component with itself: skip if
+                        # any single model already uses both columns.
+                        if any(
+                            (cl[:, k] == ci).any() and (cl[:, k] == cj).any()
+                            for k in range(m)
+                        ):
+                            continue
+                        cl[cl == cj] = ci  # fold cj into ci everywhere
+                        merged += 1
+        if merged:
+            self.comp_list = torch.from_numpy(cl).to(self.comp_list.device)
+            logger.info(
+                "Component sharing (iter %d): %d merge(s), %d unique components.",
+                self.iteration,
+                merged,
+                int(np.unique(cl).size),
+            )
+
+    @property
+    def comp_used(self) -> torch.Tensor:
+        """Boolean mask (n_comps,) of components still referenced by comp_list.
+
+        A component drops out of use when it is folded into another by
+        :meth:`_identify_shared_comps`; unused columns receive no gradient and
+        are never read by the E-step. Derived from ``comp_list`` (not stored).
+        """
+        used = torch.zeros(self.n_comps, dtype=torch.bool, device=self.comp_list.device)
+        used[self.comp_list.reshape(-1)] = True
+        return used
 
     def _choose_pdfs(self, X: torch.Tensor) -> None:
         """Extended-Infomax adaptive PDF switch (Fortran ``do_choose_pdfs``).
@@ -1290,6 +1461,19 @@ class AMICATorchNG:
                 ):
                     self._choose_pdfs(X_use)
                     self.n_kurt_done += 1
+
+            # Component sharing (Fortran identify_shared_comps schedule,
+            # amica15.f90:1838): once per share_iter cycle from share_start,
+            # merge near-collinear mixing columns across models using the
+            # just-updated A; the merged comp_list takes effect next E-step.
+            # No-op when share_comps is off or n_models == 1.
+            if self.share_comps:
+                itf = it + 1
+                if (
+                    itf >= self.share_start
+                    and (itf - self.share_start) % self.share_iter == 0
+                ):
+                    self._identify_shared_comps()
 
             self.ll_history.append(ll)
 
@@ -1533,6 +1717,12 @@ class AMICATorchNG:
             "invsigmax": self.invsigmax,
             "doscaling": self.doscaling,
             "scalestep": self.scalestep,
+            # Component sharing (issue #60): persisted so a reloaded multi-model
+            # run keeps its schedule; the merged comp_list itself is in params.
+            "share_comps": self.share_comps,
+            "share_start": self.share_start,
+            "share_iter": self.share_iter,
+            "comp_thresh": self.comp_thresh,
             "do_mean": self.do_mean,
             "do_sphere": self.do_sphere,
             "do_approx_sphere": self.do_approx_sphere,

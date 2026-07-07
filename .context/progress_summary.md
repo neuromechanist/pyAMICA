@@ -47,6 +47,20 @@ what remains as of the v0.1.0 preparation.
   `stop_reason_`; `transform` / `get_mixing_matrix` / `get_unmixing_matrix` / `save` raise a clear
   degenerate error instead of returning NaN sources.
 
+### Component sharing (issue #60)
+- `share_comps` ported to `AMICATorchNG`: on the `share_start`/`share_iter` schedule, components
+  that are near-collinear across different models (cosine angle of their de-sphered mixing columns
+  above `comp_thresh`) are merged into one shared mixing column and density, with an A-freeze for
+  ~6 iterations after each merge (Fortran `identify_shared_comps`, amica15.f90:1898).
+- The M-step already sums sufficient statistics through `comp_list` (index_add), so shared
+  components update jointly; the A-update was refactored to accumulate shared columns the same way
+  (byte-identical to the per-model update when unshared).
+- OFF by default, and a no-op for `n_models=1`, so single-model (#24) and default multi-model (#27)
+  results are byte-for-byte unchanged (verified by the full torch suite). No bit-exact oracle: the
+  reference's `Spinv2` similarity metric is never initialized (dead code, like `do_choose_pdfs`,
+  #26), so the intended algorithm is implemented and behavior-validated. See
+  `tests/torch_tests/test_ng_sharing.py`.
+
 ### Structure and infrastructure
 - Module rename into `numpy_impl/` and `torch_impl/` with topic-based names (issue #34); the public
   import surface (`from pyAMICA import AMICA, AMICA_NumPy, AMICATorchNG`) is stable.
@@ -60,9 +74,6 @@ what remains as of the v0.1.0 preparation.
 
 - **Performance benchmark:** the "runtime within 2-3x of Fortran" success criterion has never been
   measured. Needs a repeatable NG-vs-Fortran benchmark across CPU/CUDA/MPS.
-- **Component sharing:** the last unimplemented Fortran feature. Torch `comp_list` is only the
-  trivial per-model block layout; `share_comps` reassignment (`share_start` / `share_int`,
-  `load_comp_list`, `comp_used`) is absent. NumPy has partial plumbing only.
 - **Test hardening:** no single-channel / single-sample edge tests, no numerical-stability
   regression tests (mincond / minlog / maxdble / mineig bounds); `AMICA.save`/`load` and
   `plot_components` remain untested (issue #15).
