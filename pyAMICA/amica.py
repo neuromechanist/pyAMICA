@@ -184,7 +184,15 @@ class AMICA:
         # Setup device (with the MPS/float64 parity fallback, see _select_device).
         device = self._select_device(kwargs.get("dtype", _NG_DEFAULT_DTYPE))
 
-        self.model_ = AMICATorchNG(
+        # Build and train the backend on a LOCAL reference first, and only
+        # publish it to self (and derive the fitted-state attributes) once
+        # fit() returns. If the backend constructor or fit() raises mid-training
+        # (a numerical crash, OOM, singular sphere, interrupt, ...), self is left
+        # untouched: a first fit keeps model_ is None (so the output methods
+        # raise a clean "not fitted"), and a refit keeps the previous, known-good
+        # model rather than a half-trained one falsely marked usable (issue #50
+        # silent-failure review).
+        backend = AMICATorchNG(
             n_channels=n_channels,
             n_models=self.n_models,
             n_mix=self.n_mix,
@@ -195,11 +203,12 @@ class AMICA:
             device=device,
             **kwargs,
         )
-        self.model_.fit(X, max_iter=max_iter, verbose=self.verbose)
+        backend.fit(X, max_iter=max_iter, verbose=self.verbose)
 
-        self.ll_history_ = self.model_.ll_history
-        self.final_ll_ = self.model_.final_ll_
-        self.stop_reason_ = self.model_.stop_reason
+        self.model_ = backend
+        self.ll_history_ = backend.ll_history
+        self.final_ll_ = backend.final_ll_
+        self.stop_reason_ = backend.stop_reason
         self.converged_ = self.stop_reason_ not in AMICATorchNG._DEGENERATE_STOP_REASONS
         # A degenerate fit (nan_ll/singular_ll) holds non-finite parameters and
         # would return NaN sources, so it is not a usable model: is_fitted_ stays
@@ -213,7 +222,7 @@ class AMICA:
                 "stop_reason_/ll_history_; lower lrate, disable Newton, or check "
                 "data conditioning, then refit.",
                 self.stop_reason_,
-                self.model_.iteration,
+                backend.iteration,
             )
 
         return self

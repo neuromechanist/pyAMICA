@@ -67,6 +67,11 @@ def test_ng_save_load_roundtrip(fitted_ng, real_data, tmp_path):
     # round-trip -- use it, not ll_history_[-1], as the model's log-likelihood.
     assert fitted_ng.final_ll_ is not None
     assert loaded.final_ll_ == fitted_ng.final_ll_
+    # converged_/stop_reason_ (issue #50) round-trip too (a saved model is always
+    # converged, since state_dict refuses degenerate ones).
+    assert loaded.converged_ == fitted_ng.converged_
+    assert loaded.stop_reason_ == fitted_ng.stop_reason_
+    assert loaded.converged_ is True
 
     # torch.save/load restores tensors bit-exactly and CPU matmul is
     # deterministic, so transform() on the restored tensors reproduces the
@@ -171,32 +176,39 @@ def test_unfitted_output_raises_not_fitted():
         model.get_unmixing_matrix()
 
 
-def test_degenerate_fit_refuses_output(real_data, tmp_path):
-    """A degenerate fit (stop_reason nan_ll/singular_ll) holds non-finite
-    parameters, so transform/get_mixing/get_unmixing/save refuse it rather than
-    return NaN sources, consistent with state_dict() (issue #50). The degenerate
-    marker is set the same way as test_ng_backend's degenerate tests -- a real
-    fit whose stop_reason is then forced -- because the backend does not diverge
-    on the clean sample data."""
+def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
+    """A genuinely degenerate fit is marked unusable and every output method
+    refuses it rather than return NaN sources (issue #50). A single NaN injected
+    into the real EEG forces an actual ``nan_ll`` divergence in the backend --
+    an error-path robustness test, not a parity/correctness claim, so it is not
+    a synthetic-data oracle -- exercising the real ``fit`` bookkeeping (not a
+    forced marker): is_fitted_/converged_ False, stop_reason_ named, and the
+    wrapper warning emitted."""
+    bad = real_data[:, :4096].copy()
+    bad[0, 0] = np.nan  # propagates to a nan_ll stop in the backend
     model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
-    model.fit(real_data[:, :4096], max_iter=3, block_size=1024, seed=0)
-    assert model.is_fitted_ and model.converged_  # healthy before the marker
+    with caplog.at_level(logging.WARNING, logger="pyAMICA.amica"):
+        model.fit(bad, max_iter=3, block_size=1024, seed=0)
 
-    # Force the degenerate state a real divergence would leave.
-    model.stop_reason_ = "nan_ll"
-    model.converged_ = False
-    model.is_fitted_ = False
+    assert model.stop_reason_ == "nan_ll"
+    assert model.converged_ is False
+    assert model.is_fitted_ is False
+    assert any("degenerate" in r.getMessage() for r in caplog.records)
 
+    # transform/get_*/save refuse the degenerate model with a diagnosable error
+    # (names the stop_reason), not a misleading plain "not fitted".
     for action in (
         lambda: model.transform(real_data[:, :512]),
         lambda: model.get_mixing_matrix(),
         lambda: model.get_unmixing_matrix(),
         lambda: model.save(str(tmp_path / "degenerate.pt")),
     ):
-        with pytest.raises(RuntimeError, match="degenerate"):
+        with pytest.raises(RuntimeError, match="degenerate.*nan_ll"):
             action()
 
-    # A degenerate marker must not be misreported as a plain "not fitted" error:
-    # the message names the stop reason so the failure is diagnosable.
-    with pytest.raises(RuntimeError, match="nan_ll"):
-        model.transform(real_data[:, :512])
+    # fit_transform routes through the guarded transform, so a degenerate refit
+    # cannot leak NaN sources either.
+    with pytest.raises(RuntimeError, match="degenerate"):
+        AMICA(n_models=1, n_mix=3, device="cpu", verbose=False).fit_transform(
+            bad, max_iter=3, block_size=1024, seed=0
+        )
