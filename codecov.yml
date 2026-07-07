@@ -1,0 +1,25 @@
+# Codecov configuration. Coverage here is informational: the enforced gate is
+# `--cov-fail-under` in the CI pytest step (.github/workflows/ci.yml), so a
+# Codecov status never blocks a PR on its own.
+coverage:
+  status:
+    project:
+      default:
+        target: auto        # compare against the base commit
+        threshold: 1%       # allow small dips without a red status
+        informational: true # never fail the PR check
+    patch:
+      default:
+        informational: true
+
+# The Fortran-binary parity tests are excluded on CI (Linux cannot run the
+# macOS x86_64 reference), so their code paths are reported via local runs, not
+# Codecov. Keep the report focused on the package.
+ignore:
+  - "pyAMICA/tests/**"
+  - "validate_implementations.py"
+  - "benchmarks/**"
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true      # only comment when coverage changes
