@@ -42,7 +42,11 @@
       variance-driving seed peaked at -3.357 then crashed to -3.545 in its final iterations).
       Single-model #24 parity stays bit-exact (monotone => no restore). See ADR 0003,
       `.context/issue-51/`.
-- [ ] Component sharing
+- [x] Component sharing (issue #60): `share_comps` multi-model reassignment ported to
+      `AMICATorchNG` (de-sphered cosine-similarity merge, `share_start`/`share_iter`/`comp_thresh`
+      schedule + A-freeze). OFF by default so single-model (#24)/default multi-model (#27) parity is
+      byte-for-byte. No bit-exact oracle (reference `Spinv2` metric is dead code, like #26);
+      behavior-validated. See `tests/torch_tests/test_ng_sharing.py`.
 
 ### Priority 3: Testing & validation
 - [x] Real-data test suite exercising the PyTorch backend end-to-end (issue #7) - Phase 1, issue #10:

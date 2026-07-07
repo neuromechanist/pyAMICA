@@ -84,6 +84,19 @@ dead code even in amica15 (the moment buffers are never accumulated), so the aut
 bit-exact oracle and is validated by real-data LL. `pdftype=0` stays the default and is
 byte-for-byte unchanged. See `.context/decisions/` and `tests/torch_tests/test_ng_pdf_families.py`.
 
+**Component sharing (#60): DONE.** `share_comps` multi-model reassignment is ported to
+`AMICATorchNG`: on the `share_start`/`share_iter` schedule, components near-collinear across
+different models (cosine angle of their de-sphered mixing columns above `comp_thresh`) are merged
+into one shared mixing column + density, with an A-freeze for ~6 iterations after each merge
+(Fortran `identify_shared_comps`, amica15.f90:1898). The M-step already sums sufficient stats
+through `comp_list`; the A-update was refactored to accumulate shared columns the same way
+(byte-identical when unshared), and merged-away columns are frozen (avoiding 0/0 NaN that Fortran
+tolerates behind its `comp_used` mask). OFF by default and a no-op for `n_models=1`, so single-model
+(#24) and default multi-model (#27) parity stay byte-for-byte (full torch suite green). The A-update
+is the Fortran `gm`-weighted average (`dAk/zeta`), so shared columns are averaged not summed. No
+bit-exact oracle: the reference `Spinv2` metric is *declared but never allocated* (unrunnable, like
+the dead `do_choose_pdfs`, #26), so it is behavior-validated (`tests/torch_tests/test_ng_sharing.py`).
+
 **Open (non-blocking, tracked):**
 - **Multi-model (#27): VALIDATED by distributional equivalence.** Multi-model AMICA is not
   partition-identifiable, so exact partition parity with Fortran is the wrong acceptance bar (the
