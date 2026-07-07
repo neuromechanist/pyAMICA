@@ -92,9 +92,10 @@ into one shared mixing column + density, with an A-freeze for ~6 iterations afte
 through `comp_list`; the A-update was refactored to accumulate shared columns the same way
 (byte-identical when unshared), and merged-away columns are frozen (avoiding 0/0 NaN that Fortran
 tolerates behind its `comp_used` mask). OFF by default and a no-op for `n_models=1`, so single-model
-(#24) and default multi-model (#27) parity stay byte-for-byte (full torch suite green). No bit-exact
-oracle: the reference `Spinv2` metric is dead code (like `do_choose_pdfs`, #26), so it is
-behavior-validated (`tests/torch_tests/test_ng_sharing.py`).
+(#24) and default multi-model (#27) parity stay byte-for-byte (full torch suite green). The A-update
+is the Fortran `gm`-weighted average (`dAk/zeta`), so shared columns are averaged not summed. No
+bit-exact oracle: the reference `Spinv2` metric is *declared but never allocated* (unrunnable, like
+the dead `do_choose_pdfs`, #26), so it is behavior-validated (`tests/torch_tests/test_ng_sharing.py`).
 
 **Open (non-blocking, tracked):**
 - **Multi-model (#27): VALIDATED by distributional equivalence.** Multi-model AMICA is not

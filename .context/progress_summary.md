@@ -53,12 +53,16 @@ what remains as of the v0.1.0 preparation.
   above `comp_thresh`) are merged into one shared mixing column and density, with an A-freeze for
   ~6 iterations after each merge (Fortran `identify_shared_comps`, amica15.f90:1898).
 - The M-step already sums sufficient statistics through `comp_list` (index_add), so shared
-  components update jointly; the A-update was refactored to accumulate shared columns the same way
-  (byte-identical to the per-model update when unshared).
+  components update jointly; the A-update was refactored to accumulate columns as Fortran's
+  `gm`-weighted average (`dAk/zeta`, so shared columns are averaged, not summed) -- byte-identical
+  to the per-model update when unshared.
+- `keep_best` (#51) is disabled under sharing (a merge changes the parameter count, so pre-/post-merge
+  LLs are not comparable and restoring an earlier snapshot would revert the merge); `fit` returns the
+  last, merged iterate like Fortran.
 - OFF by default, and a no-op for `n_models=1`, so single-model (#24) and default multi-model (#27)
   results are byte-for-byte unchanged (verified by the full torch suite). No bit-exact oracle: the
-  reference's `Spinv2` similarity metric is never initialized (dead code, like `do_choose_pdfs`,
-  #26), so the intended algorithm is implemented and behavior-validated. See
+  reference's `Spinv2` similarity metric is *declared but never allocated* (unrunnable, like the dead
+  `do_choose_pdfs`, #26), so the intended algorithm is implemented and behavior-validated. See
   `tests/torch_tests/test_ng_sharing.py`.
 
 ### Structure and infrastructure

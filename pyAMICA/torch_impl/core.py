@@ -306,7 +306,9 @@ class AMICATorchNG:
     share_start, share_iter : int
         Sharing schedule: first iteration to attempt merges and the interval
         between attempts (Fortran ``share_start``/``share_iter``). The A-update
-        is held for ~6 iterations after each merge so densities can settle.
+        is held for the first 6 iterations of every cycle (independent of whether
+        a merge fired) so densities can settle; ``share_iter`` must be ``> 6`` so
+        that window never consumes the whole cycle.
     comp_thresh : float, default=0.99
         Cosine-similarity cutoff (in the de-sphered/sensor-space metric) above
         which two mixing columns are identified and merged.
@@ -464,16 +466,15 @@ class AMICATorchNG:
         self.doscaling = doscaling
         self.scalestep = scalestep
 
-        # Component sharing (Fortran share_comps / identify_shared_comps,
-        # amica15.f90:1838-1945): periodically merge mixing columns that are
-        # near-collinear across DIFFERENT models so they share one density and
-        # one mixing column. Multi-model only (a model cannot share with
-        # itself); OFF by default so single-model (#24) and default multi-model
-        # (#27) parity stay byte-for-byte. There is no bit-exact oracle -- the
-        # reference's similarity metric (Spinv2) is never initialized, so its
-        # reassignment never fires (the do_choose_pdfs situation, #26); this is
-        # the intended algorithm, validated by real-data behavior (unique-count
-        # drops, log-likelihood does not degrade).
+        # Component sharing (Fortran share_comps / identify_shared_comps trigger
+        # amica15.f90:1838, subroutine :1898-1945): periodically merge mixing
+        # columns near-collinear across DIFFERENT models so they share one
+        # density and one mixing column. Multi-model only (a model cannot share
+        # with itself); OFF by default so single-model (#24) and default
+        # multi-model (#27) parity stay byte-for-byte. No bit-exact oracle -- the
+        # reference's Spinv2 metric is declared but never allocated, so its
+        # reassignment is unrunnable (the do_choose_pdfs situation, #26); this is
+        # the intended algorithm, validated by real-data behavior.
         self.share_comps = share_comps
         self.share_start = share_start
         self.share_iter = share_iter
@@ -482,10 +483,21 @@ class AMICATorchNG:
         if share_comps:
             if share_start < 1:
                 raise ValueError(f"share_start must be >= 1, got {share_start}")
-            if share_iter < 1:
-                raise ValueError(f"share_iter must be >= 1, got {share_iter}")
+            if share_iter <= 6:
+                # The A-freeze settle window is 6 iterations; a smaller cycle
+                # would freeze A permanently (never leaving room to update it).
+                raise ValueError(f"share_iter must be > 6, got {share_iter}")
             if not 0.0 < comp_thresh <= 1.0:
                 raise ValueError(f"comp_thresh must be in (0, 1], got {comp_thresh}")
+            if pcakeep is not None or pcadb is not None:
+                # PCA reduction makes the sphere rank-deficient, so the
+                # de-sphering metric used for the merge decision is not
+                # invertible. Reject up front rather than crash mid-fit.
+                raise ValueError(
+                    "share_comps is incompatible with PCA reduction "
+                    "(pcakeep/pcadb): the de-sphering similarity metric requires "
+                    "a full-rank sphere."
+                )
 
         self.do_mean = do_mean
         self.do_sphere = do_sphere
@@ -1039,10 +1051,14 @@ class AMICATorchNG:
         # The exact-EM mu/beta divisions are unguarded (matching Fortran, whose own
         # mu/beta guard is commented out), so surface a non-finite value here
         # instead of letting it propagate to a later, unattributable nan-LL stop.
-        if not torch.isfinite(self.mu).all() or not torch.isfinite(self.beta).all():
+        if (
+            not torch.isfinite(self.mu).all()
+            or not torch.isfinite(self.beta).all()
+            or not torch.isfinite(self.alpha).all()
+        ):
             logger.warning(
-                "Non-finite mu/beta at iter %d (a mixture component's mass likely "
-                "collapsed).",
+                "Non-finite mu/beta/alpha at iter %d (a mixture component's mass "
+                "likely collapsed).",
                 self.iteration,
             )
 
@@ -1087,46 +1103,41 @@ class AMICATorchNG:
         # fixed point but sends the free-running fit downhill -- issue #24 root
         # cause (.context/issue-24/root_cause_Aupdate.py, machine-exact check).
         # (newton_active / sigma2 / lambda_ / kappa were finalized above.)
-        eye = torch.eye(self.n_channels, dtype=self.dtype, device=self.device)
-        directions = []
-        no_newt = False
-        for h in range(self.n_models):
-            dA_h = -acc["dWtmp"][:, :, h] / acc["dgm"][h] + eye  # I - <g b^T>/dgm
-            if newton_active:
-                H, posdef = self._newton_direction(
-                    dA_h, sigma2[:, h], lambda_[:, h], kappa[:, h]
-                )
-                if posdef:
-                    directions.append(H)
-                else:
-                    no_newt = True
-                    directions.append(dA_h)  # fall back to natural gradient
-            else:
-                directions.append(dA_h)
-
-        if newton_active and no_newt:
-            # Fortran prints "Hessian not positive definite, using natural
-            # gradient" here (amica17.f90:1911-1913). Surface the same signal so
-            # a silent all-fallback run (the current issue #21 behaviour) is
-            # visible without re-instrumenting the code.
-            self.n_newton_fallbacks += 1
-            logger.warning(
-                "Newton not positive definite at iter %d; using natural gradient.",
-                self.iteration,
-            )
-
-        # A-update. Accumulate each model's natural-gradient/Newton contribution
-        # per mixing COLUMN (Fortran dAk, amica15.f90:1735) via index_add, then
-        # apply once. Routing through comp_list makes columns SHARED across
-        # models (issue #60) sum their gradients; with the default disjoint
-        # comp_list it is identical to a per-model in-place update, so single-/
-        # multi-model parity stays byte-for-byte. Both the lrate ramp and the A
-        # step are held for ~6 iterations after each share event (Fortran
-        # A-freeze, amica15.f90:1785); _a_frozen is always False when sharing is
-        # off, so the default path is unchanged.
+        # A-update. When sharing holds A this iteration (the post-merge settle
+        # window, Fortran amica15.f90:1785), skip the whole block -- direction
+        # computation, lrate ramp, and step -- so a discarded Newton direction
+        # cannot pollute the fallback counter. _a_frozen is always False when
+        # sharing is off, so the default path is unchanged.
         if not self._a_frozen():
+            eye = torch.eye(self.n_channels, dtype=self.dtype, device=self.device)
+            directions = []
+            no_newt = False
+            for h in range(self.n_models):
+                dA_h = -acc["dWtmp"][:, :, h] / acc["dgm"][h] + eye  # I - <g b^T>/dgm
+                if newton_active:
+                    H, posdef = self._newton_direction(
+                        dA_h, sigma2[:, h], lambda_[:, h], kappa[:, h]
+                    )
+                    if posdef:
+                        directions.append(H)
+                    else:
+                        no_newt = True
+                        directions.append(dA_h)  # fall back to natural gradient
+                else:
+                    directions.append(dA_h)
+
+            if newton_active and no_newt:
+                # Fortran prints "Hessian not positive definite, using natural
+                # gradient" (amica15.f90:1791-1793). Surface the same signal so an
+                # all-fallback run (issue #21) is visible without re-instrumenting.
+                self.n_newton_fallbacks += 1
+                logger.warning(
+                    "Newton not positive definite at iter %d; using natural gradient.",
+                    self.iteration,
+                )
+
             # Learning-rate ramp: toward newtrate while Newton is active and
-            # stable, otherwise toward lrate0 (Fortran amica17.f90:1906-1917).
+            # stable, otherwise toward lrate0 (Fortran amica15.f90:1786-1797).
             # Ramped after mu/beta/rho (exact-EM, lrate-free) and before A.
             if newton_active and not no_newt:
                 self.lrate = min(
@@ -1137,10 +1148,22 @@ class AMICATorchNG:
                     self.lrate_cap, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
                 )
 
+            # Accumulate each model's natural-gradient/Newton contribution per
+            # mixing COLUMN as a gm-WEIGHTED AVERAGE (Fortran dAk/zeta,
+            # amica15.f90:1730-1743): dAk = sum_h gm[h]*dir_h scattered by
+            # comp_list, zeta = sum_h gm[h] per column, then dAk /= zeta. For the
+            # default disjoint comp_list every column has exactly one contributor,
+            # so gm cancels (dAk = dir) and single-model (gm=[1]) is byte-for-byte
+            # unchanged; for a SHARED column (issue #60) the step is Fortran's
+            # responsibility-weighted average, NOT a raw sum (a raw sum would
+            # over-step by the contributor count and destabilize the fit).
             dAk = torch.zeros_like(self.A)
+            zeta = torch.zeros(self.n_comps, dtype=self.dtype, device=self.device)
             for h in range(self.n_models):
                 idx = self.comp_list[:, h]
-                dAk.index_add_(1, idx, directions[h].T @ self.A[:, idx])
+                dAk.index_add_(1, idx, self.gm[h] * (directions[h].T @ self.A[:, idx]))
+                zeta.index_add_(0, idx, self.gm[h].expand(idx.shape[0]))
+            dAk = dAk / zeta.clamp_min(torch.finfo(self.dtype).tiny)
             self.A = self.A - self.lrate * dAk
 
         if self.doscaling and (self.iteration % self.scalestep == 0):
@@ -1155,18 +1178,29 @@ class AMICATorchNG:
     def _a_frozen(self) -> bool:
         """Whether the A-update (and its lrate ramp) is held this iteration.
 
-        The Fortran reference freezes A for the first ~6 iterations of each
-        ``share_iter`` cycle after ``share_start`` (amica15.f90:1785) so the
-        density parameters can settle onto a freshly merged component before the
-        mixing matrix moves again. Gated behind ``share_comps`` here (the
-        reference gates only on the schedule, but freezing A when sharing is off
-        would change the validated default trajectory), so with ``share_comps``
-        off this is always False and the default path is untouched.
+        A is frozen for the first 6 iterations of every ``share_iter``-length
+        window once ``iter >= share_start`` -- i.e. the merge iteration and the 5
+        after it -- so the density parameters can settle onto any freshly merged
+        component before the mixing matrix moves again (Fortran A-freeze,
+        amica15.f90:1785). The window fires each cycle regardless of whether that
+        cycle's ``_identify_shared_comps`` actually merged a pair.
+
+        Anchored on ``(itf - share_start) % share_iter`` so it stays aligned with
+        the merge schedule for any ``share_start``; the literal Fortran formula
+        uses ``mod(iter, share_iter)`` (misaligned unless share_start is a
+        multiple of share_iter, and a permanent freeze for ``share_iter <= 6``),
+        but that path is dead in the reference (see :meth:`_identify_shared_comps`)
+        so there is no parity constraint -- the constructor requires
+        ``share_iter > 6`` so the window never consumes the whole cycle. Gated
+        behind ``share_comps`` and ``n_models >= 2``, so with sharing off it is
+        always False and the validated default trajectory is untouched.
         """
         if not self.share_comps or self.n_models < 2:
             return False
         itf = self.iteration + 1  # Fortran-style 1-indexed iteration
-        return itf >= self.share_start and (itf % self.share_iter) <= 5
+        if itf < self.share_start:
+            return False
+        return (itf - self.share_start) % self.share_iter <= 5
 
     def _identify_shared_comps(self) -> None:
         """Merge near-collinear mixing columns across models (Fortran
@@ -1190,15 +1224,38 @@ class AMICATorchNG:
         Skips a pair already merged, or one whose two columns coexist in some
         single model (a model cannot share a component with itself).
 
-        No bit-exact oracle: the reference's ``Spinv2`` metric is never
-        initialized (like ``do_choose_pdfs``, #26), so its reassignment never
-        actually fires. This implements the intended algorithm; correctness is
-        validated by real-data behavior, not byte parity.
+        No bit-exact oracle: ``Spinv2`` is *declared* in the reference headers
+        but never *allocated* anywhere in ``amica15.f90``/``amica17.f90`` (unlike
+        ``Spinv``, allocated at :551), so invoking ``identify_shared_comps`` with
+        ``share_comps=.true.`` would read an unallocated array through ``DGEMV``
+        -- undefined behavior, most likely a crash, not a benign no-op. The
+        routine is effectively unrunnable in the reference (cf. the also-dead
+        ``do_choose_pdfs`` switch, #26), so this implements the intended
+        algorithm and validates it on real data, not against byte parity.
         """
         if self.n_models < 2:
             return
         if self._spinv is None:
-            self._spinv = torch.linalg.inv(self.sphere)
+            # The de-sphering metric needs a full-rank, invertible sphere.
+            # Average-referenced EEG (covariance rank n_channels-1) or naturally
+            # rank-deficient data makes the sphere singular; surface it loudly
+            # rather than merging on garbage (the degenerate-fit philosophy,
+            # amica.py). (pcakeep/pcadb reduction is already rejected in __init__.)
+            try:
+                spinv = torch.linalg.inv(self.sphere)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    "Component sharing needs an invertible sphere, but it is "
+                    "singular (common with average-referenced or rank-deficient "
+                    "data). Disable share_comps or use full-rank data."
+                ) from exc
+            if not torch.isfinite(spinv).all():
+                raise RuntimeError(
+                    "Component sharing produced a non-finite de-sphering matrix "
+                    "(the sphere is singular/ill-conditioned). Disable share_comps "
+                    "or use full-rank data."
+                )
+            self._spinv = spinv
         # De-sphered mixing columns in sensor space, on CPU for the small greedy
         # scan (n_models^2 * n_channels^2 pairs; avoids per-element GPU syncs).
         atil = (self._spinv @ self.A).detach().cpu().numpy()
@@ -1217,7 +1274,9 @@ class AMICATorchNG:
                         t0 = abs(atil[:, ci] @ atil[:, cj]) / (
                             norms[ci] * norms[cj] + tiny
                         )
-                        if t0 < self.comp_thresh:
+                        # NaN t0 (e.g. a zero-norm column) must NOT merge:
+                        # `NaN < thresh` is False, so guard finiteness explicitly.
+                        if not np.isfinite(t0) or t0 < self.comp_thresh:
                             continue
                         # A model cannot share a component with itself: skip if
                         # any single model already uses both columns.
@@ -1371,6 +1430,7 @@ class AMICATorchNG:
         self.ll_history = []
         self.numrej = 0
         self.n_newton_fallbacks = 0
+        self._spinv = None  # rebuild the de-sphering metric for this fit's sphere
         self.stop_reason = "max_iter"
         self.good_idx = (
             torch.arange(n_total, device=self.device) if self.do_reject else None
@@ -1379,19 +1439,27 @@ class AMICATorchNG:
 
         # Best-iterate safeguard (issue #51): track the highest-LL iterate so a
         # late Newton-fallback overshoot cannot leave the returned model below a
-        # peak it already reached. Inactive under do_reject, where the good set
-        # (and the LL normalization) changes across iterations, so per-iteration
-        # LLs are not comparable.
-        track_best = self.keep_best and not self.do_reject
+        # peak it already reached. Inactive under do_reject (the good set, and so
+        # the LL normalization, changes across iterations) and under share_comps
+        # (a merge drops parameters, so pre- and post-merge LLs are not
+        # comparable AND the snapshot's comp_list would revert the merge -- the
+        # returned model would silently be unmerged; #60). In both cases fit()
+        # returns the last iterate, matching Fortran.
+        track_best = self.keep_best and not self.do_reject and not self.share_comps
         best_ll = -math.inf
         best_snapshot: Optional[Dict[str, object]] = None
-        if self.keep_best and self.do_reject:
-            # keep_best defaults on, so a user enabling rejection would otherwise
-            # silently lose the safeguard; surface it once (silent-failure review).
+        if self.keep_best and (self.do_reject or self.share_comps):
+            # keep_best defaults on, so a user enabling rejection/sharing would
+            # otherwise silently lose the safeguard; surface it once.
+            reason = "do_reject" if self.do_reject else "share_comps"
             logger.warning(
-                "keep_best is inactive under do_reject: the good-sample set (and "
-                "the per-iteration LL normalization) changes as samples are "
-                "rejected, so best-iterate selection by LL is not well-defined."
+                "keep_best is inactive under %s: best-iterate selection by LL is "
+                "not well-defined (%s), so fit() returns the last iterate.",
+                reason,
+                "the good-sample set / LL normalization changes across iterations"
+                if self.do_reject
+                else "a merge changes the parameter count and reverting to an "
+                "earlier snapshot would undo the merge",
             )
 
         iterator = tqdm(range(max_iter), desc="AMICA-NG", disable=not verbose)
@@ -1465,8 +1533,11 @@ class AMICATorchNG:
             # Component sharing (Fortran identify_shared_comps schedule,
             # amica15.f90:1838): once per share_iter cycle from share_start,
             # merge near-collinear mixing columns across models using the
-            # just-updated A; the merged comp_list takes effect next E-step.
-            # No-op when share_comps is off or n_models == 1.
+            # just-updated A. Fortran runs identify_shared_comps BEFORE
+            # get_unmixing_matrices (amica15.f90:1840,1845), so rebuild W from the
+            # merged comp_list -- otherwise the next E-step would read a stale W
+            # (pre-merge comp_list) while indexing the densities by the merged
+            # comp_list. No-op when share_comps is off or n_models == 1.
             if self.share_comps:
                 itf = it + 1
                 if (
@@ -1474,6 +1545,7 @@ class AMICATorchNG:
                     and (itf - self.share_start) % self.share_iter == 0
                 ):
                     self._identify_shared_comps()
+                    self._update_unmixing_matrices()
 
             self.ll_history.append(ll)
 
