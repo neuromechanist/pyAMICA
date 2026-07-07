@@ -1,5 +1,7 @@
 """Tests for AMICA implementation."""
 
+import shutil
+import tempfile
 import numpy as np
 from pathlib import Path
 import unittest
@@ -21,10 +23,10 @@ class TestAMICA(unittest.TestCase):
         cls.num_samples = 1000
         cls.data = rng.randn(cls.data_dim, cls.num_samples)
 
-        # Save test data in Fortran format
-        cls.test_dir = Path("test_data")
-        if not cls.test_dir.exists():
-            cls.test_dir.mkdir()
+        # Save test data in Fortran format. Use a unique temp dir (not a shared
+        # relative "test_data/") so parallel workers (pytest-xdist -n auto) do
+        # not race on creating/removing the same path.
+        cls.test_dir = Path(tempfile.mkdtemp(prefix="pyamica_test_amica_"))
 
         data_file = cls.test_dir / "test.bin"
         with open(data_file, "wb") as f:
@@ -110,10 +112,8 @@ class TestAMICA(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        """Clean up test files."""
-        import shutil
-
-        shutil.rmtree(cls.test_dir)
+        """Clean up test files (ignore_errors: the temp dir may already be gone)."""
+        shutil.rmtree(cls.test_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
