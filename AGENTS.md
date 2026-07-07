@@ -88,9 +88,17 @@ byte-for-byte unchanged. See `.context/decisions/` and `tests/torch_tests/test_n
   Supporting: per-block sufficient stats are bit-exact vs Fortran; the per-model bias `c` update
   (Fortran `update_c`: `c[i,h] = sum_t v_h*x / sum_t v_h`) is ported to both backends, guarded to a
   no-op for `n_models=1` (single-model parity stays bit-exact), see
-  `.context/issue-27/multimodel_c_update.md`. **Open residual (#51):** NG's LL distribution is ~0.02
-  lower and more variable than Fortran's (optimizer quality, not a correctness bug -- one M-step is
-  bit-exact).
+  `.context/issue-27/multimodel_c_update.md`.
+- **Best-iterate safeguard (#51): DONE.** NG's multi-model LL was ~0.02 lower and ~13x more variable
+  than Fortran because `fit` returned the *last* EM iterate under the non-monotone lrate schedule; the
+  variance was driven by late Newton-fallback overshoots (one seed peaked at -3.357 then crashed to
+  -3.545 in its final iterations). `AMICATorchNG.fit` now returns the highest-LL iterate (`keep_best`,
+  default on; `final_ll_` reports the returned iterate's LL, `ll_history` stays the true trajectory).
+  At matched 100-iter budget this cuts the LL sd from 12.7x to 2.0x Fortran's; the residual ~0.009
+  mean gap is convergence speed, not a worse optimum (at 200 iters NG reaches Fortran's exact mean
+  -3.3541, at 300 it exceeds it -- the M-step is bit-exact vs Fortran). Single-model #24 parity stays
+  byte-for-byte (monotone => no restore). Inactive under `do_reject`. See ADR 0003 and
+  `.context/issue-51/`.
 
 ## Development Workflow
 1. **Check context:** `.context/plan.md` for current tasks and priorities.

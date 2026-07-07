@@ -8,9 +8,9 @@
 > positive-definite (0 fallbacks), and implements Newton + Fortran-style ramping and outlier
 > rejection (`do_reject`). Rows below that still read "Missing"/"Partial" describe the removed
 > basic backend, not `AMICATorchNG`. Adaptive-PDF selection (#26) is now DONE (five `pdftype`
-> families + ext-Infomax switcher, ADR 0002); the remaining NG gap is full multi-model partition
-> matching (#27, M-step is already bit-exact vs Fortran). See `PROGRESS_SUMMARY.md` and the ADRs in
-> `.context/decisions/`.
+> families + ext-Infomax switcher, ADR 0002); multi-model AMICA (#27) is validated by distributional
+> equivalence and its LL variance is resolved by the best-iterate safeguard (#51, ADR 0003). See
+> `PROGRESS_SUMMARY.md` and the ADRs in `.context/decisions/`.
 
 ## Implementation Status Overview
 
@@ -171,8 +171,19 @@ families (the repo's `amica17.f90` is a later GG-only trim). All are ported to `
 
 #### 2. Multi-Model Partition Matching (issue #27)
 **Why**: full 2-model fit is partition-limited (~0.77) though the M-step is bit-exact vs Fortran
-- [ ] Resolve the partition/cross-correlation gap
-- [ ] Restore the omitted per-model bias `c` update (no-op only for `n_models=1`)
+- [x] Resolve the partition/cross-correlation gap: validated by distributional equivalence -- the NG
+      partition ensemble is statistically indistinguishable from Fortran's own run-to-run spread
+      (`.context/issue-27/`)
+- [x] Restore the omitted per-model bias `c` update (no-op only for `n_models=1`)
+
+#### 2b. Multi-Model Log-Likelihood Variance (issue #51) — DONE
+**Why**: NG's multi-model LL was ~0.02 lower and ~13x more variable than Fortran
+- [x] Root cause: `fit` returned the *last* iterate under the non-monotone lrate schedule, so a late
+      Newton-fallback overshoot could end below a peak already reached
+- [x] Fix: return the best-LL iterate (`keep_best`, default on; `final_ll_`). Cuts the LL sd from
+      12.7x to 2.0x Fortran's at matched 100-iter budget; single-model #24 parity stays bit-exact
+- [x] Residual mean gap is convergence speed, not a worse optimum: NG reaches Fortran's exact mean
+      (-3.3541) at 200 iters, exceeds it at 300 (ADR 0003, `.context/issue-51/`)
 
 #### 3. Retire Superseded/Legacy Paths
 - [x] Remove `AMICATorchV2` and the basic `AMICATorch`; `AMICATorchNG` is now the sole PyTorch

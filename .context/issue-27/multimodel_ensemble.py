@@ -93,7 +93,7 @@ def run_ng(data, seed):
     ng.fit(data, max_iter=MAX_ITER, verbose=False)
     return (
         np.vstack([ng.get_unmixing_matrix(0), ng.get_unmixing_matrix(1)]),
-        ng.ll_history[-1],
+        ng.final_ll_,  # LL of the returned iterate (issue #51 best-iterate safeguard)
     )
 
 
