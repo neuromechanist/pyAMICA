@@ -52,7 +52,17 @@ single-component families 1/4 require `n_mix=1`. The ground-truth `amica15.f90`/
 ## Receipts
 
 - `pyAMICA/amica15.f90` select-cases at :1277 (likelihood) / :1449 (score); `dorho=.false.`
-  at :3682; `do_choose_pdfs` at :594. `runamica15.m` documents `kurt_*` as "for ext. infomax".
+  at :3682; `do_choose_pdfs` at :594; the `m2sum`/`m4sum` moment buffers are allocated/zeroed
+  (:590-591) but never accumulated, confirming the dynamic switch is dead code in the binary.
+- The extended-Infomax intent comes from the upstream AMICA MATLAB wrapper `runamica15.m`
+  (sccn/amica), which documents the schedule parameters verbatim (not copied into this repo):
+  ```
+  %   kurt_start          for ext. infomax, iter to start kurtosis calc, def=3
+  %   num_kurt            for ext. infomax, number of kurtosis calc, def=5
+  %   kurt_int            for ext. infomax, iteration interval between calc, def=1
+  ```
+  and defaults `pdftype=0; kurt_start=3; num_kurt=5; kurt_int=1;`. The super/sub-Gaussian
+  scores `y +/- tanh(y)` (amica15 codes 1/4) are the classic extended-Infomax nonlinearities.
 - `pyAMICA/torch_impl/amica_torch_ng.py`: `_log_pdf_and_deriv`, `_score`, `_choose_pdfs`.
 - `pyAMICA/tests/torch_tests/test_ng_pdf_families.py` (formula parity + real-data + opt-in
   binary integration behind `AMICA_RUN_FORTRAN=1`).
