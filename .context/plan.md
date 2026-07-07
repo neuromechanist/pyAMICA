@@ -30,6 +30,10 @@
 - [x] Multi-model AMICA per-model bias `c` update (issue #27): ported to both backends, guarded
       no-op for `n_models=1`; controlled A/B shows +0.011 cross-corr, gap is intrinsic partition
       ambiguity (see `.context/issue-27/multimodel_c_update.md`).
+- [x] Degenerate-fit contract (issue #50): the `AMICA` wrapper no longer marks a degenerate fit
+      (`stop_reason` nan_ll/singular_ll) as usable. `fit` sets `is_fitted_` only on a converged fit
+      and exposes `converged_`/`stop_reason_`; `transform`/`get_mixing_matrix`/`get_unmixing_matrix`/
+      `save` raise a clear degenerate error (mirroring `state_dict`) instead of returning NaN sources.
 - [x] Best-iterate safeguard (issue #51): `AMICATorchNG.fit` returns the highest-LL iterate
       (`keep_best`, `final_ll_`), not the last, so a late Newton-fallback overshoot no longer leaves
       the model below a peak it reached. Root cause was return-last, not a bad basin (the sole

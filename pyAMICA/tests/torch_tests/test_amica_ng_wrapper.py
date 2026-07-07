@@ -148,3 +148,55 @@ def test_ng_wrapper_fit_transform_real_data(fitted_ng, real_data):
     assert W.shape == (NW, NW)
     assert np.isfinite(A).all()
     assert np.isfinite(W).all()
+
+
+def test_fit_exposes_converged_and_stop_reason(fitted_ng):
+    """A normal fit is marked usable and exposes its stop reason (issue #50):
+    converged_ is True, is_fitted_ is True, and stop_reason_ is a non-degenerate
+    marker."""
+    assert fitted_ng.converged_ is True
+    assert fitted_ng.is_fitted_ is True
+    assert fitted_ng.stop_reason_ not in ("nan_ll", "singular_ll")
+    assert fitted_ng.stop_reason_ is not None
+
+
+def test_unfitted_output_raises_not_fitted():
+    """Before any fit, the output methods raise a clear 'not fitted' error --
+    distinct from the degenerate-fit refusal below (issue #50)."""
+    model = AMICA(verbose=False)
+    assert model.is_fitted_ is False
+    with pytest.raises(ValueError, match="fitted"):
+        model.transform(np.zeros((NW, 16)))
+    with pytest.raises(ValueError, match="fitted"):
+        model.get_unmixing_matrix()
+
+
+def test_degenerate_fit_refuses_output(real_data, tmp_path):
+    """A degenerate fit (stop_reason nan_ll/singular_ll) holds non-finite
+    parameters, so transform/get_mixing/get_unmixing/save refuse it rather than
+    return NaN sources, consistent with state_dict() (issue #50). The degenerate
+    marker is set the same way as test_ng_backend's degenerate tests -- a real
+    fit whose stop_reason is then forced -- because the backend does not diverge
+    on the clean sample data."""
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=3, block_size=1024, seed=0)
+    assert model.is_fitted_ and model.converged_  # healthy before the marker
+
+    # Force the degenerate state a real divergence would leave.
+    model.stop_reason_ = "nan_ll"
+    model.converged_ = False
+    model.is_fitted_ = False
+
+    for action in (
+        lambda: model.transform(real_data[:, :512]),
+        lambda: model.get_mixing_matrix(),
+        lambda: model.get_unmixing_matrix(),
+        lambda: model.save(str(tmp_path / "degenerate.pt")),
+    ):
+        with pytest.raises(RuntimeError, match="degenerate"):
+            action()
+
+    # A degenerate marker must not be misreported as a plain "not fitted" error:
+    # the message names the stop reason so the failure is diagnosable.
+    with pytest.raises(RuntimeError, match="nan_ll"):
+        model.transform(real_data[:, :512])
