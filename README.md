@@ -108,12 +108,14 @@ python -m pyAMICA.numpy_impl.cli params.json --outdir results
 
 ## File Structure
 
-- `amica.py`: Main AMICA implementation
+- `amica.py`: Main scikit-learn-style AMICA interface (PyTorch backend)
+- `torch_impl/core.py`: PyTorch natural-gradient EM backend (`AMICATorchNG`)
+- `numpy_impl/core.py`: Legacy NumPy reference (`AMICA_NumPy`)
 - `numpy_impl/pdf.py`: PDF type implementations
 - `numpy_impl/newton.py`: Newton optimization
 - `numpy_impl/data.py`: Data loading/preprocessing
 - `numpy_impl/cli.py`: Command-line interface
-- `params.json`: Example parameter file
+- `numpy_impl/params.json`: Default/example parameter file
 
 ## Output Files
 
