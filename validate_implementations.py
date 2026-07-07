@@ -140,6 +140,10 @@ def run_fortran_amica(
                 f.write(f"max_iter {params.get('max_iter', 100)}\n")
             elif line.startswith("lrate"):
                 f.write(f"lrate {params.get('lrate', 0.05)}\n")
+            elif line.startswith("pdftype"):
+                f.write(f"pdftype {params.get('pdftype', 0)}\n")
+            elif line.startswith("num_mix_comps"):
+                f.write(f"num_mix_comps {params.get('num_mix', 3)}\n")
             else:
                 f.write(line)
 

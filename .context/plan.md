@@ -19,11 +19,14 @@
 ### Priority 2: Missing core features
 - [x] Port outlier rejection (`do_reject` / `reject_data`) to the torch backend (done in `AMICATorchNG`)
 - [x] Wire up / stabilize Newton for the torch backend (done in `AMICATorchNG`, posdef, issue #24)
-- [ ] Adaptive PDF selection (`do_choose_pdfs`) for `AMICATorchNG` (issue #26; the old
-      `amica_torch_v2.py` prototype was removed in #32). NOTE: no Fortran/NumPy oracle exists
-      (reference binary is `pdftype 0`; `amica17.f90` only declares the pdtype/m2/m4 arrays,
-      never uses them). Chosen approach: Fortran-faithful kurtosis-driven GG-family switching,
-      validated by real-data LL + regression (no synthetic).
+- [x] Adaptive PDF selection for `AMICATorchNG` (issue #26). Corrected the "no oracle" finding:
+      the reference binary is `amica15mac` = `amica15.f90` (now copied into `pyAMICA/`), which
+      implements five `pdtype` density families; the repo's `amica17.f90` is a later GG-only trim.
+      Ported all five (0 GG default, 2 Gaussian, 3 logistic, 4 sub-G cosh+, 1 super-G cosh-) plus the
+      extended-Infomax kurtosis auto-switcher (`pdftype=1`). Fixed families are bit-exact vs the
+      literal Fortran `z0`/`fp` and converge within ~0.005 LL of the binary; the dynamic switcher is
+      dead code in the binary (no bit-exact oracle) so it is LL-validated. `pdftype=0` default
+      unchanged. Tests in `tests/torch_tests/test_ng_pdf_families.py`.
 - [x] Multi-model AMICA per-model bias `c` update (issue #27): ported to both backends, guarded
       no-op for `n_models=1`; controlled A/B shows +0.011 cross-corr, gap is intrinsic partition
       ambiguity (see `.context/issue-27/multimodel_c_update.md`).

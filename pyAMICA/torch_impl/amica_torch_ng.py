@@ -32,6 +32,12 @@ correct per-source log-density required to hit the Fortran-normalized LL target
 (~-3.4/sample-channel). As of issue #24 the legacy NumPy port
 (``pyAMICA.pyAMICA.AMICA``) computes it the same way; both backends now converge
 to the Fortran solution (component correlation > 0.95).
+
+Source-density families (issue #26): the default GG path cites ``amica17.f90``,
+but the reference *binary* is ``amica15mac`` = ``amica15.f90``, which (unlike the
+GG-only ``amica17.f90``) implements the ``pdtype`` density families. The
+``pdftype`` machinery therefore cites ``amica15.f90``; the two Fortran sources
+are not interchangeable. See ``.context/decisions/0002-adaptive-pdf-families.md``.
 """
 
 from __future__ import annotations
@@ -49,22 +55,44 @@ from .utils import setup_device
 logger = logging.getLogger(__name__)
 
 _LOG2 = math.log(2.0)
+_LOG4 = math.log(4.0)  # logistic-family normalizer (amica15.f90:1328)
 _HALF_LOG_PI = 0.5 * math.log(math.pi)
+# Log-normalizers for the non-GG density families, using Fortran's exact literal
+# constants (amica15.f90:1315/1341/1353) so the log-density matches the reference
+# binary bit-for-bit: 2.506628274 = sqrt(2*pi) (Gaussian, pdtype 2); 4.132731354 /
+# 1.858073988 = the sub-/super-Gaussian cosh normalizers (pdtype 4 / 1).
+_LOG_SQRT_2PI = math.log(2.506628274)
+_LOG_NORM_COSH_SUB = math.log(4.132731354)
+_LOG_NORM_COSH_SUP = math.log(1.858073988)
 # Fortran's epsdble (amica17_header.f90:73): the drho-numerator underflow guard
 # zeros the rho*ln|y| term when |y|^rho falls below this, matching amica17.f90:1570.
 _EPSDBLE = 1e-16
 
 
-def _log_pdf_and_deriv(
-    y: torch.Tensor, rho: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Vectorized generalized-Gaussian log-density and density derivative.
+def _logcosh(x: torch.Tensor) -> torch.Tensor:
+    """Numerically stable ``log cosh(x) = |x| - log2 + log1p(exp(-2|x|))``."""
+    ax = x.abs()
+    return ax - _LOG2 + torch.log1p(torch.exp(-2.0 * ax))
 
-    Elementwise port of ``pyAMICA.pyAMICA.AMICA._compute_log_pdf``: branches
-    on ``rho`` via ``torch.where`` (Laplace/Gaussian/generalized-Gaussian)
-    instead of Python control flow so it runs over full
-    ``(block, source, mixture)`` tensors with no source/mixture loop. ``y``
-    and ``rho`` must be broadcastable to a common shape.
+
+def _log_pdf_and_deriv(
+    y: torch.Tensor, rho: torch.Tensor, pdtype: Optional[torch.Tensor] = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Vectorized source-density log-density and density derivative.
+
+    Elementwise port of ``pyAMICA.pyAMICA.AMICA._compute_log_pdf``: branches via
+    ``torch.where`` instead of Python control flow so it runs over full
+    ``(block, source, mixture)`` tensors with no source/mixture loop. ``y``,
+    ``rho`` and ``pdtype`` must be broadcastable to a common shape.
+
+    When ``pdtype is None`` (the default ``pdftype=0`` path) this computes only
+    the generalized-Gaussian (GG) family, branching on ``rho``
+    (Laplace/Gaussian/GG), and is bit-identical to the pre-#26 implementation.
+    When ``pdtype`` is given it additionally selects, per source, among the
+    fixed density families of ``amica15.f90`` (codes 0/2/3/4/1): GG, Gaussian,
+    logistic, sub-Gaussian cosh+, super-Gaussian cosh-. The density derivative
+    obeys ``dpdf = -fp * pdf`` for every family (``fp`` = the score from
+    ``_score``), which reproduces the GG ``dpdf`` exactly.
     """
     abs_y = y.abs()
     sign_y = torch.sign(y)
@@ -85,19 +113,47 @@ def _log_pdf_and_deriv(
         is_gau, log_pdf_gau, torch.where(is_lap, log_pdf_lap, log_pdf_gg)
     )
     dpdf = torch.where(is_gau, dpdf_gau, torch.where(is_lap, dpdf_lap, dpdf_gg))
+    if pdtype is None:
+        return log_pdf, dpdf
+
+    # Non-GG families (amica15.f90:1309-1353). Each is `-cost - log_norm`, and
+    # dpdf = -fp * exp(log_pdf).
+    log_pdf_2 = -0.5 * y * y - _LOG_SQRT_2PI  # Gaussian
+    log_pdf_3 = -2.0 * _logcosh(0.5 * y) - _LOG4  # logistic (sech^2)
+    lc = _logcosh(y)
+    log_pdf_4 = -0.5 * y * y + lc - _LOG_NORM_COSH_SUB  # sub-Gaussian cosh+
+    log_pdf_1 = -0.5 * y * y - lc - _LOG_NORM_COSH_SUP  # super-Gaussian cosh-
+
+    log_pdf = torch.where(
+        pdtype == 2,
+        log_pdf_2,
+        torch.where(
+            pdtype == 3,
+            log_pdf_3,
+            torch.where(
+                pdtype == 4, log_pdf_4, torch.where(pdtype == 1, log_pdf_1, log_pdf)
+            ),
+        ),
+    )
+    fp = _score(y, rho, pdtype)
+    dpdf = torch.where(pdtype == 0, dpdf, -fp * torch.exp(log_pdf))
     return log_pdf, dpdf
 
 
-def _score(y: torch.Tensor, rho: torch.Tensor) -> torch.Tensor:
-    """Generalized-Gaussian score ``fp = d|y|^rho/dy`` (Fortran ``fp``).
+def _score(
+    y: torch.Tensor, rho: torch.Tensor, pdtype: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """Source-density score ``fp = -d(log pdf)/dy`` (Fortran ``fp``).
 
-    This is the derivative of the *negative* log-density, ``fp(y) =
-    rho*sign(y)*|y|^(rho-1)`` (``sign(y)`` for Laplace, ``2y`` for Gaussian),
-    used by the Newton sufficient statistics (``amica17.f90:1455-1467``). It
-    is distinct from the density derivative ``dpdf`` returned by
-    ``_log_pdf_and_deriv`` (which carries an extra ``pdf`` factor); the Newton
-    curvature terms ``kappa``/``lambda`` are defined in terms of ``fp``, not
-    ``dpdf``.
+    For the GG family this is ``fp(y) = rho*sign(y)*|y|^(rho-1)`` (``sign(y)``
+    for Laplace, ``2y`` for Gaussian), used by the exact-EM and Newton
+    sufficient statistics (``amica15.f90:1449-1473``). It is distinct from the
+    density derivative ``dpdf`` (which carries an extra ``pdf`` factor).
+
+    With ``pdtype is None`` only the GG score is computed (bit-identical to the
+    pre-#26 path). With ``pdtype`` given it selects per source among the fixed
+    families: 2 Gaussian ``y``; 3 logistic ``tanh(y/2)``; 4 sub-Gaussian
+    ``y - tanh(y)``; 1 super-Gaussian ``y + tanh(y)``.
     """
     abs_y = y.abs()
     sign_y = torch.sign(y)
@@ -106,7 +162,23 @@ def _score(y: torch.Tensor, rho: torch.Tensor) -> torch.Tensor:
     fp_gg = rho * sign_y * abs_y.pow(rho - 1.0)
     is_lap = rho == 1.0
     is_gau = rho == 2.0
-    return torch.where(is_gau, fp_gau, torch.where(is_lap, fp_lap, fp_gg))
+    fp = torch.where(is_gau, fp_gau, torch.where(is_lap, fp_lap, fp_gg))
+    if pdtype is None:
+        return fp
+
+    tanh_half = torch.tanh(0.5 * y)
+    tanh_y = torch.tanh(y)
+    return torch.where(
+        pdtype == 2,
+        y,
+        torch.where(
+            pdtype == 3,
+            tanh_half,
+            torch.where(
+                pdtype == 4, y - tanh_y, torch.where(pdtype == 1, y + tanh_y, fp)
+            ),
+        ),
+    )
 
 
 class AMICATorchNG:
@@ -175,6 +247,21 @@ class AMICATorchNG:
     rho0, minrho, maxrho, rholrate : float
         Generalized-Gaussian shape-parameter initialization, clamp bounds,
         and learning rate.
+    pdftype : int, default=0
+        Source-density family (issue #26), matching Fortran ``amica15.f90``'s
+        ``pdtype`` codes: 0 generalized Gaussian (default; rho adapts), 2
+        Gaussian, 3 logistic, 4 sub-Gaussian cosh+. ``pdftype=1`` enables the
+        extended-Infomax adaptive switcher, which flips each source between the
+        super-Gaussian (code 1) and sub-Gaussian (code 4) cosh densities by
+        kurtosis sign. For every non-GG family the GG shape update is frozen
+        (Fortran ``dorho=.false.``); the single-component families 1/4 (and the
+        adaptive mode) require ``n_mix=1``. ``pdftype=0`` is byte-for-byte the
+        pre-#26 implementation.
+    kurt_start, num_kurt, kurt_int : int
+        Adaptive-switch schedule (only used when ``pdftype=1``): first iteration
+        to re-estimate kurtosis, number of switch passes, and the iteration
+        interval between them. ``num_kurt=0`` disables switching (the family
+        stays at its super-Gaussian init).
     invsigmin, invsigmax : float
         Clamp bounds for the mixture scale parameter ``beta``.
     doscaling, scalestep : bool, int
@@ -223,6 +310,10 @@ class AMICATorchNG:
         maxrho: float = 2.0,
         rholrate: float = 0.05,
         rholratefact: float = 0.1,
+        pdftype: int = 0,
+        kurt_start: int = 3,
+        num_kurt: int = 5,
+        kurt_int: int = 1,
         invsigmin: float = 1e-4,
         invsigmax: float = 1000.0,
         doscaling: bool = True,
@@ -274,6 +365,44 @@ class AMICATorchNG:
         self.rholrate0 = rholrate
         self.rholratefact = rholratefact
 
+        # Source-density family selection (Fortran ``pdftype``, amica15.f90). Values
+        # match Fortran's per-source ``pdtype`` codes: 0 generalized Gaussian (the
+        # default, GG-mixture with adaptive rho), 2 Gaussian mixture, 3 logistic
+        # (sech^2) mixture, 4 sub-Gaussian cosh+ (single component). pdftype=1 enables
+        # the extended-Infomax adaptive switcher (Fortran's do_choose_pdfs trigger),
+        # which flips each source between the super-Gaussian (code 1) and sub-Gaussian
+        # (code 4) cosh densities by kurtosis sign on the kurt_start/num_kurt/kurt_int
+        # schedule. Families 1 and 4 are single-component (no alpha mixture).
+        if pdftype not in (0, 1, 2, 3, 4):
+            raise ValueError(f"pdftype must be one of 0,1,2,3,4; got {pdftype}")
+        self.pdftype = pdftype
+        # Fortran freezes the GG shape update for every non-GG family (amica15.f90:
+        # `if (pdftype /= 0) dorho = .false.`, line 3682).
+        self.dorho = pdftype == 0
+        # pdftype==1 is Fortran's adaptive trigger (amica15.f90:594).
+        self.do_choose_pdfs = pdftype == 1
+        self.kurt_start = kurt_start
+        self.num_kurt = num_kurt
+        self.kurt_int = kurt_int
+        # Families 1/4 (and the adaptive mode, which uses only codes 1 and 4) are
+        # single-component densities: Fortran's z0 references only mixture component
+        # j=1 and omits log(alpha). They are meaningful only with n_mix == 1.
+        if pdftype in (1, 4) and n_mix != 1:
+            raise ValueError(
+                f"pdftype={pdftype} is a single-component density (adaptive mode "
+                f"uses codes 1 and 4); it requires n_mix=1, got n_mix={n_mix}."
+            )
+        # Validate the adaptive-switch schedule up front (mirrors the do_reject
+        # checks below): kurt_int==0 would otherwise raise a bare ZeroDivisionError
+        # deep in fit(), and a negative kurt_int silently changes the schedule.
+        if self.do_choose_pdfs:
+            if kurt_int < 1:
+                raise ValueError(f"kurt_int must be >= 1, got {kurt_int}")
+            if kurt_start < 1:
+                raise ValueError(f"kurt_start must be >= 1, got {kurt_start}")
+            if num_kurt < 0:
+                raise ValueError(f"num_kurt must be >= 0, got {num_kurt}")
+
         self.invsigmin = invsigmin
         self.invsigmax = invsigmax
 
@@ -317,6 +446,11 @@ class AMICATorchNG:
         # Populated by fit()/_initialize_parameters().
         self.A = self.W = self.c = None
         self.mu = self.alpha = self.beta = self.rho = None
+        # Per-source density-family codes (n_channels, n_models); set in
+        # _initialize_parameters and mutated by the adaptive switcher.
+        self.pdtype = None
+        # Number of adaptive-switch passes already performed (Fortran numchpdf).
+        self.n_kurt_done = 0
         self.gm = self.comp_list = None
         self.mean = self.sphere = None
         self.sldet = 0.0
@@ -433,6 +567,14 @@ class AMICATorchNG:
         self.gm = torch.from_numpy(gm_np).to(self.device, self.dtype)
         self.c = torch.from_numpy(c_np).to(self.device, self.dtype)
 
+        # Per-source density-family codes, Fortran ``pdtype = pdftype`` (amica15.f90:
+        # 593). In adaptive mode (pdftype==1) every source starts as the
+        # super-Gaussian code 1 and the switcher may flip it to 4.
+        self.pdtype = torch.full(
+            (n, m), self.pdftype, dtype=torch.long, device=self.device
+        )
+        self.n_kurt_done = 0
+
         # Reset the mutable optimization state to the pristine constructor
         # values (lrate_cap, newtrate, rholrate are ratcheted down during
         # fit; restore them so a re-fit starts fresh).
@@ -450,6 +592,16 @@ class AMICATorchNG:
         )
         W_stack = torch.linalg.inv(A_stack)
         self.W = W_stack.permute(1, 2, 0).contiguous()
+
+    def _pdtype_h(self, h: int) -> Optional[torch.Tensor]:
+        """Per-source density-family codes for model ``h``, shaped for
+        broadcasting against ``(batch, n_channels, num_mix)`` tensors, or
+        ``None`` on the default ``pdftype=0`` (GG-only) fast path so the E-step
+        stays bit-identical to the pre-#26 implementation.
+        """
+        if self.pdftype == 0:
+            return None
+        return self.pdtype[:, h].view(1, -1, 1)
 
     # ------------------------------------------------------------------
     # E-step / M-step sufficient statistics (the hot path)
@@ -493,8 +645,11 @@ class AMICATorchNG:
             alpha_h = self.alpha[:, idx].T.unsqueeze(0)
 
             y = beta_h * (b.unsqueeze(-1) - mu_h)  # (batch, n_channels, num_mix)
-            log_pdf, dpdf = _log_pdf_and_deriv(y, rho_h)
+            log_pdf, dpdf = _log_pdf_and_deriv(y, rho_h, self._pdtype_h(h))
 
+            # z0 = log(alpha) + log(beta) + log_pdf. For the single-component
+            # families (codes 1/4) n_mix==1 so alpha==1 and log(alpha)==0, which
+            # reproduces Fortran's alpha-free z0 (amica15.f90:1340/1352).
             z0 = torch.log(alpha_h) + torch.log(beta_h) + log_pdf
             ll_i = torch.logsumexp(
                 z0, dim=-1
@@ -579,7 +734,9 @@ class AMICATorchNG:
             v_h = v[:, h]
             beta_h = self.beta[:, idx].T.unsqueeze(0)  # sbeta, (1, n_ch, num_mix)
             rho_h = self.rho[:, idx].T  # (n_ch, num_mix)
-            fp = _score(y, rho_h.unsqueeze(0))  # score, NOT dpdf (:1467)
+            # score fp; the family select-case is amica15.f90:1449-1473 (amica17
+            # is GG-only, so cite the binary's source explicitly here).
+            fp = _score(y, rho_h.unsqueeze(0), self._pdtype_h(h))
             u = v_h.unsqueeze(-1).unsqueeze(-1) * zr  # u = v*z (:1439)
             ufp = u * fp  # (:1485)
 
@@ -793,7 +950,13 @@ class AMICATorchNG:
         # dalpha_n (floored so a near-empty component cannot poison rho). A NaN
         # here (e.g. from upstream mu/beta corruption) is reset to rho0 -- but
         # logged first, so the reset does not silently erase the failure origin.
-        if not torch.all(self.rho == 1.0) and not torch.all(self.rho == 2.0):
+        # Skipped for every non-GG family: Fortran sets dorho=.false. when
+        # pdftype/=0 (amica15.f90:3682), freezing rho at rho0.
+        if (
+            self.dorho
+            and not torch.all(self.rho == 1.0)
+            and not torch.all(self.rho == 2.0)
+        ):
             drho = acc["drho_n"] / acc["dalpha_n"].clamp_min(1e-8)
             psi = torch.special.digamma(1.0 + 1.0 / self.rho)
             new_rho = self.rho + self.rholrate * (1.0 - (self.rho / psi) * drho)
@@ -875,6 +1038,69 @@ class AMICATorchNG:
 
         self._update_unmixing_matrices()
 
+    def _choose_pdfs(self, X: torch.Tensor) -> None:
+        """Extended-Infomax adaptive PDF switch (Fortran ``do_choose_pdfs``).
+
+        Re-estimates each source's kurtosis from the current model activations
+        and sets its density family to the super-Gaussian (code 1) or
+        sub-Gaussian (code 4) cosh density by kurtosis sign. This is the
+        extended-Infomax rule that ``runamica15.m`` documents for the
+        ``kurt_start``/``num_kurt``/``kurt_int`` schedule (the super/sub-Gaussian
+        scores ``y +/- tanh(y)`` are exactly the two families 1/4). The
+        reference binary declares this (``pdftype==1`` sets ``do_choose_pdfs``,
+        amica15.f90:594) but never runs the switch (``m2sum``/``m4sum`` are
+        never accumulated), so there is no bit-exact oracle; validated by
+        real-data log-likelihood (must not decrease vs the fixed GG default).
+        """
+        n_ch, n_models = self.n_channels, self.n_models
+        m2 = torch.zeros(n_ch, n_models, dtype=self.dtype, device=self.device)
+        m4 = torch.zeros_like(m2)
+        nsub = torch.zeros(n_models, dtype=self.dtype, device=self.device)
+        n_samples = X.shape[1]
+        for start in range(0, n_samples, self.block_size):
+            block = X[:, start : start + self.block_size]
+            logV, b_list, *_ = self._forward(block)
+            v = torch.softmax(logV, dim=1)  # (batch, n_models)
+            for h in range(n_models):
+                b = b_list[h]  # (batch, n_ch)
+                vh = v[:, h].unsqueeze(1)
+                m2[:, h] += (vh * b.pow(2)).sum(0)
+                m4[:, h] += (vh * b.pow(4)).sum(0)
+                nsub[h] += v[:, h].sum()
+
+        # Kurtosis = E[b^4]/E[b^2]^2 - 3 = nsub * m4 / m2^2 - 3, per (source, model).
+        tiny = torch.finfo(self.dtype).tiny
+        kurt = nsub.unsqueeze(0) * m4 / m2.pow(2).clamp_min(tiny) - 3.0
+        self.pdtype = self._pdtype_from_kurtosis(kurt, nsub)
+
+    def _pdtype_from_kurtosis(
+        self, kurt: torch.Tensor, nsub: torch.Tensor
+    ) -> torch.Tensor:
+        """Map per-source excess kurtosis to a density-family code (pure).
+
+        Super-Gaussian (positive kurtosis) -> code 1; sub-Gaussian -> code 4.
+        Only sources with a meaningful signal switch: a dead model
+        (``nsub[h]==0`` => ``kurt==-3.0``, finite) or a numerically blown-up
+        source (``kurt`` NaN, and ``NaN>0`` is False) would otherwise be silently
+        assigned code 4 with no diagnostic, so those keep their prior ``pdtype``
+        and are logged -- mirroring the dead-model / non-finite guards in
+        ``_update_parameters``. Split out from ``_choose_pdfs`` so the decision
+        (including the sub-Gaussian branch, which real EEG rarely triggers) is
+        unit-testable on a constructed ``kurt`` tensor.
+        """
+        ones = torch.ones_like(self.pdtype)
+        new_pdtype = torch.where(kurt > 0.0, ones, ones * 4)
+        valid = torch.isfinite(kurt) & (nsub.unsqueeze(0) > 0.0)
+        result = torch.where(valid, new_pdtype, self.pdtype)
+        if not bool(valid.all()):
+            logger.warning(
+                "Non-finite or zero-mass kurtosis for %d source/model pair(s) at "
+                "iter %d; kept their prior pdtype (adaptive-switch guard).",
+                int((~valid).sum()),
+                self.iteration,
+            )
+        return result
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -946,6 +1172,20 @@ class AMICATorchNG:
             reject_ll = self._sample_ll(self.good_idx, X_t) if will_reject else None
 
             self._update_parameters(acc, n_use)
+
+            # Extended-Infomax adaptive PDF switch (Fortran do_choose_pdfs). Runs
+            # on the kurt_start/num_kurt/kurt_int schedule using the just-updated
+            # W; the new per-source families take effect from the next E-step.
+            # itf is the Fortran-style 1-indexed iteration. num_kurt=0 disables
+            # switching (the family stays at its pdftype=1 super-Gaussian init).
+            if self.do_choose_pdfs and self.n_kurt_done < self.num_kurt:
+                itf = it + 1
+                if (
+                    itf >= self.kurt_start
+                    and (itf - self.kurt_start) % self.kurt_int == 0
+                ):
+                    self._choose_pdfs(X_use)
+                    self.n_kurt_done += 1
 
             ll = (acc["ll"] / (n_use * self.n_channels)).item()
             # A singular W makes logdet -> -inf (not NaN), so guard on isfinite,
@@ -1071,10 +1311,16 @@ class AMICATorchNG:
     # transform()/get_*matrix() read back; mu/alpha/beta/rho/gm are the
     # mixture-PDF EM state, included for a complete snapshot (and for parity/
     # continued-analysis) even though no public method currently reads them.
+    # pdtype is the per-source density-family code (issue #26): a non-default
+    # pdftype model, or the adaptive switcher's chosen 1/4 assignments, would
+    # otherwise silently revert to GG on reload. comp_list and pdtype are integer
+    # tensors (dtype preserved on load); the rest follow self.dtype.
     _PARAM_TENSORS = (
         "A", "W", "c", "mu", "alpha", "beta", "rho", "gm",
-        "comp_list", "mean", "sphere",
+        "comp_list", "mean", "sphere", "pdtype",
     )  # fmt: skip
+    # Integer tensors in _PARAM_TENSORS: keep their dtype on load, only move device.
+    _INT_PARAM_TENSORS = ("comp_list", "pdtype")
 
     # Stop reasons that mark a fit as degenerate (non-finite log-likelihood).
     # Such a model yields NaN sources, so state_dict() refuses to persist it
@@ -1146,6 +1392,13 @@ class AMICATorchNG:
             "maxrho": self.maxrho,
             "rholrate": self.rholrate0,
             "rholratefact": self.rholratefact,
+            # Density-family selection (issue #26): needed so a reloaded model
+            # rebuilds with the right pdftype/dorho/do_choose_pdfs and switch
+            # schedule instead of the GG default.
+            "pdftype": self.pdftype,
+            "kurt_start": self.kurt_start,
+            "num_kurt": self.num_kurt,
+            "kurt_int": self.kurt_int,
             "invsigmin": self.invsigmin,
             "invsigmax": self.invsigmax,
             "doscaling": self.doscaling,
@@ -1174,6 +1427,7 @@ class AMICATorchNG:
             "ll_history": [float(v) for v in self.ll_history],
             "stop_reason": self.stop_reason,
             "n_newton_fallbacks": int(self.n_newton_fallbacks),
+            "n_kurt_done": int(self.n_kurt_done),
             "numrej": int(self.numrej),
             "good_idx": None
             if self.good_idx is None
@@ -1184,7 +1438,7 @@ class AMICATorchNG:
             "rholrate": float(self.rholrate),
         }
         return {
-            "format_version": 1,
+            "format_version": 2,
             "config": config,
             "params": params,
             "extra": extra,
@@ -1201,10 +1455,10 @@ class AMICATorchNG:
         ``config``.
         """
         version = state.get("format_version")
-        if version != 1:
+        if version != 2:
             raise ValueError(
                 f"unsupported AMICATorchNG state format_version: {version!r} "
-                "(expected 1)"
+                "(expected 2)"
             )
         for section in ("config", "params", "extra"):
             if section not in state:
@@ -1241,9 +1495,9 @@ class AMICATorchNG:
             )
         for name in self._PARAM_TENSORS:
             tensor = params[name]
-            # comp_list holds integer component indices; preserve its dtype and
-            # only move devices. The float parameters follow self.dtype.
-            if name == "comp_list":
+            # comp_list/pdtype hold integer indices/codes; preserve their dtype
+            # and only move devices. The float parameters follow self.dtype.
+            if name in self._INT_PARAM_TENSORS:
                 setattr(self, name, tensor.to(self.device))
             else:
                 setattr(self, name, tensor.to(self.device, self.dtype))
@@ -1254,6 +1508,7 @@ class AMICATorchNG:
         self.ll_history = list(extra["ll_history"])
         self.stop_reason = extra["stop_reason"]
         self.n_newton_fallbacks = extra["n_newton_fallbacks"]
+        self.n_kurt_done = extra["n_kurt_done"]
         self.numrej = extra["numrej"]
         good_idx = extra["good_idx"]
         self.good_idx = None if good_idx is None else good_idx.to(self.device)
