@@ -309,7 +309,10 @@ def run_pytorch_amica(
     )
 
     return {
-        "final_ll": model.ll_history_[-1],
+        # final_ll_ is the LL of the fitted parameters (issue #51 best-iterate
+        # safeguard); ll_history_[-1] is the raw last-iteration value, which can
+        # sit below the returned iterate after a late overshoot.
+        "final_ll": model.final_ll_,
         "final_iter": len(model.ll_history_),
         "W": model.get_unmixing_matrix(0),
         "A": model.get_mixing_matrix(0),

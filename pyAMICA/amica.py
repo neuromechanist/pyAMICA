@@ -53,7 +53,12 @@ class AMICA:
     is_fitted_ : bool
         Whether the model has been fitted
     ll_history_ : list
-        Log-likelihood history during training
+        Log-likelihood history during training (the true per-iteration
+        trajectory; may dip below its peak on a late overshoot)
+    final_ll_ : float
+        Log-likelihood of the *fitted* parameters (issue #51). Use this, not
+        ``ll_history_[-1]``, as the model's log-likelihood: with the best-iterate
+        safeguard the returned parameters can be an earlier, higher-LL iterate.
 
     Examples
     --------
@@ -89,6 +94,7 @@ class AMICA:
         self.model_ = None
         self.is_fitted_ = False
         self.ll_history_ = []
+        self.final_ll_ = None
 
     def _select_device(self, ng_dtype) -> object:
         """Resolve the compute device, applying the MPS/float64 fallback.
@@ -180,6 +186,7 @@ class AMICA:
         self.model_.fit(X, max_iter=max_iter, verbose=self.verbose)
 
         self.ll_history_ = self.model_.ll_history
+        self.final_ll_ = self.model_.final_ll_
         self.is_fitted_ = True
 
         return self
@@ -343,6 +350,7 @@ class AMICA:
             payload["backend"], device=resolved_device
         )
         model.ll_history_ = model.model_.ll_history
+        model.final_ll_ = model.model_.final_ll_
         model.is_fitted_ = True
         return model
 

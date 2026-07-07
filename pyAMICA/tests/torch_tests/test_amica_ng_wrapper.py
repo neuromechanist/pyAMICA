@@ -63,6 +63,10 @@ def test_ng_save_load_roundtrip(fitted_ng, real_data, tmp_path):
     assert loaded.n_models == fitted_ng.n_models
     assert loaded.n_mix == fitted_ng.n_mix
     assert loaded.ll_history_ == fitted_ng.ll_history_
+    # final_ll_ (the fitted model's LL, issue #51) is populated and survives the
+    # round-trip -- use it, not ll_history_[-1], as the model's log-likelihood.
+    assert fitted_ng.final_ll_ is not None
+    assert loaded.final_ll_ == fitted_ng.final_ll_
 
     # torch.save/load restores tensors bit-exactly and CPU matmul is
     # deterministic, so transform() on the restored tensors reproduces the

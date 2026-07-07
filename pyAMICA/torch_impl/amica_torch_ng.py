@@ -68,6 +68,22 @@ _LOG_NORM_COSH_SUP = math.log(1.858073988)
 # zeros the rho*ln|y| term when |y|^rho falls below this, matching amica17.f90:1570.
 _EPSDBLE = 1e-16
 
+# Best-iterate safeguard (issue #51). The lrate schedule is deliberately
+# non-monotone: both NG and Fortran anneal the rate only *after* an LL decrease,
+# so a late Newton fallback can overshoot and a run can end below a peak it
+# already reached (on the sample EEG this is the sole driver of NG's inflated
+# multi-model LL variance -- one seed peaked at -3.357 then crashed to -3.545 in
+# its last iterations). fit() therefore tracks the highest-LL iterate and
+# restores it when the final LL falls more than this tolerance below that peak.
+# Units: mean log-likelihood per sample-channel (the same scale as Fortran's
+# min_dll, amica17.f90:1866, which normalizes LL(iter) by numgoodsum*nw before
+# comparing -- NOT the legacy NumPy pyAMICA.min_dll, which compares un-normalized
+# summed LL), so 1e-9 reads as "numerical noise, not a real overshoot". The
+# threshold also keeps a
+# monotone single-model run (issue #24 parity) a bit-exact no-op: its final
+# iterate already IS the best, the gap is 0 < tol, and no restore fires.
+_KEEP_BEST_TOL = 1e-9
+
 
 def _logcosh(x: torch.Tensor) -> torch.Tensor:
     """Numerically stable ``log cosh(x) = |x| - log2 + log1p(exp(-2|x|))``."""
@@ -247,6 +263,16 @@ class AMICATorchNG:
     rho0, minrho, maxrho, rholrate : float
         Generalized-Gaussian shape-parameter initialization, clamp bounds,
         and learning rate.
+    keep_best : bool, default=True
+        Return the highest-log-likelihood iterate instead of the last one
+        (issue #51). The lrate schedule is non-monotone (it anneals only after
+        an LL *decrease*), so a late Newton-fallback overshoot can leave the
+        final iterate below a peak the run already reached. When the final LL
+        falls more than a small tolerance below that peak, ``fit`` restores the
+        peak's parameters. A monotone single-model run (issue #24 parity) is a
+        bit-exact no-op. Automatically inactive under ``do_reject`` (the
+        good-sample set, and thus the LL normalization, changes across
+        iterations, making per-iteration LLs incomparable).
     pdftype : int, default=0
         Source-density family (issue #26), matching Fortran ``amica15.f90``'s
         ``pdtype`` codes: 0 generalized Gaussian (default; rho adapts), 2
@@ -310,6 +336,7 @@ class AMICATorchNG:
         maxrho: float = 2.0,
         rholrate: float = 0.05,
         rholratefact: float = 0.1,
+        keep_best: bool = True,
         pdftype: int = 0,
         kurt_start: int = 3,
         num_kurt: int = 5,
@@ -364,6 +391,13 @@ class AMICATorchNG:
         self.rholrate = rholrate
         self.rholrate0 = rholrate
         self.rholratefact = rholratefact
+
+        # Best-iterate safeguard (issue #51). When True, fit() restores the
+        # highest-log-likelihood iterate if the run ends more than _KEEP_BEST_TOL
+        # below it (a late Newton-fallback overshoot). Disabled automatically
+        # under do_reject, where the good-sample set (and the LL normalization)
+        # changes across iterations, so per-iteration LLs are not comparable.
+        self.keep_best = keep_best
 
         # Source-density family selection (Fortran ``pdftype``, amica15.f90). Values
         # match Fortran's per-source ``pdtype`` codes: 0 generalized Gaussian (the
@@ -432,6 +466,12 @@ class AMICATorchNG:
 
         self.iteration = 0
         self.ll_history: list[float] = []
+        # Log-likelihood of the *returned* parameters (issue #51). With
+        # keep_best, ``ll_history`` stays the true per-iteration trajectory
+        # (which can include a late overshoot), while ``final_ll_`` is the LL of
+        # the iterate fit() actually kept -- use this, not ``ll_history[-1]``, as
+        # the model's fitted log-likelihood. Set by fit().
+        self.final_ll_: Optional[float] = None
 
         # Outlier-rejection bookkeeping (set up in fit()).
         self.numrej = 0
@@ -1101,6 +1141,28 @@ class AMICATorchNG:
             )
         return result
 
+    def _snapshot_params(self) -> Dict[str, object]:
+        """Snapshot the fitted state for the best-iterate safeguard (issue #51).
+
+        Clones each ``_PARAM_TENSORS`` tensor (not an alias) so the live in-place
+        M-step updates do not roll the snapshot forward; the constant
+        preprocessing tensors (``mean``/``sphere``) are included so a restore is a
+        total rollback. Also captures the scalar ``n_kurt_done`` (the adaptive-PDF
+        switch counter that gates ``pdtype``) so a restored model's switch count
+        stays consistent with its rolled-back ``pdtype`` -- otherwise a switch
+        applied after the peak iterate would leave the two out of sync in a saved
+        model (silent-failure review)."""
+        snap: Dict[str, object] = {
+            name: getattr(self, name).clone() for name in self._PARAM_TENSORS
+        }
+        snap["n_kurt_done"] = self.n_kurt_done
+        return snap
+
+    def _restore_params(self, snapshot: Dict[str, object]) -> None:
+        """Restore the state captured by :meth:`_snapshot_params`."""
+        for name, value in snapshot.items():
+            setattr(self, name, value)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -1144,6 +1206,23 @@ class AMICATorchNG:
         )
         numdecs = 0
 
+        # Best-iterate safeguard (issue #51): track the highest-LL iterate so a
+        # late Newton-fallback overshoot cannot leave the returned model below a
+        # peak it already reached. Inactive under do_reject, where the good set
+        # (and the LL normalization) changes across iterations, so per-iteration
+        # LLs are not comparable.
+        track_best = self.keep_best and not self.do_reject
+        best_ll = -math.inf
+        best_snapshot: Optional[Dict[str, object]] = None
+        if self.keep_best and self.do_reject:
+            # keep_best defaults on, so a user enabling rejection would otherwise
+            # silently lose the safeguard; surface it once (silent-failure review).
+            logger.warning(
+                "keep_best is inactive under do_reject: the good-sample set (and "
+                "the per-iteration LL normalization) changes as samples are "
+                "rejected, so best-iterate selection by LL is not well-defined."
+            )
+
         iterator = tqdm(range(max_iter), desc="AMICA-NG", disable=not verbose)
         for it in iterator:
             self.iteration = it
@@ -1151,6 +1230,31 @@ class AMICATorchNG:
             X_use = X_t[:, self.good_idx] if self.do_reject else X_t
             n_use = X_use.shape[1]
             acc = self._accumulate_blocks(X_use)
+
+            # Log-likelihood of the CURRENT (pre-update) parameters: acc["ll"] is
+            # this iteration's E-step total, computed before _update_parameters
+            # moves the parameters. A singular W makes logdet -> -inf (not NaN),
+            # so guard on isfinite, not isnan alone: a -inf LL would otherwise
+            # sail past as a mere "decrease" and the run would "complete"
+            # (stop_reason=max_iter) on a degenerate model. Checking here, before
+            # the update, stops on the last finite parameters instead of
+            # overwriting them with a garbage update first.
+            ll = (acc["ll"] / (n_use * self.n_channels)).item()
+            if not math.isfinite(ll):
+                self.stop_reason = "nan_ll" if math.isnan(ll) else "singular_ll"
+                logger.warning(
+                    "Non-finite log-likelihood (%s) at iteration %d; stopping.",
+                    ll,
+                    it,
+                )
+                break
+
+            # Best-iterate safeguard (issue #51): remember the parameters that
+            # produced this LL when it is the best seen, so a later overshoot
+            # does not leave the returned model below this peak.
+            if track_best and ll > best_ll:
+                best_ll = ll
+                best_snapshot = self._snapshot_params()
 
             # Whether rejection fires this iteration (Fortran schedule,
             # amica17.f90:1141-1146). Fortran rejects using the per-sample
@@ -1187,19 +1291,6 @@ class AMICATorchNG:
                     self._choose_pdfs(X_use)
                     self.n_kurt_done += 1
 
-            ll = (acc["ll"] / (n_use * self.n_channels)).item()
-            # A singular W makes logdet -> -inf (not NaN), so guard on isfinite,
-            # not isnan alone: a -inf LL would otherwise sail past as a mere
-            # "decrease" and the run would "complete" (stop_reason=max_iter) on a
-            # degenerate model with no diagnostic.
-            if not math.isfinite(ll):
-                self.stop_reason = "nan_ll" if math.isnan(ll) else "singular_ll"
-                logger.warning(
-                    "Non-finite log-likelihood (%s) at iteration %d; stopping.",
-                    ll,
-                    it,
-                )
-                break
             self.ll_history.append(ll)
 
             # Learning-rate control, ported from Fortran (amica17.f90:1062-1108).
@@ -1237,6 +1328,42 @@ class AMICATorchNG:
                 self._reject_outliers(reject_ll)
 
             iterator.set_postfix({"LL": f"{ll:.4f}", "lrate": f"{self.lrate:.4g}"})
+
+        # Log-likelihood of the parameters fit() returns. A degenerate stop
+        # leaves the model on the diverged parameters, whose LL is NOT the last
+        # finite ll_history value (the guard breaks before appending), so report
+        # NaN there rather than a stale healthy-looking number (silent-failure
+        # review). Otherwise it is the last trajectory value, overwritten with the
+        # best iterate's LL below if the safeguard restores it.
+        if self.stop_reason in self._DEGENERATE_STOP_REASONS:
+            self.final_ll_ = float("nan")
+        else:
+            self.final_ll_ = self.ll_history[-1] if self.ll_history else float("nan")
+
+        # Restore the best iterate if the run ended materially below it (issue
+        # #51). Skipped for a degenerate stop -- not because the parameters are
+        # necessarily non-finite (a singular_ll stop leaves A/W finite but
+        # singular) but because salvaging a diverged run here would pre-empt issue
+        # #50's degenerate-fit contract; state_dict() already refuses to persist
+        # any model whose stop_reason is degenerate. Also skipped when the final
+        # LL is within _KEEP_BEST_TOL of the best -- a monotone single-model run
+        # has final == best, so no restore fires and issue #24 parity stays
+        # bit-exact.
+        if (
+            track_best
+            and best_snapshot is not None
+            and self.stop_reason not in self._DEGENERATE_STOP_REASONS
+            and self.ll_history
+            and best_ll - self.ll_history[-1] > _KEEP_BEST_TOL
+        ):
+            logger.info(
+                "Restoring best iterate (LL %.6f) over final LL %.6f "
+                "(issue #51 best-iterate safeguard).",
+                best_ll,
+                self.ll_history[-1],
+            )
+            self._restore_params(best_snapshot)
+            self.final_ll_ = best_ll
 
         return self
 
@@ -1392,6 +1519,9 @@ class AMICATorchNG:
             "maxrho": self.maxrho,
             "rholrate": self.rholrate0,
             "rholratefact": self.rholratefact,
+            # Best-iterate safeguard flag (issue #51); only affects a re-fit, but
+            # persisted so a reloaded model reconstructs its exact configuration.
+            "keep_best": self.keep_best,
             # Density-family selection (issue #26): needed so a reloaded model
             # rebuilds with the right pdftype/dorho/do_choose_pdfs and switch
             # schedule instead of the GG default.
@@ -1425,6 +1555,7 @@ class AMICATorchNG:
             "sldet": float(self.sldet),
             "iteration": int(self.iteration),
             "ll_history": [float(v) for v in self.ll_history],
+            "final_ll": None if self.final_ll_ is None else float(self.final_ll_),
             "stop_reason": self.stop_reason,
             "n_newton_fallbacks": int(self.n_newton_fallbacks),
             "n_kurt_done": int(self.n_kurt_done),
@@ -1438,7 +1569,7 @@ class AMICATorchNG:
             "rholrate": float(self.rholrate),
         }
         return {
-            "format_version": 2,
+            "format_version": 3,
             "config": config,
             "params": params,
             "extra": extra,
@@ -1455,10 +1586,10 @@ class AMICATorchNG:
         ``config``.
         """
         version = state.get("format_version")
-        if version != 2:
+        if version != 3:
             raise ValueError(
                 f"unsupported AMICATorchNG state format_version: {version!r} "
-                "(expected 2)"
+                "(expected 3)"
             )
         for section in ("config", "params", "extra"):
             if section not in state:
@@ -1506,6 +1637,7 @@ class AMICATorchNG:
         self.sldet = extra["sldet"]
         self.iteration = extra["iteration"]
         self.ll_history = list(extra["ll_history"])
+        self.final_ll_ = extra["final_ll"]
         self.stop_reason = extra["stop_reason"]
         self.n_newton_fallbacks = extra["n_newton_fallbacks"]
         self.n_kurt_done = extra["n_kurt_done"]

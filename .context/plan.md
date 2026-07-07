@@ -30,6 +30,12 @@
 - [x] Multi-model AMICA per-model bias `c` update (issue #27): ported to both backends, guarded
       no-op for `n_models=1`; controlled A/B shows +0.011 cross-corr, gap is intrinsic partition
       ambiguity (see `.context/issue-27/multimodel_c_update.md`).
+- [x] Best-iterate safeguard (issue #51): `AMICATorchNG.fit` returns the highest-LL iterate
+      (`keep_best`, `final_ll_`), not the last, so a late Newton-fallback overshoot no longer leaves
+      the model below a peak it reached. Root cause was return-last, not a bad basin (the sole
+      variance-driving seed peaked at -3.357 then crashed to -3.545 in its final iterations).
+      Single-model #24 parity stays bit-exact (monotone => no restore). See ADR 0003,
+      `.context/issue-51/`.
 - [ ] Component sharing
 
 ### Priority 3: Testing & validation
