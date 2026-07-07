@@ -201,9 +201,9 @@ def load_results(indir: str, compressed: bool = False) -> dict:
     Load saved AMICA results from disk.
 
     Reads the raw little-endian binary files written by ``AMICA._write_results``
-    -- the Fortran AMICA output layout that ``amica_load.loadmodout`` and the
+    -- the Fortran AMICA output layout that ``load.loadmodout`` and the
     reference binary use (issue #30) -- and returns them in AMICA's internal
-    array shapes, which the ``amica_viz`` helpers consume.
+    array shapes, which the ``viz`` helpers consume.
 
     Parameters
     ----------

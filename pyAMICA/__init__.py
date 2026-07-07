@@ -16,23 +16,18 @@ Main Features:
 from .version import __version__
 from .amica import AMICA
 from .torch_impl import AMICATorchNG
-from . import amica_utils
-from . import amica_data
-from . import amica_newton
-from . import amica_pdf
-from . import amica_viz
+from . import numpy_impl
+from . import torch_impl
 
-# Legacy NumPy implementation (deprecated)
-from .pyAMICA import AMICA as AMICA_NumPy
+# Legacy NumPy reference implementation (topic-named modules under numpy_impl/,
+# issue #34); AMICA_NumPy is its scikit-learn-style interface.
+from .numpy_impl import AMICA as AMICA_NumPy
 
 __all__ = [
     "AMICA",
     "AMICATorchNG",
     "AMICA_NumPy",
-    "amica_utils",
-    "amica_data",
-    "amica_newton",
-    "amica_pdf",
-    "amica_viz",
+    "numpy_impl",
+    "torch_impl",
     "__version__",
 ]

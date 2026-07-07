@@ -14,8 +14,8 @@ import scipy.special as sp
 import torch
 
 from pyAMICA.torch_impl import AMICATorchNG
-from pyAMICA.torch_impl.amica_torch_ng import _KEEP_BEST_TOL
-from pyAMICA.pyAMICA import AMICA as AMICA_NumPy
+from pyAMICA.torch_impl.core import _KEEP_BEST_TOL
+from pyAMICA.numpy_impl.core import AMICA as AMICA_NumPy
 
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"

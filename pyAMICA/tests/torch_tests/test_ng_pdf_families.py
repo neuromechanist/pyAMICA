@@ -17,7 +17,7 @@ import pytest
 import torch
 
 from pyAMICA.torch_impl import AMICATorchNG
-from pyAMICA.torch_impl.amica_torch_ng import _log_pdf_and_deriv, _score
+from pyAMICA.torch_impl.core import _log_pdf_and_deriv, _score
 
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"

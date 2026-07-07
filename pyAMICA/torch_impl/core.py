@@ -6,7 +6,7 @@ over reparameterized tensors" (the approach of the earlier Adam/autograd
 backends, since removed in issue #32), this module is a direct, vectorized
 port of the closed-form E-step/M-step fixed-point updates used by the Fortran
 reference (``amica17.f90``) and the legacy NumPy implementation
-(``pyAMICA.pyAMICA.AMICA._get_block_updates`` / ``_update_parameters``, which
+(``pyAMICA.numpy_impl.core.AMICA._get_block_updates`` / ``_update_parameters``, which
 is this module's line-by-line spec). There is
 no autograd and no Adam: every parameter update is a closed-form function of
 the E-step responsibilities and simple moments, matching the natural-gradient
@@ -16,7 +16,7 @@ Key design points (see ``.context/decisions/0001-torch-backend-natural-gradient-
 
 * ``W`` (and ``A``) are stored and mutated directly; ``W`` is recomputed from
   ``A`` once per iteration via a batched ``torch.linalg.inv`` (matching
-  ``amica_utils.get_unmixing_matrices``), never via ``pinv`` in the hot path.
+  ``numpy_impl.utils.get_unmixing_matrices``), never via ``pinv`` in the hot path.
 * The E-step is vectorized over ``(model, mix, source)`` via broadcasting;
   the only Python loops are over models (typically 1-3) and over blocks.
 * Samples are processed in blocks and sufficient statistics are accumulated
@@ -30,7 +30,7 @@ pre-normalization mixture logits via ``logsumexp`` plus the ``log|det W|`` +
 ``sldet`` Jacobian (matching ``amica17.f90:1341-1350``), the mathematically
 correct per-source log-density required to hit the Fortran-normalized LL target
 (~-3.4/sample-channel). As of issue #24 the legacy NumPy port
-(``pyAMICA.pyAMICA.AMICA``) computes it the same way; both backends now converge
+(``pyAMICA.numpy_impl.core.AMICA``) computes it the same way; both backends now converge
 to the Fortran solution (component correlation > 0.95).
 
 Source-density families (issue #26): the default GG path cites ``amica17.f90``,
@@ -96,7 +96,7 @@ def _log_pdf_and_deriv(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Vectorized source-density log-density and density derivative.
 
-    Elementwise port of ``pyAMICA.pyAMICA.AMICA._compute_log_pdf``: branches via
+    Elementwise port of ``pyAMICA.numpy_impl.core.AMICA._compute_log_pdf``: branches via
     ``torch.where`` instead of Python control flow so it runs over full
     ``(block, source, mixture)`` tensors with no source/mixture loop. ``y``,
     ``rho`` and ``pdtype`` must be broadcastable to a common shape.
@@ -199,7 +199,7 @@ def _score(
 
 class AMICATorchNG:
     """
-    Natural-gradient EM AMICA, ported from ``pyAMICA.pyAMICA.AMICA``.
+    Natural-gradient EM AMICA, ported from ``pyAMICA.numpy_impl.core.AMICA``.
 
     Not an ``nn.Module``: there are no learnable ``nn.Parameter``s and no
     autograd. Parameters (``A``, ``W``, ``c``, ``mu``, ``alpha``, ``beta``,

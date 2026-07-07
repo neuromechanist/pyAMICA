@@ -10,7 +10,7 @@ It handles:
 4. Result saving
 
 Example usage:
-    python -m pyAMICA.amica_cli params.json  --outdir results --seed 42  # Use -m flag to run as module
+    python -m pyAMICA.numpy_impl.cli params.json  --outdir results --seed 42  # Use -m flag to run as module
 
 The parameter file should be in JSON format and must include:
 - files: List of binary data files to process
@@ -31,8 +31,8 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
-from .pyAMICA import AMICA
-from .amica_data import load_multiple_files
+from .core import AMICA
+from .data import load_multiple_files
 
 
 def parse_args() -> argparse.Namespace:

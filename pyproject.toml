@@ -38,8 +38,12 @@ Homepage = "http://github.com/neuromechanist/pyAMICA"
 Repository = "http://github.com/neuromechanist/pyAMICA"
 
 [tool.setuptools]
-packages = ["pyAMICA"]
-package-data = {"pyAMICA" = ["data/*"]}
+# List subpackages explicitly so the wheel is deterministic across platforms
+# (a bare ["pyAMICA"] dropped torch_impl/ on some setuptools versions).
+packages = ["pyAMICA", "pyAMICA.numpy_impl", "pyAMICA.torch_impl"]
+# numpy_impl/params.json is the NumPy backend's default parameter file, loaded at
+# runtime via importlib/__file__, so it must ship in the wheel.
+package-data = {"pyAMICA" = ["data/*"], "pyAMICA.numpy_impl" = ["params.json"]}
 
 [dependency-groups]
 dev = [

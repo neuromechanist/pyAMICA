@@ -193,7 +193,7 @@ def compare_with_fortran(
     metrics : dict
         Comparison metrics (correlations, errors, etc.)
     """
-    from ..amica_load import loadmodout
+    from ..numpy_impl.load import loadmodout
 
     # Load Fortran results
     fortran_results = loadmodout(fortran_dir)
