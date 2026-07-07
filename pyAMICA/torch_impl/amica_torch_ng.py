@@ -75,8 +75,11 @@ _EPSDBLE = 1e-16
 # multi-model LL variance -- one seed peaked at -3.357 then crashed to -3.545 in
 # its last iterations). fit() therefore tracks the highest-LL iterate and
 # restores it when the final LL falls more than this tolerance below that peak.
-# Units: mean log-likelihood per sample-channel (same scale as min_dll), so 1e-9
-# reads as "numerical noise, not a real overshoot". The threshold also keeps a
+# Units: mean log-likelihood per sample-channel (the same scale as Fortran's
+# min_dll, amica17.f90:1866, which normalizes LL(iter) by numgoodsum*nw before
+# comparing -- NOT the legacy NumPy pyAMICA.min_dll, which compares un-normalized
+# summed LL), so 1e-9 reads as "numerical noise, not a real overshoot". The
+# threshold also keeps a
 # monotone single-model run (issue #24 parity) a bit-exact no-op: its final
 # iterate already IS the best, the gap is 0 < tol, and no restore fires.
 _KEEP_BEST_TOL = 1e-9
@@ -1138,18 +1141,27 @@ class AMICATorchNG:
             )
         return result
 
-    def _snapshot_params(self) -> Dict[str, torch.Tensor]:
-        """Clone the fitted parameter tensors for the best-iterate safeguard
-        (issue #51). Clones (not aliases) so the live in-place M-step updates do
-        not roll the snapshot forward. Covers exactly ``_PARAM_TENSORS``; the
-        constant preprocessing tensors (``mean``/``sphere``) are included so a
-        restore is a total, unambiguous rollback of model state."""
-        return {name: getattr(self, name).clone() for name in self._PARAM_TENSORS}
+    def _snapshot_params(self) -> Dict[str, object]:
+        """Snapshot the fitted state for the best-iterate safeguard (issue #51).
 
-    def _restore_params(self, snapshot: Dict[str, torch.Tensor]) -> None:
-        """Restore parameter tensors captured by :meth:`_snapshot_params`."""
-        for name, tensor in snapshot.items():
-            setattr(self, name, tensor)
+        Clones each ``_PARAM_TENSORS`` tensor (not an alias) so the live in-place
+        M-step updates do not roll the snapshot forward; the constant
+        preprocessing tensors (``mean``/``sphere``) are included so a restore is a
+        total rollback. Also captures the scalar ``n_kurt_done`` (the adaptive-PDF
+        switch counter that gates ``pdtype``) so a restored model's switch count
+        stays consistent with its rolled-back ``pdtype`` -- otherwise a switch
+        applied after the peak iterate would leave the two out of sync in a saved
+        model (silent-failure review)."""
+        snap: Dict[str, object] = {
+            name: getattr(self, name).clone() for name in self._PARAM_TENSORS
+        }
+        snap["n_kurt_done"] = self.n_kurt_done
+        return snap
+
+    def _restore_params(self, snapshot: Dict[str, object]) -> None:
+        """Restore the state captured by :meth:`_snapshot_params`."""
+        for name, value in snapshot.items():
+            setattr(self, name, value)
 
     # ------------------------------------------------------------------
     # Public API
@@ -1201,7 +1213,15 @@ class AMICATorchNG:
         # LLs are not comparable.
         track_best = self.keep_best and not self.do_reject
         best_ll = -math.inf
-        best_snapshot: Optional[Dict[str, torch.Tensor]] = None
+        best_snapshot: Optional[Dict[str, object]] = None
+        if self.keep_best and self.do_reject:
+            # keep_best defaults on, so a user enabling rejection would otherwise
+            # silently lose the safeguard; surface it once (silent-failure review).
+            logger.warning(
+                "keep_best is inactive under do_reject: the good-sample set (and "
+                "the per-iteration LL normalization) changes as samples are "
+                "rejected, so best-iterate selection by LL is not well-defined."
+            )
 
         iterator = tqdm(range(max_iter), desc="AMICA-NG", disable=not verbose)
         for it in iterator:
@@ -1309,17 +1329,26 @@ class AMICATorchNG:
 
             iterator.set_postfix({"LL": f"{ll:.4f}", "lrate": f"{self.lrate:.4g}"})
 
-        # Log-likelihood of the parameters fit() returns. Defaults to the last
-        # trajectory value; overwritten with the best iterate's LL below if the
-        # safeguard restores it.
-        self.final_ll_ = self.ll_history[-1] if self.ll_history else float("nan")
+        # Log-likelihood of the parameters fit() returns. A degenerate stop
+        # leaves the model on the diverged parameters, whose LL is NOT the last
+        # finite ll_history value (the guard breaks before appending), so report
+        # NaN there rather than a stale healthy-looking number (silent-failure
+        # review). Otherwise it is the last trajectory value, overwritten with the
+        # best iterate's LL below if the safeguard restores it.
+        if self.stop_reason in self._DEGENERATE_STOP_REASONS:
+            self.final_ll_ = float("nan")
+        else:
+            self.final_ll_ = self.ll_history[-1] if self.ll_history else float("nan")
 
         # Restore the best iterate if the run ended materially below it (issue
-        # #51). Skipped for a degenerate stop (params are already non-finite and
-        # state_dict()/the wrapper reject them, so there is nothing good to keep)
-        # and when the final LL is within _KEEP_BEST_TOL of the best -- a monotone
-        # single-model run has final == best, so no restore fires and issue #24
-        # parity stays bit-exact.
+        # #51). Skipped for a degenerate stop -- not because the parameters are
+        # necessarily non-finite (a singular_ll stop leaves A/W finite but
+        # singular) but because salvaging a diverged run here would pre-empt issue
+        # #50's degenerate-fit contract; state_dict() already refuses to persist
+        # any model whose stop_reason is degenerate. Also skipped when the final
+        # LL is within _KEEP_BEST_TOL of the best -- a monotone single-model run
+        # has final == best, so no restore fires and issue #24 parity stays
+        # bit-exact.
         if (
             track_best
             and best_snapshot is not None

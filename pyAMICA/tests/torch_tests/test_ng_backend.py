@@ -1162,32 +1162,68 @@ def test_keep_best_snapshot_restore_roundtrip():
         assert torch.equal(getattr(m, name), snap[name]), name
 
 
+def _multimodel_keep_best(seed: int, keep_best: bool) -> AMICATorchNG:
+    m = AMICATorchNG(
+        n_channels=NW, n_models=2, n_mix=NMIX, seed=seed, device="cpu",
+        dtype=torch.float64, block_size=512, lrate=0.05, maxdecs=3,
+        do_newton=True, newt_start=50, newt_ramp=10, newtrate=1.0,
+        keep_best=keep_best,
+    )  # fmt: skip
+    m.fit(_load_real_data(), max_iter=100, verbose=False)
+    return m
+
+
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_keep_best_returns_within_tol_of_peak():
     """On a real multi-model fit the safeguard (issue #51) returns a model whose
     log-likelihood is within tolerance of the best iterate seen and never below
     the last iterate, and ``final_ll_`` reflects the *returned* parameters (not
-    the raw ``ll_history[-1]``, which stays the true trajectory). seed 8 reaches
-    the plateau where natural-gradient AMICA dips below its own peak, so the
-    restore branch runs; the assertions are contract invariants that also hold
-    if a platform's BLAS makes the run monotone."""
+    the raw ``ll_history[-1]``, which stays the true trajectory). keep_best does
+    not change the optimization path, only which iterate is returned, so the
+    ``keep_best=False`` run has the same trajectory but returns the (lower) last
+    iterate. seed 8 reaches the plateau where natural-gradient AMICA dips below
+    its own peak, so the restore branch runs; the invariants also hold if a
+    platform's BLAS makes the run monotone (see the explicit skip below)."""
+    on = _multimodel_keep_best(8, keep_best=True)
+    off = _multimodel_keep_best(8, keep_best=False)
+
+    # keep_best does not alter the trajectory, only the returned iterate.
+    assert on.ll_history == off.ll_history
+    # return-last returns exactly the last iterate; keep_best is never worse.
+    assert off.final_ll_ == off.ll_history[-1]
+    assert on.final_ll_ >= off.final_ll_
+
+    peak = max(on.ll_history)
+    # The returned LL is within tolerance of the peak and never below the last.
+    assert abs(on.final_ll_ - peak) <= _KEEP_BEST_TOL
+    assert on.final_ll_ >= on.ll_history[-1]
+    # The returned parameters really sit at final_ll_ (recompute the E-step LL).
+    data = _load_real_data()
+    X_t = on._preprocess(data)
+    acc = on._accumulate_blocks(X_t)
+    ll_model = float(acc["ll"] / (X_t.shape[1] * NW))
+    assert abs(ll_model - on.final_ll_) < 1e-9
+
+    # Make branch coverage visible rather than silently vacuous: if this run did
+    # not overshoot on this platform, the restore branch was not exercised.
+    if peak - on.ll_history[-1] <= _KEEP_BEST_TOL:
+        pytest.skip("seed 8 did not overshoot here; restore branch not exercised")
+    # It did overshoot, so keep_best strictly beat return-last.
+    assert on.final_ll_ > off.final_ll_
+
+
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_keep_best_inactive_under_reject():
+    """The safeguard is disabled under ``do_reject`` (the good-sample set, hence
+    the LL normalization, changes across iterations, so per-iteration LLs are not
+    comparable): ``final_ll_`` is exactly the last trajectory value, no restore
+    fires (issue #51)."""
     data = _load_real_data()
     m = AMICATorchNG(
-        n_channels=NW, n_models=2, n_mix=NMIX, seed=8, device="cpu",
-        dtype=torch.float64, block_size=512, lrate=0.05, maxdecs=3,
-        do_newton=True, newt_start=50, newt_ramp=10, newtrate=1.0, keep_best=True,
+        n_channels=NW, n_models=2, n_mix=NMIX, seed=SEED, device="cpu",
+        dtype=torch.float64, block_size=512, do_reject=True, rejsig=2.0,
+        rejstart=2, rejint=3, maxrej=2, keep_best=True,
     )  # fmt: skip
-    m.fit(data, max_iter=100, verbose=False)
-
-    peak = max(m.ll_history)
-    # The returned LL is within tolerance of the peak and never below the last.
-    assert abs(m.final_ll_ - peak) <= _KEEP_BEST_TOL
-    assert m.final_ll_ >= m.ll_history[-1] - 1e-12
-    # ll_history stays the true (possibly-overshooting) trajectory: keep_best
-    # returns a value at least as good as the raw last iterate would give.
-    assert m.final_ll_ >= m.ll_history[-1]
-    # The returned parameters really sit at final_ll_ (recompute the E-step LL).
-    X_t = m._preprocess(data)
-    acc = m._accumulate_blocks(X_t)
-    ll_model = float(acc["ll"] / (X_t.shape[1] * NW))
-    assert abs(ll_model - m.final_ll_) < 1e-9
+    m.fit(data, max_iter=12, verbose=False)
+    assert m.numrej >= 1  # rejection actually fired, so the good set changed
+    assert m.final_ll_ == m.ll_history[-1]  # no best-iterate restore under reject
