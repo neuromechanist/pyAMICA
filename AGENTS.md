@@ -13,8 +13,8 @@ pyAMICA/
 ├── torch_impl/              # PyTorch backend
 │   ├── core.py              #   Natural-gradient EM port (AMICATorchNG); Fortran-parity, primary backend
 │   └── utils.py             #   Preprocessing (sphering, PCA), device selection
-├── mlx_impl/                # Optional MLX backend (Apple GPU; AMICAMLXNG, issue #76)
-│   └── core.py              #   float32 GPU E/M-step + CPU-stream linalg (v1 MVP: single-model GG, NG)
+├── mlx_impl/                # Optional MLX backend (Apple GPU; AMICAMLXNG, #76/#81)
+│   └── core.py              #   float32 GPU E/M-step + CPU-stream linalg (single- & multi-model GG, NG)
 ├── numpy_impl/              # Legacy NumPy reference (topic-named modules, issue #34)
 │   ├── core.py              #   AMICA_NumPy; newton.py, pdf.py, data.py, load.py, viz.py, utils.py, cli.py
 │   └── ...
@@ -59,8 +59,8 @@ real 70-ch EEG):** on Apple Silicon the **MLX backend is the GPU win: ~15-25 ms/
 channels, ~7x over torch-CPU and faster than an RTX 4090 (CUDA ~36 ms/it) at EEG scale**; **PyTorch-MPS
 never wins (162-255 ms/it, at or worse than CPU)**, so use MLX, not `device="mps"`, on Apple hardware.
 CUDA float64 stays the bit-safe NVIDIA path. All backends agree on the LL to ~3 digits on real data.
-Multi-model has no GPU path yet (MLX MVP is single-model; MPS loses) -- multi-model MLX is the top
-follow-up.
+Multi-model MLX (#81) also wins (~5x over torch-CPU; MPS still loses); the remaining MLX follow-up
+is component sharing.
 
 ## Key Files
 - **Main interface:** `pyAMICA/amica.py` (thin wrapper over `AMICATorchNG`)

@@ -113,6 +113,7 @@ python -m pyAMICA.numpy_impl.cli params.json --outdir results
 
 - `amica.py`: Main scikit-learn-style AMICA interface (PyTorch backend)
 - `torch_impl/core.py`: PyTorch natural-gradient EM backend (`AMICATorchNG`)
+- `mlx_impl/core.py`: Optional Apple-GPU MLX backend (`AMICAMLXNG`, single- & multi-model)
 - `numpy_impl/core.py`: Legacy NumPy reference (`AMICA_NumPy`)
 - `numpy_impl/pdf.py`: PDF type implementations
 - `numpy_impl/newton.py`: Newton optimization

@@ -67,9 +67,9 @@ this amortizes on larger tensors (128-256 ch), so MPS might overtake CPU there.
   70ch), single- and multi-model.** The Apple-GPU acceleration is MLX, not
   `device="mps"`.
 - Results agree across cpu/mps/cuda/mlx and f32/f64 to ~3 digits on real data.
-- **Multi-model has no GPU path today** (MLX is single-model MVP; MPS loses), so
-  the top fast-follow is multi-model MLX; a 128-256 ch sweep would find the
-  eventual MLX/CUDA crossover.
+- **Multi-model MLX (#81) also wins** (~5x over torch-CPU; MPS still loses). The
+  remaining MLX fast-follow is component sharing; a 128-256 ch sweep would find
+  the eventual MLX/CUDA crossover.
 
 ## Pathway C: MLX port -- v1 MVP LANDED (#76)
 
@@ -86,14 +86,14 @@ in MLX 0.32, so `inv(A)`/`slogdet(W)` run on the CPU stream (hoisted to once per
 measured ~42 us/iter vs a ~13 ms GPU E-pass, so not the bottleneck; `mx.eval` placement is).
 `lgamma`/`digamma` (absent in MLX) are computed host-side via SciPy on the small `rho` array.
 It matches the PyTorch float32 backend's converged LL to ~2e-6 and the NumPy reference stats to
-rtol ~1e-4. MLX is an optional dependency (Apple Silicon only), so CI skips these tests. Newton,
-the other PDF families, sharing, multi-model, and save/load are fast-follows. Whether it beats
-CPU/MPS is Pathway B's question.
+rtol ~1e-4. Multi-model landed in #81 (see the benchmark findings). MLX is an optional dependency
+(Apple Silicon only), so CI skips these tests. Newton, the other PDF families, sharing, and
+save/load remain fast-follows. Whether it beats CPU/MPS is Pathway B's question.
 
-Cost (estimated before landing, now borne by the #76 MVP): a backend rewrite,
+Cost (estimated before landing, now borne by #76/#81): a backend rewrite,
 still float32-only on GPU (Pathway A, #75, provides that), and a new optional
-dependency. The MVP is in-tree (see Status above); Newton, the other families,
-sharing and multi-model remain fast-follows.
+dependency. It is in-tree (see Status above); Newton, the other families,
+sharing and save/load remain fast-follows (multi-model landed in #81).
 
 ## Pathway D: software FP64 emulation -- DEAD END
 

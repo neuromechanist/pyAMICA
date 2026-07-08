@@ -4,8 +4,9 @@
 performance (ms/iteration)** for every AMICA backend the host supports, sweeping
 the channel count on real 70-channel EEG, to answer where an Apple/NVIDIA GPU
 actually beats the CPU. Backends: `numpy-cpu-f64`, `torch-cpu-f64/f32`,
-`torch-mps-f32`, `torch-cuda-f64/f32`, `mlx-f32` (the MLX backend is single-model
-only, so it participates only in the `m1` config).
+`torch-mps-f32`, `torch-cuda-f64/f32`, `mlx-f32` (the MLX backend supports single-
+and multi-model but has no component sharing yet, so it is excluded only from the
+`--share` configs).
 
 ## Data (real, not committed)
 
@@ -43,7 +44,7 @@ uv run python benchmarks/benchmark_dimsweep.py \
   --data benchmarks/data/ds002718_sub-002_eeg70.npy \
   --backends torch-cuda-f64,torch-cuda-f32 --out cuda.json
 
-# Multi-model + component sharing (MLX auto-excluded: single-model MVP)
+# Multi-model + component sharing (MLX runs multi-model; auto-excluded only from --share)
 uv run python benchmarks/benchmark_dimsweep.py --data DATA --n-models 2 --out mac_m2.json
 uv run python benchmarks/benchmark_dimsweep.py --data DATA --n-models 2 --share --out mac_m2share.json
 

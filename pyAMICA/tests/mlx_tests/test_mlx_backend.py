@@ -235,3 +235,68 @@ def test_multimodel_matches_torch_float32():
     assert np.isfinite(mlx_c.final_ll_)
     assert mlx_c.stop_reason not in AMICAMLXNG._DEGENERATE_STOP_REASONS
     assert abs(mlx_c.final_ll_ - ng_c.final_ll_) < 1e-2
+
+
+def test_degenerate_fit_stops_and_reports_nan():
+    """A NaN in the data drives fit() to a degenerate stop with a NaN final_ll,
+    exercising the MLX degenerate-stop machinery (the same path the new
+    ``nan_params`` guard uses) rather than only the happy path. Sphering/mean are
+    off so the NaN reaches the E-step (numpy eigh would otherwise raise on it)."""
+    from pyAMICA.mlx_impl import AMICAMLXNG
+
+    data = _load_real_data()[:, :4096].copy()
+    data[0, 0] = np.nan
+    m = AMICAMLXNG(n_channels=NW, n_mix=NMIX, seed=SEED, do_sphere=False, do_mean=False)
+    m.fit(data, max_iter=5, verbose=False)
+    assert m.stop_reason in AMICAMLXNG._DEGENERATE_STOP_REASONS
+    assert np.isnan(m.final_ll_)
+
+
+def test_init_matches_torch_seed():
+    """Pin the shared-seed init contract directly: AMICAMLXNG and AMICATorchNG
+    produce the same starting A/mu/alpha/beta/rho (same RNG draw order), for both
+    single- and multi-model -- rather than inferring it from downstream LL."""
+    import torch
+
+    from pyAMICA.mlx_impl import AMICAMLXNG
+    from pyAMICA.torch_impl import AMICATorchNG
+
+    data = _load_real_data()
+    for nm in (1, 2):
+        mlx_m = AMICAMLXNG(n_channels=NW, n_models=nm, n_mix=NMIX, seed=SEED)
+        mlx_m._preprocess(data)
+        mlx_m._initialize_parameters()
+        ng = AMICATorchNG(
+            n_channels=NW,
+            n_models=nm,
+            n_mix=NMIX,
+            seed=SEED,
+            device="cpu",
+            dtype=torch.float32,
+        )
+        ng._preprocess(data)
+        ng._initialize_parameters()
+        for attr in ("A", "mu", "alpha", "beta", "rho"):
+            a = np.array(getattr(mlx_m, attr))
+            b = getattr(ng, attr).cpu().numpy()
+            assert np.allclose(a, b, atol=1e-6), f"{attr} init differs (n_models={nm})"
+
+
+def test_multimodel_dead_model_keeps_prior_c():
+    """A zero-responsibility model (dgm[h]==0) keeps its prior bias c rather than
+    writing 0/0 (the dead-model guard), mirroring AMICATorchNG."""
+    from pyAMICA.mlx_impl import AMICAMLXNG
+
+    data = _load_real_data()
+    m = AMICAMLXNG(n_channels=NW, n_models=2, n_mix=NMIX, seed=SEED)
+    xt = m._preprocess(data)
+    m._initialize_parameters()
+    acc = m._accumulate_blocks(xt)
+    # Kill model 1's responsibility mass and give it a marker prior c.
+    dgm = np.array(acc["dgm"], dtype=np.float32)
+    dgm[1] = 0.0
+    acc["dgm"] = mx.array(dgm)
+    marker = np.arange(NW, dtype=np.float32) + 1.0
+    m.c = mx.array(np.stack([np.zeros(NW, np.float32), marker], axis=1))
+    m._update_parameters(acc, xt.shape[1])
+    assert np.allclose(np.array(m.c)[:, 1], marker)  # dead model kept its prior c
