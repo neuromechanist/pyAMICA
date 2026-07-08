@@ -167,6 +167,9 @@ def _run_mlx(data, iters, repeats, n_models=1):
 
 
 def _run_numpy(data, iters, repeats, n_models=1, share=False, threads=None):
+    import contextlib
+    import io
+
     from threadpoolctl import threadpool_limits
 
     from pyAMICA.numpy_impl.core import AMICA as AMICA_NumPy
@@ -206,7 +209,16 @@ def _run_numpy(data, iters, repeats, n_models=1, share=False, threads=None):
     # ops dispatch to. threadpoolctl limits at runtime (numpy's thread count is
     # otherwise fixed at import from OMP/OPENBLAS env), so a single process can
     # sweep it. limits=None leaves the pool at its default.
-    with threadpool_limits(limits=int(threads) if threads else None):
+    #
+    # AMICA_NumPy prints per-iteration progress even at verbose=False, which would
+    # flood the sweep log; redirect its stdout/stderr to a sink (timing is via
+    # perf_counter, unaffected).
+    sink = io.StringIO()
+    with (
+        threadpool_limits(limits=int(threads) if threads else None),
+        contextlib.redirect_stdout(sink),
+        contextlib.redirect_stderr(sink),
+    ):
         one(min(3, iters))
         times, ll = [], float("nan")
         for _ in range(repeats):
