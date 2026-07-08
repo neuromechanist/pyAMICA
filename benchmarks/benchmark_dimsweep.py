@@ -151,6 +151,11 @@ def _run_numpy(data, iters, repeats, n_models=1, share=False):
             num_mix=N_MIX,
             max_iter=n_iter,
             do_newton=False,
+            # Match the fixed block_size and skip AMICA_NumPy's do_opt_block
+            # auto-tune, which otherwise runs a wall-clock block-size search
+            # INSIDE fit() -- unmatched settings + timing pollution vs torch/mlx.
+            block_size=BLOCK_SIZE,
+            do_opt_block=False,
             use_tqdm=False,
             verbose=False,
             **share_kw,

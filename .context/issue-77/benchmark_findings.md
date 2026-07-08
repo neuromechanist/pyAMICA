@@ -18,23 +18,23 @@ strong NVIDIA GPU", not a same-box comparison.
 
 | channels | mlx-f32 | cuda-f32 | cuda-f64 | torch-cpu-f32 | torch-cpu-f64 | torch-mps-f32 | numpy-cpu-f64 |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 16 | **15.4** | 35.5 | 35.0 | 52 | 71 | 189 | 310 |
-| 32 | **21.3** | 35.5 | 36.2 | 143 | 161 | 162 | 624 |
-| 48 | **19.5** | 36.0 | 35.9 | 151 | 168 | 168 | 918 |
-| 70 | **25.2** | 35.6 | 38.6 | 173 | 193 | 255 | 1350 |
+| 16 | **15.4** | 35.5 | 35.0 | 52 | 71 | 189 | 142 |
+| 32 | **21.3** | 35.5 | 36.2 | 143 | 161 | 162 | 287 |
+| 48 | **19.5** | 36.0 | 35.9 | 151 | 168 | 168 | 426 |
+| 70 | **25.2** | 35.6 | 38.6 | 173 | 193 | 255 | 622 |
 
 ## Single-model (m1) -- results, converged LL (all agree to ~3 digits)
 
 | channels | mlx-f32 | cuda-f64 | torch-cpu-f64 | torch-mps-f32 | numpy-cpu-f64 |
 |---:|---:|---:|---:|---:|---:|
-| 32 | -3.28634 | -3.28635 | -3.28636 | -3.28635 | -3.28623 |
-| 48 | -3.20951 | -3.20952 | -3.20953 | -3.20951 | -3.20979 |
-| 70 | -3.21579 | -3.21562 | -3.21560 | -3.21570 | -3.21122 |
+| 32 | -3.28634 | -3.28635 | -3.28636 | -3.28635 | -3.28620 |
+| 48 | -3.20951 | -3.20952 | -3.20953 | -3.20951 | -3.21019 |
+| 70 | -3.21579 | -3.21562 | -3.21560 | -3.21570 | -3.21315 |
 
 ## Multi-model -- ms/it and LL (Mac; MLX excluded = single-model MVP; CUDA pending)
 
-m2 (no share), 70ch: torch-cpu-f32 **224** / cpu-f64 253 / mps-f32 270 / numpy 1894 ms.
-m2+share, 70ch: cpu-f32 **224** / cpu-f64 253 / mps-f32 262 / numpy 1891 ms.
+m2 (no share), 70ch: torch-cpu-f32 **224** / cpu-f64 253 / mps-f32 270 / numpy 928 ms.
+m2+share, 70ch: cpu-f32 **224** / cpu-f64 253 / mps-f32 262 / numpy 934 ms.
 Sharing activates in torch (70ch LL -2.943 -> -3.049); numpy's sharing diverges
 (-2.919 -> -2.917) -- multi-model is not partition-identifiable and has no
 bit-exact oracle (#27/#60), so cross-backend LL differs by intrinsic estimator
@@ -56,8 +56,10 @@ spread, not a defect.
 4. **Results agree across every platform / device / precision**: single-model LL
    matches to ~3 digits (mlx = cuda = cpu = mps ~ -3.216 at 70ch; numpy within
    ~0.004). This validates the whole backend family end-to-end on real data.
-5. **numpy is 50-70x slower than MLX** -- the reference implementation, not a
-   production path.
+5. **numpy is ~10-25x slower than MLX** (142-622 ms/it vs 15-25) -- the reference
+   implementation, not a production path. (numpy is benchmarked with the same
+   fixed block_size=512 and `do_opt_block=False`; leaving its default on ran an
+   in-fit block-size auto-tune that ~doubled its time -- fixed in the harness.)
 6. **Multi-model has no GPU acceleration today**: MLX (the only Apple-GPU win) is
    single-model-only (v1 MVP), and MPS loses. **Extending `AMICAMLXNG` to
    multi-model is the highest-value fast-follow** -- it would carry the ~7x MLX
