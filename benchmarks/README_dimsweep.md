@@ -6,7 +6,8 @@ the channel count on real 70-channel EEG, to answer where an Apple/NVIDIA GPU
 actually beats the CPU. Backends: `numpy-cpu-f64`, `torch-cpu-f64/f32`,
 `torch-mps-f32`, `torch-cuda-f64/f32`, `mlx-f32` (the MLX backend supports single-
 and multi-model but has no component sharing yet, so it is excluded only from the
-`--share` configs).
+`--share` configs), and `native-fortran-f64` (the Fortran reference compiled from
+source; single-model only -- see `benchmarks/fortran/README.md` to build it).
 
 ## Data (real, not committed)
 

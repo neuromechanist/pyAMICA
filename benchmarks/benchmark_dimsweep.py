@@ -18,6 +18,9 @@ Backends (auto-detected per platform):
   torch-cuda-f64  AMICATorchNG, NVIDIA GPU, float64
   torch-cuda-f32  AMICATorchNG, NVIDIA GPU, float32
   mlx-f32         AMICAMLXNG, Apple GPU (MLX), float32
+  native-fortran-f64  amica15 compiled from source (MPI+OpenMP), the reference
+                  (#85; timed via amica's own per-iter stamps, startup-immune;
+                  needs benchmarks/fortran/build_amica.sh -- not on Apple/CI)
 
 All backends run at matched settings (n_models=1, n_mix=3, pdftype=0,
 do_newton=False, same block_size/seed/channels/samples/iters) so the comparison
@@ -38,7 +41,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
+import re
+import statistics
+import subprocess
+import tempfile
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
@@ -47,6 +56,13 @@ import numpy as np
 N_MIX = 3
 SEED = 42
 BLOCK_SIZE = 512
+
+# Native-Fortran backend (#85): paths + run limits.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+SAMPLE_DIR = _REPO_ROOT / "pyAMICA" / "sample_data"
+_PARAM_TEMPLATE = SAMPLE_DIR / "input.param"
+_DEFAULT_FORTRAN_BIN = _REPO_ROOT / "benchmarks" / "fortran" / "amica15"
+_FORTRAN_TIMEOUT = 3600  # seconds; a crashed/hung run must not hang the sweep
 
 
 # --------------------------------------------------------------------------
@@ -177,6 +193,149 @@ def _run_numpy(data, iters, repeats, n_models=1, share=False):
     return min(times) / iters * 1000.0, ll
 
 
+# --------------------------------------------------------------------------
+# Native-Fortran backend (#85): drives an amica15 compiled from source (see
+# benchmarks/fortran/build_amica.sh). Timing comes from amica's OWN per-iter
+# stamps in out.txt -- startup-immune (init/PCA/sphering happen before iter 1),
+# unlike wrapping the whole process in perf_counter.
+# --------------------------------------------------------------------------
+def _write_fdt(data: np.ndarray, path: Path) -> None:
+    """Write (n_channels, n_samples) EEG as amica's raw float32 .fdt: a
+    (data_dim=channels, field_dim=samples) array in column-major (channel-
+    fastest) order -- the exact inverse of numpy_impl.data.load_data_file's
+    ``reshape(..., order="F")``. Byte-identical to EEGLAB's own .fdt (locked by
+    test_write_fdt_roundtrip)."""
+    path.write_bytes(np.ascontiguousarray(data).astype("<f4").tobytes(order="F"))
+
+
+def _write_fortran_param(
+    work: Path, nc: int, ns: int, iters: int, threads: int, n_models: int
+) -> None:
+    """Render input.param for one benchmark fit: start from the committed
+    template and override only the benchmark knobs so the algorithm config
+    matches the other backends (n_mix=3, pdftype=0, do_newton off, fixed
+    block_size). use_min_dll/use_grad_norm are forced OFF so amica runs the full
+    ``iters`` budget (matched, fixed-length runs like torch/mlx)."""
+    overrides = {
+        "files": "files ./bench.fdt",
+        "outdir": "outdir ./bench_out/",
+        "block_size": f"block_size {BLOCK_SIZE}",
+        "do_opt_block": "do_opt_block 0",
+        "num_models": f"num_models {n_models}",
+        "max_threads": f"max_threads {threads}",
+        "num_mix_comps": f"num_mix_comps {N_MIX}",
+        "pdftype": "pdftype 0",
+        "max_iter": f"max_iter {iters}",
+        "num_samples": "num_samples 1",
+        "data_dim": f"data_dim {nc}",
+        "field_dim": f"field_dim {ns}",
+        "do_newton": "do_newton 0",
+        "do_sphere": "do_sphere 1",
+        "do_mean": "do_mean 1",
+        "doPCA": "doPCA 1",
+        "pcakeep": f"pcakeep {nc}",
+        "use_min_dll": "use_min_dll 0",
+        "use_grad_norm": "use_grad_norm 0",
+        "write_LLt": "write_LLt 0",
+        "do_history": "do_history 0",
+        "share_comps": "share_comps 0",
+    }
+    seen: set[str] = set()
+    lines: list[str] = []
+    for line in _PARAM_TEMPLATE.read_text().splitlines():
+        key = line.split()[0] if line.strip() else ""
+        if key in overrides:
+            lines.append(overrides[key])
+            seen.add(key)
+        else:
+            lines.append(line)
+    lines.extend(v for k, v in overrides.items() if k not in seen)
+    (work / "input.param").write_text("\n".join(lines) + "\n")
+
+
+_ITER_RE = re.compile(
+    r"iter\s+\d+\s+lrate\s*=\s*\S+\s+LL\s*=\s*(\S+).*?\(\s*([\d.]+)\s*s,"
+)
+
+
+def _parse_fortran_out(out_txt: Path) -> tuple[list[float], float]:
+    """Parse amica's out.txt -> (per_iteration_seconds, final_ll). Each iter
+    line ends '( <sec> s, <cum_h> h)'; <sec> is that iteration's compute time."""
+    secs: list[float] = []
+    last_ll = float("nan")
+    for line in out_txt.read_text(errors="ignore").splitlines():
+        m = _ITER_RE.search(line)
+        if m:
+            last_ll = float(m.group(1))
+            secs.append(float(m.group(2)))
+    return secs, last_ll
+
+
+def _run_fortran(
+    data, iters, repeats, n_models=1, binary=None, threads=None
+) -> tuple[float, float]:
+    """Time a native amica fit. Per repeat: fresh workdir, write .fdt + param,
+    run the binary, read amica's per-iter seconds. ms/iter = MEAN of the timed
+    iters (dropping iter 1 as first-touch warmup), reported as the min over
+    repeats.
+
+    amica prints per-iteration time to only ~0.01 s (10 ms) resolution, so the
+    mean over many iterations is used (the quantization averages out) rather
+    than a single iter's stamp. A config whose per-iteration time rounds to
+    0.00 s (all stamps below the 10 ms floor -- only tiny channel/sample counts)
+    raises instead of returning a bogus 0.0; use the real 70-ch benchmark size.
+    Raises on a nonzero exit too -- a crashed run must not masquerade as a fast
+    one (mirrors benchmark_runtime.time_fortran)."""
+    binary = Path(binary or _DEFAULT_FORTRAN_BIN)
+    if not (binary.exists() and os.access(binary, os.X_OK)):
+        raise RuntimeError(f"native fortran binary not found/executable: {binary}")
+    threads = threads or (os.cpu_count() or 4)
+    nc, ns = data.shape
+    per_iter_ms: list[float] = []
+    final_ll = float("nan")
+    for _ in range(repeats):
+        with tempfile.TemporaryDirectory(prefix="amica_bench_") as td:
+            work = Path(td)
+            _write_fdt(data, work / "bench.fdt")
+            _write_fortran_param(work, nc, ns, iters, threads, n_models)
+            (work / "bench_out").mkdir(exist_ok=True)
+            env = {**os.environ, "OMP_NUM_THREADS": str(threads)}
+            res = subprocess.run(
+                [str(binary), "input.param"],
+                cwd=work,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=_FORTRAN_TIMEOUT,
+            )
+            if res.returncode != 0:
+                raise RuntimeError(
+                    f"native fortran run failed (exit {res.returncode}).\n"
+                    f"stderr:\n{res.stderr[-2000:]}\nstdout:\n{res.stdout[-2000:]}"
+                )
+            secs, final_ll = _parse_fortran_out(work / "bench_out" / "out.txt")
+            if len(secs) < 2:
+                raise RuntimeError(
+                    f"native fortran produced <2 timed iterations (got {len(secs)}"
+                    "); cannot compute per-iteration timing"
+                )
+            mean_s = statistics.mean(secs[1:])
+            if mean_s == 0.0:
+                raise RuntimeError(
+                    f"native fortran per-iteration time rounds to 0.00 s for "
+                    f"{data.shape[0]}ch x {data.shape[1]} samples -- below amica's "
+                    "~10 ms out.txt stamp resolution; use a larger channel/sample "
+                    "count (the 70-ch benchmark size is well above the floor)"
+                )
+            per_iter_ms.append(mean_s * 1000.0)
+    return min(per_iter_ms), final_ll
+
+
+def _fortran_available(binary=None) -> bool:
+    binary = Path(binary or _DEFAULT_FORTRAN_BIN)
+    return binary.exists() and os.access(binary, os.X_OK)
+
+
 _BACKENDS = {
     "numpy-cpu-f64": ("numpy", {}),
     "torch-cpu-f64": ("torch", {"device": "cpu", "dtype_str": "f64"}),
@@ -185,10 +344,13 @@ _BACKENDS = {
     "torch-cuda-f64": ("torch", {"device": "cuda", "dtype_str": "f64"}),
     "torch-cuda-f32": ("torch", {"device": "cuda", "dtype_str": "f32"}),
     "mlx-f32": ("mlx", {}),
+    "native-fortran-f64": ("fortran", {}),
 }
 
 
-def _available(name: str, n_models: int = 1, share: bool = False) -> bool:
+def _available(
+    name: str, n_models: int = 1, share: bool = False, fortran_bin=None
+) -> bool:
     kind, kw = _BACKENDS[name]
     if kind == "torch":
         return _torch_available(kw["device"])
@@ -202,12 +364,24 @@ def _available(name: str, n_models: int = 1, share: bool = False) -> bool:
             return mx.default_device().type == mx.DeviceType.gpu
         except Exception:
             return False
+    if kind == "fortran":
+        # amica15 (MPI+OpenMP) is single-model; sharing is not wired here.
+        return not share and _fortran_available(fortran_bin)
     if kind == "numpy":
         return True
     return False
 
 
-def _run_backend(name, data, iters, repeats, n_models=1, share=False):
+def _run_backend(
+    name,
+    data,
+    iters,
+    repeats,
+    n_models=1,
+    share=False,
+    fortran_bin=None,
+    fortran_threads=None,
+):
     kind, kw = _BACKENDS[name]
     if kind == "torch":
         return _run_torch(
@@ -215,6 +389,15 @@ def _run_backend(name, data, iters, repeats, n_models=1, share=False):
         )
     if kind == "mlx":
         return _run_mlx(data, iters=iters, repeats=repeats, n_models=n_models)
+    if kind == "fortran":
+        return _run_fortran(
+            data,
+            iters=iters,
+            repeats=repeats,
+            n_models=n_models,
+            binary=fortran_bin,
+            threads=fortran_threads,
+        )
     return _run_numpy(
         data, iters=iters, repeats=repeats, n_models=n_models, share=share
     )
@@ -222,6 +405,7 @@ def _run_backend(name, data, iters, repeats, n_models=1, share=False):
 
 def _platform_info() -> dict:
     info = {"machine": platform.machine(), "system": platform.system()}
+    info["nproc"] = os.cpu_count()  # context for the CPU-scaling sweep (#86)
     try:
         import torch
 
@@ -231,7 +415,7 @@ def _platform_info() -> dict:
     except ImportError:
         pass
     try:
-        info["loadavg"] = [round(x, 1) for x in __import__("os").getloadavg()]
+        info["loadavg"] = [round(x, 1) for x in os.getloadavg()]
     except OSError:
         pass
     return info
@@ -251,6 +435,20 @@ def main() -> int:
     ap.add_argument(
         "--share", action="store_true", help="enable component sharing (n_models>1)"
     )
+    ap.add_argument(
+        "--fortran-bin",
+        default=str(_DEFAULT_FORTRAN_BIN),
+        dest="fortran_bin",
+        help="native amica binary (default benchmarks/fortran/amica15; build it "
+        "with benchmarks/fortran/build_amica.sh)",
+    )
+    ap.add_argument(
+        "--fortran-threads",
+        type=int,
+        default=None,
+        dest="fortran_threads",
+        help="OMP threads for the native-fortran backend (default: all cores)",
+    )
     args = ap.parse_args()
 
     if args.report:
@@ -266,10 +464,14 @@ def main() -> int:
     full = np.load(args.data).astype(np.float64)
     channels = [int(c) for c in args.channels.split(",") if int(c) <= full.shape[0]]
     if args.backends == "auto":
-        backends = [b for b in _BACKENDS if _available(b, n_models, share)]
+        backends = [
+            b for b in _BACKENDS if _available(b, n_models, share, args.fortran_bin)
+        ]
     else:
         backends = [
-            b for b in args.backends.split(",") if _available(b, n_models, share)
+            b
+            for b in args.backends.split(",")
+            if _available(b, n_models, share, args.fortran_bin)
         ]
 
     info = _platform_info()
@@ -285,7 +487,14 @@ def main() -> int:
         for b in backends:
             try:
                 ms, ll = _run_backend(
-                    b, data, args.iters, args.repeats, n_models, share
+                    b,
+                    data,
+                    args.iters,
+                    args.repeats,
+                    n_models,
+                    share,
+                    fortran_bin=args.fortran_bin,
+                    fortran_threads=args.fortran_threads,
                 )
                 rows.append(
                     {

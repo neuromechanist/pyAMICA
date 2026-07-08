@@ -32,6 +32,10 @@ benchmarks/results/
 # Real EEG benchmark data (fetched from OpenNeuro, not committed) + result JSONs
 benchmarks/data/
 benchmarks/*.json
+# Native amica build artifacts (#85; hardware-specific, built on the CUDA host)
+benchmarks/fortran/amica15
+benchmarks/fortran/build/
+bench_out/
 
 # Local secrets (never commit)
 .env
