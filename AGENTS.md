@@ -11,8 +11,10 @@ pyAMICA/
 ├── amica.py                 # Main scikit-learn-style AMICA interface (wraps AMICATorchNG)
 ├── __init__.py              # Exposes AMICA (PyTorch), AMICA_NumPy (legacy), numpy_impl, torch_impl
 ├── torch_impl/              # PyTorch backend
-│   ├── core.py              #   Natural-gradient EM port (AMICATorchNG); Fortran-parity, sole backend
+│   ├── core.py              #   Natural-gradient EM port (AMICATorchNG); Fortran-parity, primary backend
 │   └── utils.py             #   Preprocessing (sphering, PCA), device selection
+├── mlx_impl/                # Optional MLX backend (Apple GPU; AMICAMLXNG, issue #76)
+│   └── core.py              #   float32 GPU E/M-step + CPU-stream linalg (v1 MVP: single-model GG, NG)
 ├── numpy_impl/              # Legacy NumPy reference (topic-named modules, issue #34)
 │   ├── core.py              #   AMICA_NumPy; newton.py, pdf.py, data.py, load.py, viz.py, utils.py, cli.py
 │   └── ...
@@ -25,7 +27,9 @@ validate_implementations.py  # Runs both implementations, Hungarian component ma
 Module names are topic-based (`core`/`newton`/`pdf`/`data`/... under `numpy_impl/`,
 `core`/`utils` under `torch_impl/`); the old `pyAMICA.py`/`amica_*.py`/`amica_torch_ng.py`
 prefixes were dropped in issue #34. The public import surface is stable:
-`from pyAMICA import AMICA, AMICA_NumPy, AMICATorchNG`.
+`from pyAMICA import AMICA, AMICA_NumPy, AMICATorchNG`. The optional MLX backend is
+imported separately (`from pyAMICA.mlx_impl import AMICAMLXNG`) so `import pyAMICA` never
+requires MLX; install it with `uv pip install mlx` or the `mlx` extra (Apple Silicon only).
 
 ## Environment Setup
 Canonical environment is **UV** (per global standards). The PyTorch stack is declared in
