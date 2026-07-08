@@ -197,6 +197,50 @@ def _score(
     )
 
 
+def _log_pdf_only(
+    y: torch.Tensor, rho: torch.Tensor, pdtype: Optional[torch.Tensor] = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Log-density only, plus ``|y|^rho`` for reuse -- the E-step's hot path.
+
+    The forward pass needs only ``log_pdf`` (for ``z0``/responsibilities); the
+    density derivative ``dpdf`` that :func:`_log_pdf_and_deriv` also computes is
+    never consumed (the exact-EM M-step uses the score ``fp`` instead), so
+    computing it -- a ``|y|^(rho-1)`` power and three ``exp``s per block -- is
+    dead work (issue #63). This returns ``log_pdf`` bit-identically to
+    :func:`_log_pdf_and_deriv` and the ``|y|^rho`` power, which the caller reuses
+    for the ``rho`` update (dropping its duplicate power at the score site).
+    """
+    abs_y = y.abs()
+    az_rho = abs_y.pow(rho)  # |y|^rho, reused by the rho-update accumulator
+
+    log_pdf_lap = -abs_y - _LOG2
+    log_pdf_gau = -y * y - _HALF_LOG_PI
+    log_pdf_gg = -az_rho - _LOG2 - torch.lgamma(1.0 + 1.0 / rho)
+    log_pdf = torch.where(
+        rho == 2.0, log_pdf_gau, torch.where(rho == 1.0, log_pdf_lap, log_pdf_gg)
+    )
+    if pdtype is None:
+        return log_pdf, az_rho
+
+    log_pdf_2 = -0.5 * y * y - _LOG_SQRT_2PI  # Gaussian
+    log_pdf_3 = -2.0 * _logcosh(0.5 * y) - _LOG4  # logistic (sech^2)
+    lc = _logcosh(y)
+    log_pdf_4 = -0.5 * y * y + lc - _LOG_NORM_COSH_SUB  # sub-Gaussian cosh+
+    log_pdf_1 = -0.5 * y * y - lc - _LOG_NORM_COSH_SUP  # super-Gaussian cosh-
+    log_pdf = torch.where(
+        pdtype == 2,
+        log_pdf_2,
+        torch.where(
+            pdtype == 3,
+            log_pdf_3,
+            torch.where(
+                pdtype == 4, log_pdf_4, torch.where(pdtype == 1, log_pdf_1, log_pdf)
+            ),
+        ),
+    )
+    return log_pdf, az_rho
+
+
 class AMICATorchNG:
     """
     Natural-gradient EM AMICA, ported from ``pyAMICA.numpy_impl.core.AMICA``.
@@ -706,8 +750,8 @@ class AMICATorchNG:
         """Run the E-step forward pass for one data block.
 
         Computes, for every model ``h``, the activations ``b``, scaled
-        activations ``y``, normalized mixture responsibilities ``z``, the
-        density derivative ``dpdf``, and the per-sample per-model
+        activations ``y``, normalized mixture responsibilities ``z``, the power
+        ``|y|^rho`` (reused by the rho update), and the per-sample per-model
         log-likelihood ``logV`` (including the ``log|det W|`` and ``sldet``
         Jacobian terms, matching Fortran's ``Ptmp`` seed, amica17.f90:1273).
         Shared by ``_get_block_updates`` (which reduces it into sufficient
@@ -716,13 +760,13 @@ class AMICATorchNG:
         Returns
         -------
         logV : torch.Tensor of shape (batch, n_models)
-        b_list, z_list, y_list, dpdf_list : lists (one entry per model) of
-            per-model tensors (``b``: (batch, n_channels); ``z``/``y``/``dpdf``:
+        b_list, z_list, y_list, azrho_list : lists (one entry per model) of
+            per-model tensors (``b``: (batch, n_channels); ``z``/``y``/``azrho``:
             (batch, n_channels, n_mix)).
         """
         batch_size = X.shape[1]
         num_models = self.n_models
-        b_list, z_list, y_list, dpdf_list = [], [], [], []
+        b_list, z_list, y_list, azrho_list = [], [], [], []
         logV = torch.empty(batch_size, num_models, dtype=self.dtype, device=self.device)
 
         for h in range(num_models):
@@ -741,7 +785,10 @@ class AMICATorchNG:
             alpha_h = self.alpha[:, idx].T.unsqueeze(0)
 
             y = beta_h * (b.unsqueeze(-1) - mu_h)  # (batch, n_channels, num_mix)
-            log_pdf, dpdf = _log_pdf_and_deriv(y, rho_h, self._pdtype_h(h))
+            # Only log_pdf is needed here; the score fp (and drho's |y|^rho) are
+            # reused in _get_block_updates. az_rho = |y|^rho is threaded through
+            # so the rho-update does not recompute it (issue #63).
+            log_pdf, az_rho = _log_pdf_only(y, rho_h, self._pdtype_h(h))
 
             # z0 = log(alpha) + log(beta) + log_pdf. For the single-component
             # families (codes 1/4) n_mix==1 so alpha==1 and log(alpha)==0, which
@@ -760,9 +807,9 @@ class AMICATorchNG:
             b_list.append(b)
             z_list.append(z)
             y_list.append(y)
-            dpdf_list.append(dpdf)
+            azrho_list.append(az_rho)
 
-        return logV, b_list, z_list, y_list, dpdf_list
+        return logV, b_list, z_list, y_list, azrho_list
 
     def _block_sample_ll(self, X: torch.Tensor) -> torch.Tensor:
         """Per-sample total log-likelihood for a data block (the rejection
@@ -802,7 +849,7 @@ class AMICATorchNG:
         num_mix, num_models = self.n_mix, self.n_models
         dev, dt = self.device, self.dtype
 
-        logV, b_list, z_list, y_list, _ = self._forward(X)
+        logV, b_list, z_list, y_list, azrho_list = self._forward(X)
         block_ll = torch.logsumexp(logV, dim=1).sum()
         v = torch.softmax(logV, dim=1)  # (batch, num_models)
 
@@ -851,7 +898,7 @@ class AMICATorchNG:
             # no per-component (rho!=1&rho!=2) mask (Bug 2): |y|^rho*ln|y| is 0 at
             # y=0, and clamping the log input makes the product collapse there.
             ay = y.abs()
-            ayrho = ay.pow(rho_h.unsqueeze(0))  # |y|^rho
+            ayrho = azrho_list[h]  # |y|^rho reused from _forward (issue #63)
             logab = rho_h.unsqueeze(0) * torch.log(ay.clamp_min(tiny))  # rho*ln|y|
             logab = torch.where(ayrho < _EPSDBLE, torch.zeros_like(logab), logab)
             drho_n.index_add_(1, idx, (u * (ayrho * logab)).sum(0).T)
