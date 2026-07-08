@@ -17,7 +17,7 @@ import pytest
 import torch
 
 from pyAMICA.torch_impl import AMICATorchNG
-from pyAMICA.torch_impl.core import _log_pdf_and_deriv, _score
+from pyAMICA.torch_impl.core import _log_pdf_and_deriv, _log_pdf_only, _score
 
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"
@@ -108,6 +108,26 @@ def test_gg_path_bit_identical_none_vs_code0():
     assert torch.equal(lp_none, lp_zero)
     assert torch.equal(dp_none, dp_zero)
     assert torch.equal(fp_none, fp_zero)
+
+
+@pytest.mark.parametrize("code", [None, 0, 1, 2, 3, 4])
+def test_log_pdf_only_matches_log_pdf_and_deriv(code):
+    """The E-step's lean ``_log_pdf_only`` (issue #63) must return exactly the
+    same ``log_pdf`` as ``_log_pdf_and_deriv`` for every family, and its second
+    return must be ``|y|^rho`` -- this locks in the bit-identity the whole
+    optimization rests on (families 1-4 have no other non-gated regression
+    check)."""
+    pdt = None if code is None else torch.full_like(_Y, code, dtype=torch.long)
+    lp_full, _ = _log_pdf_and_deriv(_Y, _RHO, pdt)
+    lp_only, az_rho = _log_pdf_only(_Y, _RHO, pdt)
+    assert torch.equal(lp_full, lp_only)
+    assert torch.equal(az_rho, _Y.abs().pow(_RHO))
+
+
+def test_block_size_default_is_512():
+    """Pin the issue #63 default so a revert/typo is caught (the block-size
+    invariance tests would still pass at any finite block size)."""
+    assert AMICATorchNG(n_channels=NW, device="cpu").block_size == 512
 
 
 def test_pdtype_h_is_none_only_for_gg():
