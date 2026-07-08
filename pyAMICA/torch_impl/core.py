@@ -208,7 +208,8 @@ def _log_pdf_only(
     computing it -- a ``|y|^(rho-1)`` power and three ``exp``s per block -- is
     dead work (issue #63). This returns ``log_pdf`` bit-identically to
     :func:`_log_pdf_and_deriv` and the ``|y|^rho`` power, which the caller reuses
-    for the ``rho`` update (dropping its duplicate power at the score site).
+    for the ``rho`` update (dropping the duplicate ``|y|^rho`` that
+    ``_get_block_updates`` previously recomputed for that accumulator).
     """
     abs_y = y.abs()
     az_rho = abs_y.pow(rho)  # |y|^rho, reused by the rho-update accumulator
@@ -263,9 +264,12 @@ class AMICATorchNG:
         Number of samples processed per accumulation block. Peak memory
         during the E-step scales with this, not with the total sample count.
         Larger blocks give bigger tensor ops (less Python/dispatch overhead,
-        better threading/GPU utilization) at higher memory; 512 matches the
-        Fortran reference. A single iteration's sufficient statistics are
-        block-size-independent to ~1e-8, but the (chaotic) multi-iteration
+        better threading/GPU utilization) at higher memory. 512 is a fixed
+        choice inside Fortran's ``do_opt_block`` auto-tune range (128-1024, step
+        128); the Fortran *header* default is 128 and it auto-tunes per host, so
+        this does not track a single reference value. A single iteration's
+        sufficient statistics are block-size-independent to ~1e-8
+        (``test_blocking_invariance``), but the (chaotic) multi-iteration
         trajectory shifts at the ~1e-6 level as this changes.
     lrate : float, default=0.1
         Initial/maximum natural-gradient learning rate (``lrate0`` in NumPy).

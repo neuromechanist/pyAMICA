@@ -24,7 +24,9 @@ suite green.
 ## 2. block_size default 128 -> 512
 
 Larger blocks give bigger tensor ops (less Python/dispatch overhead, better
-threading/GPU use). Matches the Fortran reference (512).
+threading/GPU use). 512 is a fixed value inside Fortran's `do_opt_block`
+auto-tune range (128-1024, step 128); Fortran's *header* default is 128 and it
+auto-tunes per host, so 512 is an empirical pick, not a fixed reference value.
 
 | block_size (1 thread) | ms/it |
 |---|---|
@@ -33,9 +35,11 @@ threading/GPU use). Matches the Fortran reference (512).
 | 2048 | 130 (-23%) |
 
 A single iteration's sufficient stats are block-size-independent to ~1e-8 (test
-`test_block_size_independence`); the multi-iteration trajectory shifts ~1e-6 as
-it changes (chaotic optimization compounds the 1e-8). All tests specify
-block_size explicitly, so the default change is safe (108 passed).
+`test_blocking_invariance`); the multi-iteration trajectory shifts ~1e-6 as it
+changes (chaotic optimization compounds the 1e-8). No test asserts an exact
+trajectory without pinning block_size; the few tests that fit real data on the
+default use tolerant (finite/monotone or self-consistency) assertions insensitive
+to the ~1e-6 shift, so the default change is safe (full suite green).
 
 ## 3. GPU: CUDA float64 is a clean ~4.5x (NVIDIA RTX 4090)
 
@@ -46,11 +50,13 @@ excluded), min of 4 repeats, `torch.set_num_threads(16)`:
 | device | dtype | ms/it | vs CPU-f64 | final LL |
 |---|---|---|---|---|
 | cpu (16 thr) | float64 | 172.8 | 1.00x | -3.42408 |
-| **cuda** | **float64** | **38.5** | **4.5x** | **-3.42408** (identical) |
+| **cuda** | **float64** | **38.5** | **4.5x** | **-3.42408** |
 
-**CUDA float64 is the safe GPU win**: 4.5x over a 16-thread CPU (~7x over
-single-thread) and numerically identical to CPU (-3.42408 to the digit). The
-`AMICA` wrapper auto-selects CUDA when present. (Measurement caveat: a cold first
+**CUDA float64 is the safe GPU win**: 4.5x over a 16-thread CPU on the same host,
+and it agrees with the CPU LL to 5 significant digits (-3.42408, the benchmark's
+print precision; float64 device-to-device reductions can still differ at
+~1e-10-1e-13 from summation order). The `AMICA` wrapper auto-selects CUDA when
+present. (Measurement caveat: a cold first
 CUDA call reads ~131 ms/it -- always warm up before timing GPU.)
 
 ## 4. float32 is precision-limited, NOT a free fast path
