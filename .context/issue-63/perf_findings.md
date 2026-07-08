@@ -37,32 +37,33 @@ A single iteration's sufficient stats are block-size-independent to ~1e-8 (test
 it changes (chaotic optimization compounds the 1e-8). All tests specify
 block_size explicitly, so the default change is safe (108 passed).
 
-## 3. GPU: CUDA float64 is a clean 2.14x (NVIDIA RTX 4090)
+## 3. GPU: CUDA float64 is a clean ~4.5x (NVIDIA RTX 4090)
 
-Real device numbers from `hallu` (RTX 4090), full data, 50 iters,
-`benchmarks/benchmark_gpu.py`:
+Real device numbers from `hallu` (RTX 4090), full data, 50 iters, **warmed**
+(first CUDA call pays context init + kernel compilation, ~2-3x inflation if not
+excluded), min of 4 repeats, `torch.set_num_threads(16)`:
 
 | device | dtype | ms/it | vs CPU-f64 | final LL |
 |---|---|---|---|---|
-| cpu | float64 | 281 | 1.00x | -3.42408 |
-| **cuda** | **float64** | **131** | **2.14x** | **-3.42408** (identical) |
-| cpu | float32 | 54 | 5.24x | **NaN** |
-| cuda | float32 | 35 | 8.05x | **NaN** |
+| cpu (16 thr) | float64 | 172.8 | 1.00x | -3.42408 |
+| **cuda** | **float64** | **38.5** | **4.5x** | **-3.42408** (identical) |
 
-**CUDA float64 is the safe GPU win**: 2.14x and numerically identical to CPU
-(-3.42408). The `AMICA` wrapper auto-selects CUDA when present.
+**CUDA float64 is the safe GPU win**: 4.5x over a 16-thread CPU (~7x over
+single-thread) and numerically identical to CPU (-3.42408 to the digit). The
+`AMICA` wrapper auto-selects CUDA when present. (Measurement caveat: a cold first
+CUDA call reads ~131 ms/it -- always warm up before timing GPU.)
 
 ## 4. float32 is precision-limited, NOT a free fast path
 
-float32 would be 5-8x faster, but on the full 30504-sample data it **collapses to
-NaN around iter 23**: it descends healthily (-3.51 -> -3.44 over 22 iters), then a
-mixture component's responsibility mass underflows in float32's ~7-digit range,
-the exact-EM `0/0` produces non-finite mu/beta/alpha, and the degenerate-fit
-contract (#50) stops it with a clean `nan_ll` (it fails LOUDLY, not silently). It
-does converge on smaller slices (4096 samples: -3.234, matching float64). So
-float32 is usable for small data / experimentation but not production on
-full-size recordings without float32-specific mixture flooring -- tracked as a
-follow-up.
+float32 would be ~5x (CPU) to ~10-19x (CUDA) faster, but it is **seed-dependent
+flaky** on the full 30504-sample data: on many seeds a mixture component's
+responsibility mass underflows in float32's ~7-digit range around iter ~23, the
+exact-EM `0/0` produces non-finite mu/beta/alpha, and the degenerate-fit contract
+(#50) stops it with a clean `nan_ll` (it fails LOUDLY, not silently); on other
+seeds it converges to ~-3.424 (matching float64). It reliably converges on
+smaller slices (4096 samples: -3.234). So float32 is usable for small data /
+experimentation but not production on full-size recordings without float32-
+specific mixture flooring -- tracked in #70.
 
 ## 5. CPU threading is workload-limited
 
@@ -78,6 +79,7 @@ channel counts.
 ## Summary
 
 - **Landed (float64, safe):** pow-dedup (-35%) + block_size 512 (-18%) compound
-  to ~-47% CPU; CUDA float64 is a further 2.14x, auto-selected.
-- **Documented / follow-up:** float32 stabilization (5-8x potential, currently
-  NaNs on full data); MPS performance with newer drivers.
+  to ~-47% CPU; CUDA float64 is a further ~4.5x (warmed, vs 16-thread CPU),
+  auto-selected and numerically identical.
+- **Documented / follow-up:** float32 stabilization (5-19x potential, currently
+  seed-flaky NaN on full data, #70); MPS performance with newer drivers.

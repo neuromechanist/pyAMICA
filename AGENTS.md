@@ -42,10 +42,10 @@ computes in float64 for Fortran parity, which MPS cannot represent, so parity ru
 
 **Performance (#63, `.context/issue-63/perf_findings.md`, `benchmarks/benchmark_gpu.py`):** the E-step
 pow-dedup (dropping the unused `dpdf`) is ~-35% and bit-identical; `block_size` default is 512 (was
-128, ~-18%). CUDA float64 is ~2.14x over CPU float64 and numerically identical (auto-selected by the
-wrapper). float32 is 5-8x faster but NaNs on full-size data (mixture underflow at ~iter 23), so it is
-experimental only; stabilization is tracked in #70. CPU intra-op threads are workload-limited (~4 is
-the sweet spot; 8+ regresses).
+128, ~-18%). CUDA float64 is ~4.5x over a 16-thread CPU (RTX 4090, warmed) and numerically identical
+(auto-selected by the wrapper). float32 is 5-19x faster but seed-flaky NaN on full-size data (mixture
+underflow ~iter 23), so it is experimental only; stabilization is tracked in #70. CPU intra-op threads
+are workload-limited (~4 is the sweet spot on a laptop; more cores help on a workstation).
 
 ## Key Files
 - **Main interface:** `pyAMICA/amica.py` (thin wrapper over `AMICATorchNG`)

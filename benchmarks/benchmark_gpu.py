@@ -91,6 +91,9 @@ def main() -> int:
         times = []
         ll = float("nan")
         try:
+            # Warmup (untimed): the first CUDA call pays context init + kernel
+            # compilation, which would otherwise inflate the first timed repeat.
+            _time_fit(data, device, dtype, min(5, args.iters), args.seed)
             for r in range(args.repeats):
                 t, ll = _time_fit(data, device, dtype, args.iters, args.seed + r)
                 times.append(t)
