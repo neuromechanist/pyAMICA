@@ -48,21 +48,28 @@ shrinks to ~1.5-2x" framing is retired. The float64-accumulation mixed-precision
 mode is an *unneeded* CPU/CUDA-only option, not the Apple-GPU door. float32 stays
 ~7-significant-digit, not float64-parity (use float64 for Fortran-parity runs).
 
-## Pathway B: exploit the large-workload regime (measure the crossover)
+## Pathway B: measure the crossover -- DONE (#77)
 
-MPS's problem on our data is **dispatch overhead**, not raw throughput: for small
-tensors, per-operator Metal kernel launches (limited fusion, generic kernels)
-dominate, and CPU with Accelerate/oneDNN wins ([elanapearl blog](https://elanapearl.github.io/blog/2025/the-bug-that-taught-me-pytorch/),
-[runebook MPS](https://runebook.dev/en/docs/pytorch/mps)). Our 32-channel /
-512-block ops are firmly in the small regime (MPS 0.51x).
+MPS's problem is **dispatch overhead**, not raw throughput: for small tensors,
+per-operator Metal kernel launches (limited fusion, generic kernels) dominate and
+CPU with Accelerate/oneDNN wins ([elanapearl blog](https://elanapearl.github.io/blog/2025/the-bug-that-taught-me-pytorch/),
+[runebook MPS](https://runebook.dev/en/docs/pytorch/mps)). The hypothesis was that
+this amortizes on larger tensors (128-256 ch), so MPS might overtake CPU there.
 
-That overhead is **fixed per op**, so it amortizes as tensors grow. High-channel
-montages (128-256 ch), many-model runs, and larger blocks produce much bigger
-per-op tensors where MPS can plausibly overtake CPU. **Actionable:** now that
-float32 is stable (Pathway A, #75), benchmark MPS-float32 vs CPU across channel
-count / block size / n_models to find the crossover, rather than concluding from
-32 channels.
-`benchmarks/benchmark_gpu.py` already sweeps devices; add a dimension sweep.
+**Measured (#77, `benchmarks/benchmark_dimsweep.py`, real 70-channel EEG,
+`.context/issue-77/benchmark_findings.md`):** the answer is more decisive than
+"MPS eventually wins" -- it splits by *framework*, not just workload size:
+- **MLX is the Apple-GPU win: ~15-25 ms/it, flat across 16-70 channels, ~7x over
+  torch-CPU, and faster than an RTX 4090 (CUDA ~36 ms) at EEG scale.** MLX's fused
+  lazy graph + unified memory beat both PyTorch's dispatch overhead and CUDA's
+  kernel-launch overhead when per-op tensors are small.
+- **PyTorch-MPS never wins: 162-255 ms/it, at or *worse* than CPU (255 vs 193 at
+  70ch), single- and multi-model.** The Apple-GPU acceleration is MLX, not
+  `device="mps"`.
+- Results agree across cpu/mps/cuda/mlx and f32/f64 to ~3 digits on real data.
+- **Multi-model has no GPU path today** (MLX is single-model MVP; MPS loses), so
+  the top fast-follow is multi-model MLX; a 128-256 ch sweep would find the
+  eventual MLX/CUDA crossover.
 
 ## Pathway C: MLX port -- v1 MVP LANDED (#76)
 
