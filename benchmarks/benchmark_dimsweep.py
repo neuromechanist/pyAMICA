@@ -32,10 +32,17 @@ Data: pass ``--data path/to/ds002718_sub-002_eeg70.npy`` -- a (70, n_samples)
 float64 array of the 70 EEG channels (see ``benchmarks/README_dimsweep.md`` for
 how to fetch/extract it; not committed).
 
+``--threads`` (#86) adds a CPU core-count scaling sweep: the CPU backends
+(torch-cpu, numpy, native-fortran) are run at each thread count in the list, so
+the report shows where cores catch the GPU. GPU backends run once (thread-
+independent). torch-cpu uses ``set_num_threads``, numpy uses ``threadpoolctl``,
+native-fortran uses ``OMP_NUM_THREADS``.
+
 Usage:
     uv run python benchmarks/benchmark_dimsweep.py --data DATA --out mac.json
     uv run python benchmarks/benchmark_dimsweep.py --data DATA --backends torch-cuda-f64,torch-cuda-f32 --out cuda.json
-    uv run python benchmarks/benchmark_dimsweep.py --report mac.json cuda.json
+    uv run python benchmarks/benchmark_dimsweep.py --data DATA --backends torch-cpu-f64,numpy-cpu-f64,native-fortran-f64 --threads 4,8,16,32 --out scaling.json
+    uv run python benchmarks/benchmark_dimsweep.py --report mac.json cuda.json scaling.json
 """
 
 from __future__ import annotations
@@ -93,7 +100,9 @@ def _share_kw_torch(share):
     )
 
 
-def _run_torch(data, device, dtype_str, iters, repeats, n_models=1, share=False):
+def _run_torch(
+    data, device, dtype_str, iters, repeats, n_models=1, share=False, threads=None
+):
     import torch
 
     from pyAMICA.torch_impl import AMICATorchNG
@@ -120,11 +129,20 @@ def _run_torch(data, device, dtype_str, iters, repeats, n_models=1, share=False)
             torch.cuda.synchronize()
         return perf_counter() - t0, float(m.final_ll_)
 
-    one(min(5, iters))  # warmup (kernel compile / context init)
-    times, ll = [], float("nan")
-    for _ in range(repeats):
-        t, ll = one(iters)
-        times.append(t)
+    # CPU-scaling knob (#86): pin intra-op threads for the CPU device (no-op on
+    # cuda/mps). set_num_threads is process-global, so save/restore it around this
+    # run -- otherwise a pinned count would leak into a later backend/run.
+    prev_threads = torch.get_num_threads()
+    try:
+        if device == "cpu" and threads:
+            torch.set_num_threads(int(threads))
+        one(min(5, iters))  # warmup (kernel compile / context init)
+        times, ll = [], float("nan")
+        for _ in range(repeats):
+            t, ll = one(iters)
+            times.append(t)
+    finally:
+        torch.set_num_threads(prev_threads)
     return min(times) / iters * 1000.0, ll
 
 
@@ -152,7 +170,11 @@ def _run_mlx(data, iters, repeats, n_models=1):
     return min(times) / iters * 1000.0, ll
 
 
-def _run_numpy(data, iters, repeats, n_models=1, share=False):
+def _run_numpy(data, iters, repeats, n_models=1, share=False, threads=None):
+    import logging
+
+    from threadpoolctl import threadpool_limits
+
     from pyAMICA.numpy_impl.core import AMICA as AMICA_NumPy
 
     # NumPy uses share_int (torch uses share_iter).
@@ -177,20 +199,39 @@ def _run_numpy(data, iters, repeats, n_models=1, share=False):
             verbose=False,
             **share_kw,
         )
+        # AMICA_NumPy logs per-iteration progress at INFO on the "AMICA" logger
+        # (its constructor resets that logger to INFO). Raise the level to WARNING
+        # so the sweep log stays clean WITHOUT swallowing the real divergence/NaN
+        # warnings and the non-convergence error, which stay visible on stderr.
+        logging.getLogger("AMICA").setLevel(logging.WARNING)
         t0 = perf_counter()
         m.fit(data)
+        elapsed = perf_counter() - t0
+        # A non-finite final LL is a divergence, not a fast success -- surface it
+        # (AMICA_NumPy has NaN'd on long fits historically, #39/#41). Raising here
+        # makes it an "error" row instead of a bogus timing with a nan LL.
+        if not m.converged:
+            raise RuntimeError(
+                f"AMICA_NumPy did not converge (non-finite LL) at "
+                f"{data.shape[0]}ch x {data.shape[1]} samples, {n_iter} iters"
+            )
         # AMICA_NumPy.ll is summed over samples*channels; normalize to the
         # per-sample-per-channel scale the torch/mlx backends report, so the
         # results column is directly comparable (numpy-f64 then matches
         # torch-cpu-f64 to ~5 digits, as the parity suite guarantees).
-        ll = float(m.ll[-1]) / (data.shape[0] * data.shape[1]) if m.ll else float("nan")
-        return perf_counter() - t0, ll
+        ll = float(m.ll[-1]) / (data.shape[0] * data.shape[1])
+        return elapsed, ll
 
-    one(min(3, iters))
-    times, ll = [], float("nan")
-    for _ in range(repeats):
-        t, ll = one(iters)
-        times.append(t)
+    # CPU-scaling knob (#86): cap the BLAS/OpenMP thread pool numpy's vectorized
+    # ops dispatch to. threadpoolctl limits at runtime (numpy's thread count is
+    # otherwise fixed at import from OMP/OPENBLAS env), so a single process can
+    # sweep it. limits=None leaves the pool at its default.
+    with threadpool_limits(limits=int(threads) if threads else None):
+        one(min(3, iters))
+        times, ll = [], float("nan")
+        for _ in range(repeats):
+            t, ll = one(iters)
+            times.append(t)
     return min(times) / iters * 1000.0, ll
 
 
@@ -390,6 +431,16 @@ def _available(
     return False
 
 
+def _is_cpu(name: str) -> bool:
+    """A backend whose runtime is set by CPU thread count (swept by --threads)."""
+    kind, kw = _BACKENDS[name]
+    if kind in ("numpy", "fortran"):
+        return True
+    if kind == "torch":
+        return kw.get("device") == "cpu"
+    return False
+
+
 def _run_backend(
     name,
     data,
@@ -398,12 +449,21 @@ def _run_backend(
     n_models=1,
     share=False,
     fortran_bin=None,
-    fortran_threads=None,
+    threads=None,
 ):
+    # threads: CPU thread count for this run (None = backend default). Applied to
+    # torch-cpu (set_num_threads), numpy (threadpool_limits), native-fortran (OMP);
+    # ignored by the GPU backends.
     kind, kw = _BACKENDS[name]
     if kind == "torch":
         return _run_torch(
-            data, iters=iters, repeats=repeats, n_models=n_models, share=share, **kw
+            data,
+            iters=iters,
+            repeats=repeats,
+            n_models=n_models,
+            share=share,
+            threads=threads,
+            **kw,
         )
     if kind == "mlx":
         return _run_mlx(data, iters=iters, repeats=repeats, n_models=n_models)
@@ -414,10 +474,15 @@ def _run_backend(
             repeats=repeats,
             n_models=n_models,
             binary=fortran_bin,
-            threads=fortran_threads,
+            threads=threads,
         )
     return _run_numpy(
-        data, iters=iters, repeats=repeats, n_models=n_models, share=share
+        data,
+        iters=iters,
+        repeats=repeats,
+        n_models=n_models,
+        share=share,
+        threads=threads,
     )
 
 
@@ -465,7 +530,15 @@ def main() -> int:
         type=int,
         default=None,
         dest="fortran_threads",
-        help="OMP threads for the native-fortran backend (default: all cores)",
+        help="OMP threads for the native-fortran backend when NOT sweeping "
+        "(default: all cores). Overridden by --threads.",
+    )
+    ap.add_argument(
+        "--threads",
+        default=None,
+        help="CPU core-count scaling sweep (#86): comma-separated thread counts "
+        "(e.g. 4,8,16,32). Applied to the CPU backends (torch-cpu, numpy, "
+        "native-fortran); GPU backends run once, thread-independent.",
     )
     args = ap.parse_args()
 
@@ -509,50 +582,75 @@ def main() -> int:
                     + ") -- skipped"
                 )
 
+    thread_sweep = [int(t) for t in args.threads.split(",")] if args.threads else None
+    if thread_sweep and any(t < 1 for t in thread_sweep):
+        ap.error("--threads values must be >= 1")
+
     info = _platform_info()
     print(f"platform: {info}")
     print(
         f"data {full.shape} | config {config} | channels {channels} | "
         f"samples {args.samples} | iters {args.iters} x {args.repeats} | {backends}"
+        + (f" | threads {thread_sweep}" if thread_sweep else "")
     )
+
+    def _thread_points(b):
+        # CPU backends sweep the thread list; GPU backends run once (thread-
+        # independent, recorded as threads=None). Without --threads, fortran runs
+        # at its resolved OMP count (so the row records the real thread count, not
+        # None -- None is reserved for genuinely thread-independent GPU rows), and
+        # torch/numpy use their library default (None).
+        if thread_sweep and _is_cpu(b):
+            return thread_sweep
+        if b == "native-fortran-f64":
+            return [args.fortran_threads or (os.cpu_count() or 4)]
+        return [None]
 
     rows = []
     for nc in channels:
         data = np.ascontiguousarray(full[:nc, : args.samples])
         for b in backends:
-            try:
-                ms, ll = _run_backend(
-                    b,
-                    data,
-                    args.iters,
-                    args.repeats,
-                    n_models,
-                    share,
-                    fortran_bin=args.fortran_bin,
-                    fortran_threads=args.fortran_threads,
-                )
-                rows.append(
-                    {
-                        "config": config,
-                        "channels": nc,
-                        "backend": b,
-                        "ms_per_iter": ms,
-                        "final_ll": ll,
-                    }
-                )
-                print(f"  [{config}] {nc:3d}ch {b:16s} {ms:9.2f} ms/it   LL={ll:+.5f}")
-            except Exception as exc:  # noqa: BLE001 - report and continue
-                print(
-                    f"  [{config}] {nc:3d}ch {b:16s} FAILED: {type(exc).__name__}: {str(exc)[:70]}"
-                )
-                rows.append(
-                    {
-                        "config": config,
-                        "channels": nc,
-                        "backend": b,
-                        "error": str(exc)[:120],
-                    }
-                )
+            for t in _thread_points(b):
+                tag = f"@{t}t" if t is not None else ""
+                try:
+                    ms, ll = _run_backend(
+                        b,
+                        data,
+                        args.iters,
+                        args.repeats,
+                        n_models,
+                        share,
+                        fortran_bin=args.fortran_bin,
+                        threads=t,
+                    )
+                    rows.append(
+                        {
+                            "config": config,
+                            "channels": nc,
+                            "backend": b,
+                            "threads": t,
+                            "ms_per_iter": ms,
+                            "final_ll": ll,
+                        }
+                    )
+                    print(
+                        f"  [{config}] {nc:3d}ch {b:18s}{tag:5s} "
+                        f"{ms:9.2f} ms/it   LL={ll:+.5f}"
+                    )
+                except Exception as exc:  # noqa: BLE001 - report and continue
+                    print(
+                        f"  [{config}] {nc:3d}ch {b:18s}{tag:5s} "
+                        f"FAILED: {type(exc).__name__}: {str(exc)[:60]}"
+                    )
+                    rows.append(
+                        {
+                            "config": config,
+                            "channels": nc,
+                            "backend": b,
+                            "threads": t,
+                            "error": str(exc)[:120],
+                        }
+                    )
 
     out = {"platform": info, "config": vars(args), "rows": rows}
     if args.out:
@@ -563,19 +661,45 @@ def main() -> int:
 
 
 def _report(paths):
-    """Merge per-platform JSONs into ms/it + LL tables, one block per config."""
-    # merged[config][channels][backend] = row
+    """Merge per-platform JSONs into ms/it + LL tables, one block per config.
+    Thread-less rows keep the channels x backend tables; --threads sweep rows
+    (#86) get an extra CPU-scaling block (threads x backend, per channel count)."""
+    # merged[config][channels][backend] = row  (thread-less view: pick threads=None,
+    # else the largest thread count so the summary uses the best CPU number)
     merged: dict = {}
+    # scaling[config][channels][threads][backend] = row  (thread-swept rows only)
+    scaling: dict = {}
+    # errored[config][backend] = count  (so an all-failing backend is not invisible)
+    errored: dict = {}
+    ok_backends: dict = {}
     plats = []
     for p in paths:
         with open(p) as f:
             d = json.load(f)
         plats.append(d.get("platform", {}))
         for r in d["rows"]:
-            if "error" in r:
-                continue
             cfg = r.get("config", "m1")  # rows from before the config axis => m1
-            merged.setdefault(cfg, {}).setdefault(r["channels"], {})[r["backend"]] = r
+            if "error" in r:
+                errored.setdefault(cfg, {})[r["backend"]] = (
+                    errored.setdefault(cfg, {}).get(r["backend"], 0) + 1
+                )
+                continue
+            ok_backends.setdefault(cfg, set()).add(r["backend"])
+            th = r.get("threads")  # None for GPU/thread-less rows
+            if th is not None:
+                scaling.setdefault(cfg, {}).setdefault(r["channels"], {}).setdefault(
+                    th, {}
+                )[r["backend"]] = r
+            slot = merged.setdefault(cfg, {}).setdefault(r["channels"], {})
+            prev = slot.get(r["backend"])
+            # summary view keeps the fastest CPU number per backend across the swept
+            # thread counts (the "best cores can do" vs the GPU)
+            cur_ms = r.get("ms_per_iter")
+            prev_ms = prev.get("ms_per_iter") if prev else None
+            if prev is None or (
+                cur_ms is not None and (prev_ms is None or cur_ms < prev_ms)
+            ):
+                slot[r["backend"]] = r
 
     for cfg in sorted(merged):
         by_ch = merged[cfg]
@@ -583,23 +707,61 @@ def _report(paths):
         chans = sorted(by_ch)
 
         def table(field, fmt):
-            hdr = "channels | " + " | ".join(f"{b:>15}" for b in backends)
+            hdr = "channels | " + " | ".join(f"{b:>18}" for b in backends)
             print(hdr)
             print("-" * len(hdr))
             for c in chans:
                 cells = [
-                    f"{format(by_ch[c][b][field], fmt):>15}"
+                    f"{format(by_ch[c][b][field], fmt):>18}"
                     if b in by_ch[c] and by_ch[c][b].get(field) is not None
-                    else f"{'-':>15}"
+                    else f"{'-':>18}"
                     for b in backends
                 ]
                 print(f"{c:8d} | " + " | ".join(cells))
 
         print(f"\n########## config: {cfg} ##########")
-        print("=== performance: ms / iteration ===")
+        print("=== performance: ms / iteration (fastest CPU thread count) ===")
         table("ms_per_iter", ".2f")
         print("=== results: converged log-likelihood ===")
         table("final_ll", "+.5f")
+
+        # CPU core-count scaling (#86): threads x backend, one block per channels
+        if cfg in scaling:
+            for c in sorted(scaling[cfg]):
+                by_t = scaling[cfg][c]
+                cpu_bes = sorted({b for t in by_t.values() for b in t})
+                print(f"\n=== CPU scaling: ms/iteration @ {c} channels ===")
+                hdr = "threads  | " + " | ".join(f"{b:>18}" for b in cpu_bes)
+                print(hdr)
+                print("-" * len(hdr))
+                for t in sorted(by_t):
+                    cells = [
+                        f"{by_t[t][b]['ms_per_iter']:>18.2f}"
+                        if b in by_t[t] and by_t[t][b].get("ms_per_iter") is not None
+                        else f"{'-':>18}"
+                        for b in cpu_bes
+                    ]
+                    print(f"{t:8d} | " + " | ".join(cells))
+                # GPU reference line (thread-less) so you can see where cores catch up
+                gpu = {
+                    b: r
+                    for b, r in merged[cfg].get(c, {}).items()
+                    if not _is_cpu(b) and r.get("ms_per_iter") is not None
+                }
+                for b, r in sorted(gpu.items()):
+                    print(f"   [gpu] {b}: {r['ms_per_iter']:.2f} ms/it")
+
+        # Surface backends that errored on EVERY attempted row -- otherwise they
+        # would silently vanish from the tables (indistinguishable from "not run").
+        all_failed = {
+            b: n
+            for b, n in errored.get(cfg, {}).items()
+            if b not in ok_backends.get(cfg, set())
+        }
+        if all_failed:
+            print("=== failed (errored on all attempts; see raw JSON) ===")
+            for b, n in sorted(all_failed.items()):
+                print(f"   {b}: FAILED x{n}")
     print(f"\nplatforms: {plats}")
 
 

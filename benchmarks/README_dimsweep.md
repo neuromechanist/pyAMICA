@@ -57,8 +57,17 @@ uv run python benchmarks/benchmark_dimsweep.py \
 uv run python benchmarks/benchmark_dimsweep.py --data DATA --n-models 2 --out mac_m2.json
 uv run python benchmarks/benchmark_dimsweep.py --data DATA --n-models 2 --share --out mac_m2share.json
 
-# Merge per-platform JSONs into ms/it + LL tables, one block per config
-uv run python benchmarks/benchmark_dimsweep.py --report mac.json cuda.json mac_m2.json ...
+# CPU core-count scaling sweep (#86): run the CPU backends at each thread count
+# (GPU backends run once). torch-cpu -> set_num_threads, numpy -> threadpoolctl,
+# native-fortran -> OMP_NUM_THREADS. Best on a many-core host (e.g. hallu, 32 cores).
+uv run python benchmarks/benchmark_dimsweep.py \
+  --data benchmarks/data/ds002718_sub-002_eeg70.npy \
+  --backends torch-cpu-f64,numpy-cpu-f64,native-fortran-f64 \
+  --threads 4,8,16,32 --out scaling.json
+
+# Merge per-platform JSONs into ms/it + LL tables, one block per config; --threads
+# rows add a "CPU scaling" block (threads x backend) with a GPU reference line.
+uv run python benchmarks/benchmark_dimsweep.py --report mac.json cuda.json scaling.json ...
 ```
 
 Findings live in `.context/issue-77/benchmark_findings.md`.
