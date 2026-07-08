@@ -59,17 +59,31 @@ print precision; float64 device-to-device reductions can still differ at
 present. (Measurement caveat: a cold first
 CUDA call reads ~131 ms/it -- always warm up before timing GPU.)
 
-## 4. float32 is precision-limited, NOT a free fast path
+## 4. float32 is precision-limited, NOT a free fast path (#70)
 
-float32 would be ~5x (CPU) to ~10-19x (CUDA) faster, but it is **seed-dependent
-flaky** on the full 30504-sample data: on many seeds a mixture component's
-responsibility mass underflows in float32's ~7-digit range around iter ~23, the
-exact-EM `0/0` produces non-finite mu/beta/alpha, and the degenerate-fit contract
-(#50) stops it with a clean `nan_ll` (it fails LOUDLY, not silently); on other
-seeds it converges to ~-3.424 (matching float64). It reliably converges on
-smaller slices (4096 samples: -3.234). So float32 is usable for small data /
-experimentation but not production on full-size recordings without float32-
-specific mixture flooring -- tracked in #70.
+float32 would be ~5x (CPU) to ~10-19x (CUDA) faster, but it **diverges to NaN on
+the full 30504-sample data across every seed, with Newton on AND off** (crashing
+anywhere from iter 9 to 81). It reliably converges only on small slices (4096
+samples: -3.234, matching float64).
+
+**Root cause (investigated in #70):** it is NOT a divide-by-zero -- the M-step
+denominators (`dmu_d`/`dbeta_d`/`dalpha_n`) are healthy (O(1e3)) right up to the
+crash, then `dmu_d` becomes NaN because a *parameter has already diverged* the
+prior iteration and the next E-step overflows. It is precision-driven instability
+of the natural-gradient EM at ~7 significant digits, not a single guardable op.
+
+**Cheap targeted fix tried and REJECTED:** computing the responsibility
+`logsumexp`/`softmax` in float64 (keeping density + matmuls float32) did **not**
+stabilize it (still NaN, all seeds) -- so the instability is in the density
+and/or the 30504-sample sufficient-stat accumulation, not the responsibilities.
+
+**A real fix needs mixed precision** (float64 for the density `|y|^rho`, the LL,
+and the stat accumulation; float32 for the matmuls). But those sensitive parts
+are also runtime-dominant (~50%+, section 1), so the net speedup would shrink
+toward ~1.5-2x, not 10x -- low payoff for a moderate refactor. **Recommendation:
+use float64 (float64-CUDA is 4.5x and bit-safe) for production; float32 is
+experimental / small-data only.** Mixed precision remains open in #70 if the
+payoff is later judged worth it.
 
 ## 5. CPU threading is workload-limited
 

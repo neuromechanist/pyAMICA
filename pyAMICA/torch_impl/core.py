@@ -380,8 +380,12 @@ class AMICATorchNG:
         always done in float64 on CPU regardless of device, since eigh is
         not reliably supported on MPS.
     dtype : torch.dtype, default=torch.float64
-        Parameter/computation dtype. float64 is required for MPS to raise
-        (MPS does not support float64); use dtype=torch.float32 for MPS.
+        Parameter/computation dtype. float64 is the parity default and the
+        reliable choice (float64-CUDA is ~4.5x over CPU, issue #63). float32 is
+        faster still but EXPERIMENTAL: the natural-gradient EM is precision-
+        limited and diverges to NaN on full-size data (any seed, Newton on/off,
+        issue #70), so use it only for small slices or on MPS (which cannot
+        represent float64). MPS also requires float32.
     """
 
     def __init__(
