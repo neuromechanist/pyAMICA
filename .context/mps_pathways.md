@@ -64,13 +64,24 @@ count / block size / n_models to find the crossover, rather than concluding from
 32 channels.
 `benchmarks/benchmark_gpu.py` already sweeps devices; add a dimension sweep.
 
-## Pathway C: MLX port (longer-term, higher ceiling)
+## Pathway C: MLX port -- v1 MVP LANDED (#76)
 
 MLX consistently beats PyTorch MPS on the same hardware (2-3x for LLM inference)
 and is Apple-native with a real compiler / lazy graph ([WWDC25](https://developer.apple.com/videos/play/wwdc2025/315/),
 [MLX](https://github.com/ml-explore/mlx)); PyTorch MPS remains eager, largely
 unfused, and sometimes falls back to CPU ([State of PyTorch HW 2025](https://tunguz.github.io/PyTorch_Hardware_2025/)).
 An MLX backend could both cut dispatch overhead and fuse the per-block work.
+
+**Status (#76):** `AMICAMLXNG` (`pyAMICA/mlx_impl/core.py`) is a v1 MVP -- single-model,
+generalized-Gaussian, natural gradient. It is a **hybrid**: the E/M-step hot path runs on
+the GPU in float32 (with the Phase A `ufp/y` guard), while all `mlx.core.linalg` is CPU-only
+in MLX 0.32, so `inv(A)`/`slogdet(W)` run on the CPU stream (hoisted to once per iteration --
+measured ~42 us/iter vs a ~13 ms GPU E-pass, so not the bottleneck; `mx.eval` placement is).
+`lgamma`/`digamma` (absent in MLX) are computed host-side via SciPy on the small `rho` array.
+It matches the PyTorch float32 backend's converged LL to ~2e-6 and the NumPy reference stats to
+rtol ~1e-4. MLX is an optional dependency (Apple Silicon only), so CI skips these tests. Newton,
+the other PDF families, sharing, multi-model, and save/load are fast-follows. Whether it beats
+CPU/MPS is Pathway B's question.
 
 Cost: a full backend rewrite, still float32-only on GPU (Pathway A, #75, already
 provides that), and a new dependency. High effort. Best seen as a v2 acceleration

@@ -33,6 +33,12 @@ dependencies = [
     "torch>=2.12.1",
 ]
 
+# Optional Apple-Silicon GPU backend (AMICAMLXNG). MLX is Apple-only, so it is
+# NOT a core dependency; install with `uv pip install mlx` or `pip install
+# pyAMICA[mlx]`. `import pyAMICA` never requires it (mlx_impl is imported lazily).
+[project.optional-dependencies]
+mlx = ["mlx>=0.32"]
+
 [project.urls]
 Homepage = "http://github.com/neuromechanist/pyAMICA"
 Repository = "http://github.com/neuromechanist/pyAMICA"
@@ -40,7 +46,7 @@ Repository = "http://github.com/neuromechanist/pyAMICA"
 [tool.setuptools]
 # List subpackages explicitly so the wheel is deterministic across platforms
 # (a bare ["pyAMICA"] dropped torch_impl/ on some setuptools versions).
-packages = ["pyAMICA", "pyAMICA.numpy_impl", "pyAMICA.torch_impl"]
+packages = ["pyAMICA", "pyAMICA.numpy_impl", "pyAMICA.torch_impl", "pyAMICA.mlx_impl"]
 # numpy_impl/params.json is the NumPy backend's default parameter file, loaded at
 # runtime via importlib/__file__, so it must ship in the wheel.
 package-data = {"pyAMICA" = ["data/*"], "pyAMICA.numpy_impl" = ["params.json"]}
