@@ -119,6 +119,9 @@ def test_backend_stable_on_full_data():
     assert np.all(np.isfinite(np.array(m.A)))
     assert m.stop_reason not in AMICAMLXNG._DEGENERATE_STOP_REASONS
     assert hist[-1] > hist[0]  # ascent
+    # Single-model must never touch the bias c (the n_models>1-only update); a
+    # nonzero c would signal the #24 bit-exact single-model path was perturbed.
+    assert np.all(np.array(m.c) == 0.0)
 
 
 def test_converged_ll_matches_torch_float32():
@@ -183,12 +186,36 @@ def test_multimodel_matches_torch_float32():
     xt2 = ng._preprocess(data)
     ng._initialize_parameters()
     na = ng._accumulate_blocks(xt2)
-    for key in ("dgm", "dmu_n", "dbeta_d", "dc_numer"):
+    # Every accumulator, including dWtmp (input to the gm-weighted comp_list A
+    # scatter) and the scattered mixture stats. rtol=5e-3 (looser than the 1e-3
+    # single-model-vs-numpy check) because this compares two float32 backends on
+    # different devices, whose reduction orders diverge more than float32-vs-f64.
+    for key in (
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_d",
+        "drho_n",
+        "dc_numer",
+        "dWtmp",
+    ):
         a = np.asarray(np.array(ma[key]), dtype=np.float64)
-        b = na[key].cpu().numpy().astype(np.float64).reshape(a.shape)
-        assert np.allclose(a, b, rtol=5e-3, atol=1e-4), (
-            f"{key}: {np.abs(a - b).max():.2e}"
+        b = na[key].cpu().numpy().astype(np.float64)
+        if key == "dWtmp":  # torch (n, n, n_models) -> MLX (n_models, n, n)
+            b = np.transpose(b, (2, 0, 1))
+        assert np.allclose(a, b.reshape(a.shape), rtol=5e-3, atol=1e-4), (
+            f"{key}: {np.abs(a - b.reshape(a.shape)).max():.2e}"
         )
+
+    # The per-model bias c update (the n_models>1-only formula) is the
+    # responsibility-weighted data mean c[:,h] = sum_t v_h*x / sum_t v_h, and the
+    # two models' c must differ (a would-be no-op would leave them equal at 0).
+    mlx_m._update_parameters(ma, xt.shape[1])
+    c = np.array(mlx_m.c)
+    dc = np.array(ma["dc_numer"]) / np.array(ma["dgm"])[None, :]
+    assert np.allclose(c, dc, rtol=1e-5, atol=1e-6)
+    assert not np.allclose(c[:, 0], c[:, 1])
 
     # Converged LL (multi-model is not partition-identifiable, but at matched
     # init/settings both backends track the same trajectory).

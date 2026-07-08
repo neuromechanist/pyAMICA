@@ -1,6 +1,6 @@
-"""MLX natural-gradient EM backend for AMICA (issue #76, epic #74 Phase C).
+"""MLX natural-gradient EM backend for AMICA (issue #76/#81, epic #74 Phase C/D).
 
-``AMICAMLXNG`` is a v1 MVP port of :class:`pyAMICA.torch_impl.core.AMICATorchNG`
+``AMICAMLXNG`` is a port of :class:`pyAMICA.torch_impl.core.AMICATorchNG`
 to Apple's MLX array framework, so the per-block E/M-step runs on the Apple GPU.
 It is structurally parallel to the PyTorch backend (same method names/order and
 Fortran citations) so the two can be diffed method-by-method.
@@ -75,7 +75,7 @@ def _log_pdf_gg(
 class AMICAMLXNG:
     """MLX natural-gradient EM backend (GG, single- and multi-model; #76/#81).
 
-    Parameters mirror the subset of :class:`AMICATorchNG` that the MVP supports;
+    Parameters mirror the subset of :class:`AMICATorchNG` that is supported;
     the same ``seed`` produces the same initial parameters as the PyTorch/NumPy
     backends, so cross-backend equivalence is testable.
     """
@@ -257,7 +257,7 @@ class AMICAMLXNG:
 
     def _refresh_lgamma_table(self):
         """Recompute ``lgamma(1+1/rho)`` host-side (MLX has no lgamma). Called at
-        init and after every rho update. Cheap: rho is ``(n_mix, n_channels)``."""
+        init and after every rho update. Cheap: rho is ``(n_mix, n_comps)``."""
         rho_np = np.array(self.rho, dtype=np.float64)
         self._lgamma_table = mx.array(gammaln(1.0 + 1.0 / rho_np).astype(np.float32))
 
@@ -399,15 +399,21 @@ class AMICAMLXNG:
         tiny = float(np.finfo(np.float32).tiny)
 
         # Per-model data-space bias c[i,h] = sum_t v_h*x / sum_t v_h (Fortran
-        # update_c, core.py:1063-1073). Skipped for n_models=1 (v==1 => c is the
+        # update_c, core.py:1083-1092). Skipped for n_models=1 (v==1 => c is the
         # zero data mean; the update would add a float-sum residual and break the
         # #24 bit-exact single-model path). A dead model (dgm[h]==0) keeps its
-        # prior c rather than writing 0/0.
+        # prior c rather than writing 0/0, and is surfaced (matching AMICATorchNG).
         if self.n_models > 1:
             dgm = acc["dgm"]
-            live = (dgm > 0.0)[None, :]
+            live = dgm > 0.0
             new_c = acc["dc_numer"] / mx.maximum(dgm, tiny)[None, :]
-            self.c = mx.where(live, new_c, self.c)
+            self.c = mx.where(live[None, :], new_c, self.c)
+            if not bool(mx.all(live).item()):
+                logger.warning(
+                    "Zero-responsibility model(s) at iter %d; kept their prior "
+                    "bias c (dead-model guard).",
+                    self.iteration,
+                )
 
         self.alpha = acc["dalpha_n"] / acc["dalpha_n"].sum(axis=0, keepdims=True)
         self.mu = self.mu + acc["dmu_n"] / acc["dmu_d"]
@@ -440,7 +446,7 @@ class AMICAMLXNG:
         # Natural-gradient A-update. A is stored as Fortran's A^T, so the update
         # is a LEFT-multiply by the transposed direction (core.py:1176-1184,
         # #24 root cause). Each model's direction is scattered into its mixing
-        # columns as a gm-weighted average (Fortran dAk/zeta, core.py:1220-1227):
+        # columns as a gm-weighted average (Fortran dAk/zeta, core.py:1231-1247):
         # for the default disjoint comp_list every column has one contributor, so
         # gm cancels and n_models=1 is byte-for-byte the old `A - lrate*(dA.T@A)`.
         eye = mx.eye(self.n_channels)
@@ -519,15 +525,26 @@ class AMICAMLXNG:
 
             self._update_parameters(acc, n_total)
             # One eval per iteration bounds the lazy graph to a single iteration's
-            # worth of ops (the updated params feed the next accumulate).
-            mx.eval(self.A, self.W, self.mu, self.alpha, self.beta, self.rho)
+            # worth of ops (the updated params feed the next accumulate). gm/c are
+            # included so their dependency chain is materialized each iteration too
+            # (c depends on the prior iteration's c), not left to grow unbounded.
+            mx.eval(
+                self.A,
+                self.W,
+                self.mu,
+                self.alpha,
+                self.beta,
+                self.rho,
+                self.gm,
+                self.c,
+            )
 
             # Surface a corrupted M-step (component collapse / float32 overflow)
             # at the iteration it happens. The ll check above only catches a
             # corruption via the NEXT iteration's E-step, so a final-iteration
             # blow-up would otherwise complete as max_iter with silently NaN
             # parameters (the torch backend has state_dict as a backstop; the
-            # MLX MVP does not, so guard in fit()). Params are already
+            # MLX backend does not, so guard in fit()). Params are already
             # materialized by the mx.eval above, so this is a cheap read.
             params_finite = (
                 mx.all(mx.isfinite(self.A))
@@ -535,6 +552,8 @@ class AMICAMLXNG:
                 & mx.all(mx.isfinite(self.alpha))
                 & mx.all(mx.isfinite(self.beta))
                 & mx.all(mx.isfinite(self.rho))
+                & mx.all(mx.isfinite(self.gm))
+                & mx.all(mx.isfinite(self.c))
             )
             if not bool(params_finite.item()):
                 logger.warning(
@@ -572,10 +591,10 @@ class AMICAMLXNG:
         return self
 
     def transform(self, X: np.ndarray, model_idx: int = 0) -> np.ndarray:
-        """Not in the v1 MVP -- fail with a clear boundary rather than a bare
+        """Not yet implemented -- fail with a clear boundary rather than a bare
         AttributeError. Use ``AMICATorchNG.transform`` for source extraction; the
-        MLX backend (issue #76) validates via ``final_ll_``/``ll_history``."""
+        MLX backend validates via ``final_ll_``/``ll_history``."""
         raise NotImplementedError(
-            "AMICAMLXNG (v1) does not implement transform yet; it is a "
-            "fast-follow. Use AMICATorchNG for source extraction."
+            "AMICAMLXNG does not implement transform yet; it is a fast-follow. "
+            "Use AMICATorchNG for source extraction."
         )
