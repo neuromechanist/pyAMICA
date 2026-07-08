@@ -111,13 +111,13 @@ def _run_torch(data, device, dtype_str, iters, repeats, n_models=1, share=False)
     return min(times) / iters * 1000.0, ll
 
 
-def _run_mlx(data, iters, repeats):
+def _run_mlx(data, iters, repeats, n_models=1):
     from pyAMICA.mlx_impl import AMICAMLXNG
 
     def one(n_iter):
         m = AMICAMLXNG(
             n_channels=data.shape[0],
-            n_models=1,
+            n_models=n_models,
             n_mix=N_MIX,
             do_newton=False,
             block_size=BLOCK_SIZE,
@@ -193,8 +193,8 @@ def _available(name: str, n_models: int = 1, share: bool = False) -> bool:
     if kind == "torch":
         return _torch_available(kw["device"])
     if kind == "mlx":
-        # AMICAMLXNG (v1 MVP) is single-model only, no sharing.
-        if n_models != 1 or share:
+        # AMICAMLXNG supports single- and multi-model (#81); sharing not yet.
+        if share:
             return False
         try:
             import mlx.core as mx
@@ -214,7 +214,7 @@ def _run_backend(name, data, iters, repeats, n_models=1, share=False):
             data, iters=iters, repeats=repeats, n_models=n_models, share=share, **kw
         )
     if kind == "mlx":
-        return _run_mlx(data, iters=iters, repeats=repeats)
+        return _run_mlx(data, iters=iters, repeats=repeats, n_models=n_models)
     return _run_numpy(
         data, iters=iters, repeats=repeats, n_models=n_models, share=share
     )
