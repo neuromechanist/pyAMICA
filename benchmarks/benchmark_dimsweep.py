@@ -280,12 +280,14 @@ def _run_fortran(
     repeats.
 
     amica prints per-iteration time to only ~0.01 s (10 ms) resolution, so the
-    mean over many iterations is used (the quantization averages out) rather
-    than a single iter's stamp. A config whose per-iteration time rounds to
-    0.00 s (all stamps below the 10 ms floor -- only tiny channel/sample counts)
-    raises instead of returning a bogus 0.0; use the real 70-ch benchmark size.
-    Raises on a nonzero exit too -- a crashed run must not masquerade as a fast
-    one (mirrors benchmark_runtime.time_fortran)."""
+    mean over the timed iters is used. NOTE this floors precision at ~10 ms: when
+    every iteration rounds to the same stamp the mean is still that stamp, so run
+    at a size whose per-iteration time is well above 10 ms (the 70-ch benchmark
+    is ~30-70 ms) for the number to be meaningful. A config whose per-iteration
+    time rounds to 0.00 s (below the floor -- only tiny channel/sample counts)
+    raises instead of returning a bogus 0.0. Raises on a nonzero exit too -- a
+    crashed run must not masquerade as a fast one (mirrors
+    benchmark_runtime.time_fortran)."""
     binary = Path(binary or _DEFAULT_FORTRAN_BIN)
     if not (binary.exists() and os.access(binary, os.X_OK)):
         raise RuntimeError(f"native fortran binary not found/executable: {binary}")

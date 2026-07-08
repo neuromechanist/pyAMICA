@@ -8,19 +8,28 @@ against the torch / mlx / numpy backends.
 
 The bundled `pyAMICA/sample_data/amica15mac` is an **x86_64** binary. On Apple Silicon
 it only runs under Rosetta 2, so its timing is not representative of native hardware.
-The benchmark therefore builds `amica15` from `pyAMICA/{funmod2,amica15}.f90` on the
-native x86 Linux/CUDA host and times *that*. (`amica15mac` is still fine for structural
-smoke-testing of the adapter on a Mac; it is just not a timing reference.)
+The benchmark therefore builds `amica15` from `pyAMICA/{funmod2,amica15}.f90` natively on
+each host -- the x86 Linux/CUDA host *and* Apple Silicon -- and times *that*. Both are
+honest native-CPU rows. (`amica15mac` is still fine for structural smoke-testing of the
+adapter on a Mac; it is just not a timing reference.)
 
-## Host setup (Debian/Ubuntu)
+## Host setup
 
 amica15.f90 is an **MPI + OpenMP + LAPACK** program, so it needs an MPI Fortran wrapper
-(`mpif90`) plus LAPACK/BLAS, not plain `gfortran`:
+(`mpif90`) plus LAPACK/BLAS, not plain `gfortran`.
 
+**Debian/Ubuntu (the x86 CUDA host):**
 ```bash
 sudo apt-get update
 sudo apt-get install -y gfortran libopenmpi-dev openmpi-bin liblapack-dev libblas-dev
 ```
+
+**macOS / Apple Silicon (native arm64, no sudo):**
+```bash
+brew install gcc open-mpi lapack
+```
+The build script links brew's LAPACK on macOS (falling back to `-framework Accelerate`);
+override with `LAPACK_LIBS=...` if needed.
 
 `nvcc` is **not** required: the torch CUDA backends ship their own CUDA runtime, and the
 Fortran build is CPU-only (MPI+OpenMP+LAPACK).
@@ -66,11 +75,37 @@ Instead the adapter parses amica's own per-iteration stamp from `out.txt`:
 ```
 
 The `( <sec> s, ...)` field is that iteration's compute time (printed after init). The
-adapter drops iter 1 (first-touch warmup), takes the median of the rest, and reports the
+adapter drops iter 1 (first-touch warmup), takes the **mean** of the rest, and reports the
 min across `--repeats`. The final `LL` is read from the same lines and is already on the
 per-sample scale the torch backends report (no normalization).
+
+**Resolution caveat:** amica prints the per-iteration time to only ~0.01 s (10 ms). When
+every iteration rounds to the same stamp (e.g. a steady 0.03 s/iter prints `0.03` each
+time), the mean is still that stamp -- averaging does *not* recover sub-10 ms detail. So
+run at a size whose per-iteration time is well above 10 ms (the 70-ch benchmark is
+~30-70 ms/iter, giving ~±15% at worst) and treat the native-Fortran number as coarser than
+the in-process torch/mlx timings. A config that rounds to 0.00 s/iter is rejected outright.
 
 If a run exits non-zero the adapter raises (a crashed run must not masquerade as a fast
 one). Settings are matched to the other backends: `num_mix=3`, `pdftype=0`, `do_newton` off,
 `block_size=512`, and `use_min_dll`/`use_grad_norm` forced off so it runs the full
 `--iters` budget.
+
+## Build portability (gfortran, no MKL/AMD)
+
+`amica15.f90` targets Intel's toolchain (`ifort` + MKL), so a plain `gfortran` + LAPACK
+build needs three portability fixes. `build_amica.sh` applies them **without touching the
+tracked reference source** (it patches a build copy under `build/src/`):
+
+1. **`-cpp`** so the source's `#ifdef MKL` guards resolve (MKL undefined -> the
+   `include 'mkl_vml.f90'` is skipped and the non-MKL branch is used).
+2. **`random_seed` seed size** -- the source's size-2 seed array (sized for ifort) is
+   rejected by gfortran; the build copy uses a portable default seed. Only affects random
+   init, which was already clock-based (non-reproducible), so it is timing-neutral.
+3. **`vmath_shim.c`** provides `vrda_exp`/`vrda_log` (the non-MKL branch calls AMD LibM's
+   vector exp/log) as libm loops, so no vendor math library is needed. IEEE-accurate; a
+   vendor SIMD math library could make the exp/log-heavy E-step somewhat faster, so treat
+   this as a portable-baseline timing, not a max-tuned one.
+
+These are generic gfortran-portability fixes (not pyAMICA-specific) and are candidates to
+upstream to [sccn/amica](https://github.com/sccn/amica).
