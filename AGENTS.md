@@ -54,6 +54,14 @@ needs no float64 and holds on MPS). float32 is ~7-sig-digit, not float64-parity,
 Fortran-parity runs. CPU intra-op threads are workload-limited (~4 was the sweet spot in the measured
 laptop sweep; 8+ regressed).
 
+**Cross-platform benchmark (#77, `.context/issue-77/benchmark_findings.md`, `benchmarks/benchmark_dimsweep.py`,
+real 70-ch EEG):** on Apple Silicon the **MLX backend is the GPU win: ~15-25 ms/it, flat across 16-70
+channels, ~7x over torch-CPU and faster than an RTX 4090 (CUDA ~36 ms/it) at EEG scale**; **PyTorch-MPS
+never wins (162-255 ms/it, at or worse than CPU)**, so use MLX, not `device="mps"`, on Apple hardware.
+CUDA float64 stays the bit-safe NVIDIA path. All backends agree on the LL to ~3 digits on real data.
+Multi-model has no GPU path yet (MLX MVP is single-model; MPS loses) -- multi-model MLX is the top
+follow-up.
+
 ## Key Files
 - **Main interface:** `pyAMICA/amica.py` (thin wrapper over `AMICATorchNG`)
 - **PyTorch backend:** `pyAMICA/torch_impl/core.py` (`AMICATorchNG`, natural-gradient EM,
