@@ -4,10 +4,10 @@
 Times the natural-gradient EM backend across ``(device, dtype)`` combinations on
 the real sample EEG, to characterize the GPU fast path. float64 is the
 Fortran-parity default and the safe GPU win (~4.5x on an RTX 4090 vs a 16-thread
-CPU). float32 is faster still (~5x CPU / ~10-19x CUDA) but currently EXPERIMENTAL:
-it is seed-flaky NaN on full-size data (mixture underflow), so it is not a
-production fast path yet -- stabilization is tracked in issue #70. MPS cannot do
-float64, and only float32 there.
+CPU). float32 is faster still (~5x CPU / ~10-19x CUDA) and now converges on
+full-size data across seeds (issue #75 guarded the one float32-only
+divide-by-zero); it is ~7-significant-digit, not float64-parity, so use float64
+for Fortran-parity runs. MPS has no float64, so it runs float32 only.
 
 Run on a CUDA host (e.g. via ssh) for real GPU numbers:
     uv run python benchmarks/benchmark_gpu.py
