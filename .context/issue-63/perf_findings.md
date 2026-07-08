@@ -59,31 +59,32 @@ print precision; float64 device-to-device reductions can still differ at
 present. (Measurement caveat: a cold first
 CUDA call reads ~131 ms/it -- always warm up before timing GPU.)
 
-## 4. float32 is precision-limited, NOT a free fast path (#70)
+## 4. float32 stabilized by a divide-by-zero guard (#75 -- supersedes #70)
 
-float32 would be ~5x (CPU) to ~10-19x (CUDA) faster, but it **diverges to NaN on
-the full 30504-sample data across every seed, with Newton on AND off** (crashing
-anywhere from iter 9 to 81). It reliably converges only on small slices (4096
-samples: -3.234, matching float64).
+**RESOLVED (issue #75).** float32 (~5x CPU / ~10-19x CUDA faster) previously
+**diverged to NaN on the full 30504-sample data across every seed, Newton on AND
+off** (crashing iter ~9-105), converging only on small slices. Epic #74 Phase A
+fixed it with a **one-line guard** (`_get_block_updates`); float32 now converges
+across seeds and matches the float64 LL to ~5 significant digits.
 
-**Root cause (investigated in #70):** it is NOT a divide-by-zero -- the M-step
-denominators (`dmu_d`/`dbeta_d`/`dalpha_n`) are healthy (O(1e3)) right up to the
-crash, then `dmu_d` becomes NaN because a *parameter has already diverged* the
-prior iteration and the next E-step overflows. It is precision-driven instability
-of the natural-gradient EM at ~7 significant digits, not a single guardable op.
+**Actual root cause -- it IS a divide-by-zero, per-element (#70 looked at the
+wrong granularity).** The mu denominator is `sbeta*sum(ufp/y)` (`ufp=u*fp`). At a
+sample sitting on a mixture mean, float32 rounds `y` to *exactly* 0, and the
+score `fp(0)=0` for every family, so that sample's `ufp/y` is `0/0 = NaN` -- and
+one NaN summand poisons the whole `dmu_d`. #70 watched the *summed* denominators
+(`dmu_d`/`dbeta_d`/`dalpha_n`), which read healthy O(1e3) right up to the crash,
+and so concluded "not a divide-by-zero" -- but the 0/0 is in the per-sample term
+*before* the sum. float64 never rounds `y` to exactly 0, hence float64-only.
 
-**Cheap targeted fix tried and REJECTED:** computing the responsibility
-`logsumexp`/`softmax` in float64 (keeping density + matmuls float32) did **not**
-stabilize it (still NaN, all seeds) -- so the instability is in the density
-and/or the 30504-sample sufficient-stat accumulation, not the responsibilities.
-
-**A real fix needs mixed precision** (float64 for the density `|y|^rho`, the LL,
-and the stat accumulation; float32 for the matmuls). But those sensitive parts
-are also runtime-dominant (~50%+, section 1), so the net speedup would shrink
-toward ~1.5-2x, not 10x -- low payoff for a moderate refactor. **Recommendation:
-use float64 (float64-CUDA is 4.5x and bit-safe) for production; float32 is
-experimental / small-data only.** Mixed precision remains open in #70 if the
-payoff is later judged worth it.
+**Why summation precision was NOT the sink (diagnostics, #75):** accumulating the
+float32 block partials in float64 (and Neumaier compensated summation) did **not**
+help -- both still diverged, at the same iterations. And computing the density
+`|y|^rho`/`log_pdf` in float64 did **not** help either (nor, per #70, the
+responsibility `logsumexp`/`softmax`). Only guarding the `ufp/y` division does.
+So the earlier "needs mixed precision (float64 density + accumulation), payoff
+shrinks to ~1.5-2x" conclusion is **superseded**: the fix needs no float64 at all,
+which is exactly why it also works on MPS (no FP64 on Apple GPUs). float32 stays
+non-parity with float64 (~7 sig digits); use float64 for Fortran-parity runs.
 
 ## 5. CPU threading is workload-limited
 
@@ -101,5 +102,10 @@ channel counts.
 - **Landed (float64, safe):** pow-dedup (-35%) + block_size 512 (-18%) compound
   to ~-47% CPU; CUDA float64 is a further ~4.5x (warmed, vs 16-thread CPU),
   auto-selected and numerically identical.
-- **Documented / follow-up:** float32 stabilization (5-19x potential, currently
-  seed-flaky NaN on full data, #70); MPS performance with newer drivers.
+- **Landed (float32):** the `ufp/y` divide-by-zero guard (#75) makes full-data
+  float32 converge across seeds (~5x CPU / ~10-19x CUDA potential; ~7 sig digits,
+  not float64-parity). Unblocks the Apple-GPU roadmap (epic #74): the fix needs no
+  float64, so it holds on MPS.
+- **Follow-up:** MPS dimension-sweep benchmark to find the CPU/GPU crossover
+  (epic #74 Phase B); float64-accumulation mixed precision remains an unneeded
+  CPU/CUDA-only option.

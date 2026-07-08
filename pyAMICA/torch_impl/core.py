@@ -23,7 +23,9 @@ Key design points (see ``.context/decisions/0001-torch-backend-natural-gradient-
   across blocks, so peak memory scales with ``block_size``, not with the
   total number of samples.
 * Parameters default to float64 for numerical parity with Fortran's
-  double-precision arithmetic; float32 is available for speed.
+  double-precision arithmetic; float32 is available for speed and for MPS
+  (which has no float64), stabilized on full-size data by the mu-denominator
+  divide-by-zero guard in ``_get_block_updates`` (issue #75).
 
 Log-likelihood: this module computes the per-source log-likelihood from the
 pre-normalization mixture logits via ``logsumexp`` plus the ``log|det W|`` +
@@ -380,12 +382,14 @@ class AMICATorchNG:
         always done in float64 on CPU regardless of device, since eigh is
         not reliably supported on MPS.
     dtype : torch.dtype, default=torch.float64
-        Parameter/computation dtype. float64 is the parity default and the
-        reliable choice (float64-CUDA is ~4.5x over CPU, issue #63). float32 is
-        faster still but EXPERIMENTAL: the natural-gradient EM is precision-
-        limited and diverges to NaN on full-size data (any seed, Newton on/off,
-        issue #70), so use it only for small slices or on MPS (which cannot
-        represent float64). MPS also requires float32.
+        Parameter/computation dtype. float64 is the parity default (Fortran
+        bit-parity) and ~4.5x on CUDA over CPU (issue #63). float32 converges on
+        full-size data across seeds (issue #75 guarded the one float32-only
+        divide-by-zero -- a sample rounding an activation to exactly 0 gave
+        ``0/0`` in the mu denominator) and is the required precision on MPS,
+        which has no float64. float32 is NOT bit-parity with float64 (~7
+        significant digits), so use float64 for Fortran-parity runs and float32
+        for speed / Apple-GPU.
     """
 
     def __init__(
@@ -899,8 +903,18 @@ class AMICATorchNG:
             dgm[h] = v_h.sum()
             dalpha_n.index_add_(1, idx, u.sum(0).T)  # sum(u) (:1524)
             dmu_n.index_add_(1, idx, ufp.sum(0).T)  # sum(ufp) (:1532)
+            # mu denominator sbeta*sum(ufp/y) (:1537). In float32 a sample sitting
+            # on a mixture mean can round y to *exactly* 0, and fp(0)=0 for every
+            # family, so the raw ufp/y is 0/0 = NaN -- the sole trigger of the
+            # full-data float32 divergence (issue #75; NOT a summation-precision
+            # problem, so compensated accumulation does not help). float64 never
+            # hits exact 0, so guarding the divisor is bit-identical there
+            # (single-model #24 parity preserved) and needs no float64, so it also
+            # stabilizes the MPS/float32 path. Where y==0, ufp==0 too, so 0/1
+            # contributes 0 for that measure-zero sample.
+            safe_y = torch.where(y == 0, torch.ones_like(y), y)
             dmu_d.index_add_(
-                1, idx, (beta_h.squeeze(0) * (ufp / y).sum(0)).T
+                1, idx, (beta_h.squeeze(0) * (ufp / safe_y).sum(0)).T
             )  # (:1537)
             dbeta_n.index_add_(1, idx, u.sum(0).T)  # sum(u) (:1550)
             dbeta_d.index_add_(1, idx, (ufp * y).sum(0).T)  # sum(ufp*y) (:1556)
