@@ -66,6 +66,10 @@ omit = [
     "pyAMICA/tests/*",
     # argparse CLI entrypoint: exercised via subprocess, not unit-covered here.
     "pyAMICA/numpy_impl/cli.py",
+    # Optional MLX backend (Apple Silicon only): its tests require MLX + an Apple
+    # GPU, so CI (ubuntu, no mlx) cannot exercise it and always measures 0%. It is
+    # covered locally by tests/mlx_tests/ on Apple hardware (issue #76).
+    "pyAMICA/mlx_impl/*",
 ]
 
 [tool.coverage.report]
