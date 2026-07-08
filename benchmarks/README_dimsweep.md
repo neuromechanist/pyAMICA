@@ -1,0 +1,55 @@
+# Cross-platform dimension-sweep benchmark (issue #77, epic #74 Phase B)
+
+`benchmark_dimsweep.py` measures **both results (converged log-likelihood) and
+performance (ms/iteration)** for every AMICA backend the host supports, sweeping
+the channel count on real 70-channel EEG, to answer where an Apple/NVIDIA GPU
+actually beats the CPU. Backends: `numpy-cpu-f64`, `torch-cpu-f64/f32`,
+`torch-mps-f32`, `torch-cuda-f64/f32`, `mlx-f32` (the MLX backend supports single-
+and multi-model but has no component sharing yet, so it is excluded only from the
+`--share` configs).
+
+## Data (real, not committed)
+
+Real 70-channel EEG from OpenNeuro **ds002718** (Wakeman-Henson faces), subject
+sub-002. The data is not committed (`benchmarks/data/` is gitignored); fetch and
+extract it once:
+
+```bash
+# 1. download one subject's EEGLAB .set (public, no credentials; ~224 MB)
+aws s3 cp --no-sign-request \
+  s3://openneuro.org/ds002718/sub-002/eeg/sub-002_task-FaceRecognition_eeg.set \
+  /tmp/ds002718_sub-002.set
+
+# 2. extract the 70 EEG channels to a (70, n_samples) float64 .npy (needs mne)
+uv pip install mne
+uv run python - <<'PY'
+import mne, numpy as np
+raw = mne.io.read_raw_eeglab("/tmp/ds002718_sub-002.set", preload=True, verbose="ERROR")
+data = raw.get_data(picks=raw.ch_names[:70]) * 1e6   # first 70 are EEG; V -> uV
+np.save("benchmarks/data/ds002718_sub-002_eeg70.npy", data[:, :60000].astype(np.float64))
+PY
+```
+
+(NEMAR mirrors the same dataset at data.nemar.org / ww2.nemar.org/dataset/ds002718.)
+
+## Run
+
+```bash
+# Local (Apple Silicon: cpu / mps / mlx auto-detected)
+uv run python benchmarks/benchmark_dimsweep.py \
+  --data benchmarks/data/ds002718_sub-002_eeg70.npy --out mac.json
+
+# A CUDA host (skip the CPU backends if its CPU is busy)
+uv run python benchmarks/benchmark_dimsweep.py \
+  --data benchmarks/data/ds002718_sub-002_eeg70.npy \
+  --backends torch-cuda-f64,torch-cuda-f32 --out cuda.json
+
+# Multi-model + component sharing (MLX runs multi-model; auto-excluded only from --share)
+uv run python benchmarks/benchmark_dimsweep.py --data DATA --n-models 2 --out mac_m2.json
+uv run python benchmarks/benchmark_dimsweep.py --data DATA --n-models 2 --share --out mac_m2share.json
+
+# Merge per-platform JSONs into ms/it + LL tables, one block per config
+uv run python benchmarks/benchmark_dimsweep.py --report mac.json cuda.json mac_m2.json ...
+```
+
+Findings live in `.context/issue-77/benchmark_findings.md`.
