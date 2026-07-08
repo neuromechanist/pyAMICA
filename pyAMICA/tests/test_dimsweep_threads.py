@@ -1,8 +1,9 @@
 """Unit tests for the CPU core-count scaling sweep wiring (issue #86).
 
-Pure classification/config checks (no data or GPU needed): they lock which
-backends the --threads sweep iterates over (the CPU ones) vs which run once
-(GPU, thread-independent).
+Classification/config checks for `_is_cpu`/`_report` (which lock which backends
+the --threads sweep iterates over vs which run once), plus two lightweight
+end-to-end checks against the committed sample EEG -- `main()` --threads and the
+torch thread-restore -- which need no GPU or native binary.
 """
 
 import importlib.util

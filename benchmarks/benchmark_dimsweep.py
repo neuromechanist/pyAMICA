@@ -664,8 +664,8 @@ def _report(paths):
     """Merge per-platform JSONs into ms/it + LL tables, one block per config.
     Thread-less rows keep the channels x backend tables; --threads sweep rows
     (#86) get an extra CPU-scaling block (threads x backend, per channel count)."""
-    # merged[config][channels][backend] = row  (thread-less view: pick threads=None,
-    # else the largest thread count so the summary uses the best CPU number)
+    # merged[config][channels][backend] = row  (summary view: keep the fastest row
+    # seen per backend, thread-less or swept -- see the ms_per_iter comparison below)
     merged: dict = {}
     # scaling[config][channels][threads][backend] = row  (thread-swept rows only)
     scaling: dict = {}

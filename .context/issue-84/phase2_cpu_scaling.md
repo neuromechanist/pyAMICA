@@ -61,29 +61,33 @@ precision does not help the GPU, and why a fast multi-core CPU can beat it.
 
 The Mac CPU work uses the performance cores, not the efficiency cores: a foreground run and a
 background run give the same torch-cpu number (167.1 vs 167.5 ms @70ch/8c), and native-fortran
-speeds up from 4 -> 8 -> 12 cores (100 -> 70 -> 60 ms), which is impossible if all threads were
-pinned to the 4 E-cores. torch-cpu's poor Mac scaling is intra-op oversubscription, not E-core
-placement. Mac core counts are held to 4/8 because past ~8 both effects (oversubscription, and
-spilling onto the 4 E-cores beyond the 10 P-cores) muddy the number.
+speeds up from 4 -> 8 cores (100 -> 70 ms), which it could not if all threads were pinned to the
+4 E-cores (a separate foreground probe at 12 cores reached 60 ms). torch-cpu's poor Mac scaling
+is intra-op oversubscription, not E-core placement. Mac core counts are held to 4/8 because past
+~8 both effects (oversubscription, and spilling onto the 4 E-cores beyond the 10 P-cores) muddy
+the number.
 
 ## Findings
 
-1. **Native Fortran + OpenMP is the only CPU backend that scales with cores, and on 32 cores it
-   beats the RTX 4090** (70ch: 30 ms @24c vs cuda 38.5 ms; ~11x faster at 16ch). A tight compiled
-   loop has no per-iteration launch overhead -- exactly the GPU's bottleneck at this scale.
-2. **The RTX 4090 is flat at ~36-38 ms/it regardless of precision or channels** (overhead-bound).
-   The f64/consumer-card FP throttle is not the story -- f32 is no faster.
-3. **torch-cpu-f64 peaks at ~8 cores then collapses** (10-20x at 24-32c, oversubscription);
-   torch-cpu-f32 is faster and scale-stable but still never catches the GPU.
+(70ch headline shown here; the full 16/32/48/70ch grid is in the result JSONs.)
+
+1. **Native Fortran + OpenMP is the only CPU backend that scales with cores, and on 24 of hallu's
+   32 cores it beats the RTX 4090** (70ch: 30 ms @24c vs cuda 38.5 ms). A tight compiled loop has
+   no per-iteration launch overhead -- exactly the GPU's bottleneck at this scale.
+2. **The RTX 4090 is flat at ~36-38 ms/it regardless of precision** (overhead-bound). The
+   f64/consumer-card FP throttle is not the story -- f32 is no faster.
+3. **torch-cpu-f64 peaks at ~8 cores then regresses** (~2.3x, 91 -> 213 ms at 8 -> 24c,
+   oversubscription); torch-cpu-f32 is faster and scale-stable but still never catches the GPU.
 4. **numpy is thread-flat** (BLAS/Python-bound), slowest everywhere.
 5. **MLX is the efficiency winner of the whole comparison.** At ~33 ms/it (flat, no tuning) a
-   laptop Apple GPU matches the 450 W RTX 4090 (~36-38 ms) and a 32-core Xeon at full core count
+   laptop Apple GPU matches the 450 W RTX 4090 (~36-38 ms) and a 32-core CPU running 24 cores
    (native-fortran ~30 ms @24c), at a fraction of the power, cost, and effort -- and its LL is
    correct (matches f64 to ~4-5 digits). native-fortran@24c is marginally faster in raw ms/it, but
-   only by pinning every core of a much larger, hotter machine. On Apple Silicon, torch-MPS is the
+   only by pinning most cores of a much larger, hotter machine. On Apple Silicon, torch-MPS is the
    opposite story (~200 ms, worse than the CPU); use MLX, never MPS. Matches #77.
-6. **f32 is correct (LL matches f64 to ~4-5 digits) on CUDA, MLX, and MPS** and scales at least as
-   well as f64 -- safe to use for the GPU fast path.
+6. **f32 is correct on CUDA, MLX, and MPS** -- final LL matches f64 to ~4-5 digits: at 70ch,
+   cuda-f32 -3.23631, mlx-f32 -3.23646, mps-f32 -3.23626 vs f64 -3.23622. Scales at least as well
+   as f64 -- safe to use for the GPU fast path.
 
 LL agrees to ~3 digits across all backends/platforms (native-fortran ~0.02 off from its
 clock-seeded init; torch-cpu/cuda f64 identical to 5 digits).
