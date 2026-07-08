@@ -6,7 +6,16 @@ the channel count on real 70-channel EEG, to answer where an Apple/NVIDIA GPU
 actually beats the CPU. Backends: `numpy-cpu-f64`, `torch-cpu-f64/f32`,
 `torch-mps-f32`, `torch-cuda-f64/f32`, `mlx-f32` (the MLX backend supports single-
 and multi-model but has no component sharing yet, so it is excluded only from the
-`--share` configs).
+`--share` configs), and `native-fortran-f64` (the Fortran reference compiled from
+source, validated single-model in Phase 1 with component sharing off -- see
+`benchmarks/fortran/README.md` to build it).
+
+**`native-fortran-f64` result caveat:** every other backend fixes `seed=42`, so its
+`final_ll` is reproducible and directly comparable across backends and repeats. amica seeds
+its random init from the wall clock (non-reproducible run-to-run), so the native-Fortran
+`final_ll` is drawn from a different basin each invocation and can differ from the others by
+more than the fixed-seed backends differ among themselves. Treat that column as a sanity
+check (same ballpark), not a fixed-seed parity number; the `ms/iter` timing is unaffected.
 
 ## Data (real, not committed)
 
