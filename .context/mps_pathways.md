@@ -3,7 +3,8 @@
 Research into whether and how the natural-gradient EM backend (`AMICATorchNG`)
 can be accelerated on Apple-Silicon GPUs. Motivated by MPS's growing traction,
 and by the #63/#70 findings that MPS was *slower* than CPU on the 32-channel
-sample data and that float32 diverges on full-size data.
+sample data and that float32 diverged on full-size data (the latter now fixed in
+#75; see Pathway A).
 
 ## The one fact that governs everything: no FP64 on Apple GPUs
 
@@ -22,7 +23,7 @@ Consequently:
 
 `AMICATorchNG` computes in **float64 for Fortran parity**. So the parity path can
 never run on an Apple GPU. **Every MPS pathway therefore requires a numerically
-stable float32 (or mixed-precision) AMICA** -- exactly the wall #70 hit.
+stable float32 AMICA** -- the wall #70 hit, now cleared by #75 (Pathway A).
 
 ## Pathway A (enabler): stabilize float32 -- DONE (#75)
 
@@ -57,9 +58,10 @@ dominate, and CPU with Accelerate/oneDNN wins ([elanapearl blog](https://elanape
 
 That overhead is **fixed per op**, so it amortizes as tensors grow. High-channel
 montages (128-256 ch), many-model runs, and larger blocks produce much bigger
-per-op tensors where MPS can plausibly overtake CPU. **Actionable:** once float32
-is stable (Pathway A), benchmark MPS-float32 vs CPU across channel count / block
-size / n_models to find the crossover, rather than concluding from 32 channels.
+per-op tensors where MPS can plausibly overtake CPU. **Actionable:** now that
+float32 is stable (Pathway A, #75), benchmark MPS-float32 vs CPU across channel
+count / block size / n_models to find the crossover, rather than concluding from
+32 channels.
 `benchmarks/benchmark_gpu.py` already sweeps devices; add a dimension sweep.
 
 ## Pathway C: MLX port (longer-term, higher ceiling)
@@ -70,9 +72,9 @@ and is Apple-native with a real compiler / lazy graph ([WWDC25](https://develope
 unfused, and sometimes falls back to CPU ([State of PyTorch HW 2025](https://tunguz.github.io/PyTorch_Hardware_2025/)).
 An MLX backend could both cut dispatch overhead and fuse the per-block work.
 
-Cost: a full backend rewrite, still float32-only on GPU (so Pathway A is still
-required first), and a new dependency. High effort, uncertain until A lands. Best
-seen as a v2 acceleration option, not a near-term step.
+Cost: a full backend rewrite, still float32-only on GPU (Pathway A, #75, already
+provides that), and a new dependency. High effort. Best seen as a v2 acceleration
+option, not a near-term step.
 
 ## Pathway D: software FP64 emulation -- DEAD END
 

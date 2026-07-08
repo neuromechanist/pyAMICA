@@ -3,9 +3,9 @@
 Before #75, ``AMICATorchNG`` in float32 diverged to NaN on the full 30504-sample
 sample EEG across every seed (Newton on and off, crashing iter ~9-105), while
 float64 converged. Root cause: at a sample sitting on a mixture mean, float32
-rounds the scaled activation ``y`` to *exactly* 0, and the score ``fp(0)=0`` for
-every family, so the mu-denominator term ``ufp/y`` is ``0/0 = NaN`` (float64
-never hits exact 0). Diagnostics (`.context/issue-63/`, `.context/mps_pathways.md`)
+rounds the scaled activation ``y`` to *exactly* 0, and the score ``fp(0)=0`` (for
+the supported ``rho >= 1``), so the mu-denominator term ``ufp/y`` is ``0/0 = NaN``
+(float64 never hits exact 0). Diagnostics (`.context/issue-63/`, `.context/mps_pathways.md`)
 ruled out summation precision: accumulating the block sufficient statistics in
 float64 did *not* help, but guarding that single division does. The guard is a
 no-op in float64 (bit-identical, so single-model #24 parity is preserved) and
@@ -32,7 +32,8 @@ FIELD = 30504
 # Past the historical divergence window (naive float32 crashed by iter ~105); a
 # reintroduced 0/0 would surface as a nan_ll stop well within this budget.
 MAX_ITER = 150
-_DEGENERATE = ("nan_ll", "singular_ll")
+# Reference the backend's own set so a new degenerate stop reason cannot go stale.
+_DEGENERATE = AMICATorchNG._DEGENERATE_STOP_REASONS
 
 
 @pytest.fixture(scope="module")
@@ -63,8 +64,10 @@ def _fit(data, dtype, seed, do_newton, device="cpu", max_iter=MAX_ITER, n_sample
 
 
 def test_score_is_zero_at_zero_activation():
-    """``fp(0)=0`` for every family, so at ``y==0`` the numerator ``ufp=u*fp``
-    is 0 too and the guarded ``ufp/1`` contributes 0 (not ``0/0=NaN``)."""
+    """``fp(0)=0`` for every family at the supported ``rho >= 1``, so at ``y==0``
+    the numerator ``ufp=u*fp`` is 0 too and the guarded ``ufp/1`` contributes 0
+    (not ``0/0=NaN``). (For an unsupported ``rho < 1`` the GG ``fp`` is itself
+    NaN at 0, which the guard does not and need not address.)"""
     y = torch.zeros(4, dtype=torch.float32)
     for rho in (1.0, 1.5, 2.0):  # Laplace, GG, Gaussian (pdtype None path)
         assert torch.all(_score(y, torch.full_like(y, rho)) == 0)
@@ -97,8 +100,11 @@ def test_float32_stable_on_full_data(real_data, seed, do_newton):
 @pytest.mark.parametrize("do_newton", [False, True])
 def test_float32_ll_matches_float64(real_data, do_newton):
     seed = 0
-    f32 = _fit(real_data, torch.float32, seed, do_newton)
-    f64 = _fit(real_data, torch.float64, seed, do_newton)
+    # This quality check does not need the full divergence window (that is the
+    # sweep above); float32 tracks float64 from the first iteration, so a shorter
+    # matched budget keeps the two extra float64 fits cheap in CI.
+    f32 = _fit(real_data, torch.float32, seed, do_newton, max_iter=100)
+    f64 = _fit(real_data, torch.float64, seed, do_newton, max_iter=100)
     # Relational to the in-test float64 fit, never a hardcoded LL. One-sided
     # "not materially worse" is load-bearing; the trajectories diverge only
     # chaotically, so the two-sided band is a loose sanity guard.

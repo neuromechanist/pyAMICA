@@ -904,14 +904,20 @@ class AMICATorchNG:
             dalpha_n.index_add_(1, idx, u.sum(0).T)  # sum(u) (:1524)
             dmu_n.index_add_(1, idx, ufp.sum(0).T)  # sum(ufp) (:1532)
             # mu denominator sbeta*sum(ufp/y) (:1537). In float32 a sample sitting
-            # on a mixture mean can round y to *exactly* 0, and fp(0)=0 for every
-            # family, so the raw ufp/y is 0/0 = NaN -- the sole trigger of the
-            # full-data float32 divergence (issue #75; NOT a summation-precision
-            # problem, so compensated accumulation does not help). float64 never
-            # hits exact 0, so guarding the divisor is bit-identical there
-            # (single-model #24 parity preserved) and needs no float64, so it also
-            # stabilizes the MPS/float32 path. Where y==0, ufp==0 too, so 0/1
-            # contributes 0 for that measure-zero sample.
+            # on a mixture mean can round y to *exactly* 0; the score fp(0)=0 (for
+            # the supported rho>=1), so the raw ufp/y is 0/0 = NaN -- the sole
+            # trigger of the full-data float32 divergence (issue #75; NOT a
+            # summation-precision problem, so compensated accumulation does not
+            # help). The true term ufp/y = u*rho*|y|^(rho-2) is NOT 0 in the limit:
+            # a nonzero constant at rho==2, and an integrable singularity that
+            # diverges as y->0 for rho<2 -- so once y underflows to exactly 0 the
+            # real contribution is unrepresentable. Substituting 0 (ufp==0 there,
+            # so 0/1) drops that one sample instead of poisoning all of dmu_d with a
+            # NaN: a bounded, empirically negligible bias (it fires <=1 sample per
+            # iteration on the sample EEG, and float32 still matches the float64 LL
+            # to ~5 sig digits). float64 never rounds y to exactly 0, so the guard
+            # is a bit-identical no-op there (single-model #24 parity preserved),
+            # and it needs no float64, so it also stabilizes the MPS/float32 path.
             safe_y = torch.where(y == 0, torch.ones_like(y), y)
             dmu_d.index_add_(
                 1, idx, (beta_h.squeeze(0) * (ufp / safe_y).sum(0)).T
