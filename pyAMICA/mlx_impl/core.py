@@ -20,9 +20,10 @@ Design constraints (verified against MLX 0.32, see ``.context/mps_pathways.md``)
   so they are computed host-side with SciPy once per iteration.
 
 MVP scope: single model (``n_models=1``), generalized Gaussian (``pdftype=0``),
-natural gradient (``do_newton=False``). Newton, the other PDF families, component
-sharing, multi-model, outlier rejection, ``keep_best``, ``transform`` and
-save/load are deferred to fast-follows and rejected with a clear error.
+natural gradient (``do_newton=False``). Newton, the other PDF families and
+multi-model are rejected in ``__init__`` with a clear ``NotImplementedError``
+(``transform`` likewise). Component sharing, outlier rejection, ``keep_best``
+and save/load are simply absent (no such parameter/method) -- all fast-follows.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ _CPU = mx.cpu
 
 def _score_gg(y: mx.array, rho: mx.array) -> mx.array:
     """GG score ``fp = rho*sign(y)*|y|^(rho-1)`` (AMICATorchNG ``_score``, GG
-    branch, core.py:174-183). ``fp(0)=0`` for ``rho>=1``, which the ``ufp/y``
+    branch, core.py:176-183). ``fp(0)=0`` for ``rho>=1``, which the ``ufp/y``
     guard relies on."""
     abs_y = mx.abs(y)
     sign_y = mx.sign(y)
@@ -61,7 +62,7 @@ def _log_pdf_gg(
     y: mx.array, rho: mx.array, lgamma_table: mx.array
 ) -> tuple[mx.array, mx.array]:
     """GG log-density and ``|y|^rho`` (AMICATorchNG ``_log_pdf_only``, GG branch,
-    core.py:214-224). ``lgamma_table = lgamma(1+1/rho)`` is precomputed host-side
+    core.py:216-224). ``lgamma_table = lgamma(1+1/rho)`` is precomputed host-side
     (MLX has no ``lgamma``); it makes the uniform GG form reduce to the exact
     Laplace (rho=1) and Gaussian (rho=2) log-densities."""
     abs_y = mx.abs(y)
@@ -168,16 +169,18 @@ class AMICAMLXNG:
         self._lgamma_table = None  # mx.array (n_mix, n_channels): lgamma(1+1/rho)
         self._logdet_W = None  # mx.array scalar: log|det W|, refreshed per iter
 
-    _DEGENERATE_STOP_REASONS = ("nan_ll", "singular_ll")
+    _DEGENERATE_STOP_REASONS = ("nan_ll", "singular_ll", "nan_params")
 
     # ------------------------------------------------------------------
     # Preprocessing (host / numpy; mirrors AMICATorchNG._preprocess in float64)
     # ------------------------------------------------------------------
     def _preprocess(self, X: np.ndarray) -> mx.array:
         """Mean-removal + sphering in float64 on the host, then handed to MLX as
-        float32. Done in numpy (not MLX) because MLX ``eigh`` is CPU-only and
-        float32; keeping it float64-on-host makes the sphere/sldet match the
-        PyTorch backend (both derive from the same float64 eigh)."""
+        float32. Done in numpy (not MLX) because it reuses the exact float64
+        preprocessing AMICATorchNG already validates, so the sphere/sldet match
+        the PyTorch backend. (MLX's CPU-stream ``eigh`` is full float64 -- only
+        the GPU stream is unsupported -- so this is a code-sharing choice, not a
+        precision workaround.)"""
         Xc = np.ascontiguousarray(X).astype(np.float64)
         data_dim = Xc.shape[0]
 
@@ -255,7 +258,12 @@ class AMICAMLXNG:
 
     def _update_unmixing_matrices(self):
         """W = inv(A) and the LL Jacobian log|det W|, both on the CPU stream
-        (MLX linalg is CPU-only) and hoisted to once per iteration."""
+        (MLX linalg is CPU-only) and hoisted to once per iteration.
+
+        These build lazy graph nodes; a singular ``A`` therefore raises not here
+        but where the graph is materialized (the ``mx.eval`` in ``fit``), so a
+        LinAlg traceback rooted in ``fit`` actually originates in this method.
+        """
         self.W = mx.linalg.inv(self.A, stream=_CPU)
         self._logdet_W = mx.linalg.slogdet(self.W, stream=_CPU)[1]
 
@@ -283,7 +291,8 @@ class AMICAMLXNG:
 
     def _get_block_updates(self, Xb: mx.array) -> dict:
         """Exact-EM sufficient statistics for one block (single-model,
-        non-Newton subset of AMICATorchNG._get_block_updates, core.py:887-947)."""
+        non-Newton subset of AMICATorchNG._get_block_updates, core.py:891-944;
+        the bias-c accumulator is excluded -- single-model has no c update)."""
         logV, b, z, y, az_rho = self._forward(Xb)
         block_ll = logV.sum()  # single model: logsumexp over one model is identity
         beta_h = self.beta.T[None]  # (1, n_channels, n_mix)
@@ -356,16 +365,27 @@ class AMICAMLXNG:
         )
 
         # GG shape update with the 1/psi(1+1/rho) digamma factor (Fortran
-        # :2013-2014); digamma is computed host-side (MLX has none).
+        # :2013-2014); digamma is computed host-side (MLX has none). A NaN here
+        # (e.g. from an upstream mu/beta blow-up) is reset to rho0 and surfaced,
+        # matching AMICATorchNG (core.py:1140-1151), so it does not silently
+        # poison the lgamma table and every subsequent E-step.
         if self.dorho:
             drho = acc["drho_n"] / mx.maximum(acc["dalpha_n"], 1e-8)
             rho_np = np.array(self.rho, dtype=np.float64)
             psi = mx.array(digamma(1.0 + 1.0 / rho_np).astype(np.float32))
             new_rho = self.rho + self.rholrate * (1.0 - (self.rho / psi) * drho)
+            nan_mask = mx.isnan(new_rho)
+            if bool(mx.any(nan_mask).item()):
+                logger.warning(
+                    "NaN in rho update at iter %d; resetting to rho0=%g.",
+                    self.iteration,
+                    self.rho0,
+                )
+                new_rho = mx.where(nan_mask, self.rho0, new_rho)
             self.rho = mx.clip(new_rho, self.minrho, self.maxrho)
 
         # Natural-gradient A-update. A is stored as Fortran's A^T, so the update
-        # is a LEFT-multiply by the transposed direction (core.py:1156-1164,
+        # is a LEFT-multiply by the transposed direction (core.py:1176-1184,
         # #24 root cause). Single-model collapses the gm-weighted column average.
         eye = mx.eye(self.n_channels)
         dA = -acc["dWtmp"] / acc["dgm"] + eye  # I - <g b^T>/dgm
@@ -376,9 +396,13 @@ class AMICAMLXNG:
 
         if self.doscaling and (self.iteration % self.scalestep == 0):
             scale = mx.sqrt((self.A**2).sum(axis=0))  # (n_comps,)
+            # A zero-norm (collapsed) column is left untouched, not rescaled:
+            # safe_scale is 1 there, so A/beta are unchanged and mu*safe_scale
+            # keeps its prior value (matching AMICATorchNG's nonzero mask,
+            # core.py:1229-1234 -- using raw `scale` would zero mu instead).
             safe_scale = mx.where(scale > 0, scale, mx.ones_like(scale))
             self.A = self.A / safe_scale
-            self.mu = self.mu * scale
+            self.mu = self.mu * safe_scale
             self.beta = self.beta / safe_scale
 
         self._refresh_lgamma_table()
@@ -433,6 +457,29 @@ class AMICAMLXNG:
             # worth of ops (the updated params feed the next accumulate).
             mx.eval(self.A, self.W, self.mu, self.alpha, self.beta, self.rho)
 
+            # Surface a corrupted M-step (component collapse / float32 overflow)
+            # at the iteration it happens. The ll check above only catches a
+            # corruption via the NEXT iteration's E-step, so a final-iteration
+            # blow-up would otherwise complete as max_iter with silently NaN
+            # parameters (the torch backend has state_dict as a backstop; the
+            # MLX MVP does not, so guard in fit()). Params are already
+            # materialized by the mx.eval above, so this is a cheap read.
+            params_finite = (
+                mx.all(mx.isfinite(self.A))
+                & mx.all(mx.isfinite(self.mu))
+                & mx.all(mx.isfinite(self.alpha))
+                & mx.all(mx.isfinite(self.beta))
+                & mx.all(mx.isfinite(self.rho))
+            )
+            if not bool(params_finite.item()):
+                logger.warning(
+                    "Non-finite parameters at iter %d (a mixture component "
+                    "likely collapsed); stopping.",
+                    it,
+                )
+                self.stop_reason = "nan_params"
+                break
+
             self.ll_history.append(ll)
 
             # Learning-rate control (Fortran amica17.f90:1062-1108): anneal on an
@@ -458,3 +505,12 @@ class AMICAMLXNG:
         else:
             self.final_ll_ = self.ll_history[-1] if self.ll_history else float("nan")
         return self
+
+    def transform(self, X: np.ndarray, model_idx: int = 0) -> np.ndarray:
+        """Not in the v1 MVP -- fail with a clear boundary rather than a bare
+        AttributeError. Use ``AMICATorchNG.transform`` for source extraction; the
+        MLX backend (issue #76) validates via ``final_ll_``/``ll_history``."""
+        raise NotImplementedError(
+            "AMICAMLXNG (v1) does not implement transform yet; it is a "
+            "fast-follow. Use AMICATorchNG for source extraction."
+        )

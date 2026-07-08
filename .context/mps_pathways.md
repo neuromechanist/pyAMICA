@@ -83,9 +83,10 @@ rtol ~1e-4. MLX is an optional dependency (Apple Silicon only), so CI skips thes
 the other PDF families, sharing, multi-model, and save/load are fast-follows. Whether it beats
 CPU/MPS is Pathway B's question.
 
-Cost: a full backend rewrite, still float32-only on GPU (Pathway A, #75, already
-provides that), and a new dependency. High effort. Best seen as a v2 acceleration
-option, not a near-term step.
+Cost (estimated before landing, now borne by the #76 MVP): a backend rewrite,
+still float32-only on GPU (Pathway A, #75, provides that), and a new optional
+dependency. The MVP is in-tree (see Status above); Newton, the other families,
+sharing and multi-model remain fast-follows.
 
 ## Pathway D: software FP64 emulation -- DEAD END
 
