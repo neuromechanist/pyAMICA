@@ -20,7 +20,8 @@ Backends (auto-detected per platform):
   mlx-f32         AMICAMLXNG, Apple GPU (MLX), float32
   native-fortran-f64  amica15 compiled from source (MPI+OpenMP), the reference
                   (#85; timed via amica's own per-iter stamps, startup-immune;
-                  needs benchmarks/fortran/build_amica.sh -- not on Apple/CI)
+                  build it with benchmarks/fortran/build_amica.sh -- works on both
+                  Apple Silicon and the x86 host, just not built by default / in CI)
 
 All backends run at matched settings (n_models=1, n_mix=3, pdftype=0,
 do_newton=False, same block_size/seed/channels/samples/iters) so the comparison
@@ -263,7 +264,10 @@ def _parse_fortran_out(out_txt: Path) -> tuple[list[float], float]:
     line ends '( <sec> s, <cum_h> h)'; <sec> is that iteration's compute time."""
     secs: list[float] = []
     last_ll = float("nan")
-    for line in out_txt.read_text(errors="ignore").splitlines():
+    # errors="replace" (not "ignore") so a corrupt byte surfaces as U+FFFD and
+    # breaks that line's regex match cleanly, rather than silently vanishing and
+    # risking a still-matching but numerically wrong stamp.
+    for line in out_txt.read_text(errors="replace").splitlines():
         m = _ITER_RE.search(line)
         if m:
             last_ll = float(m.group(1))
@@ -311,9 +315,19 @@ def _run_fortran(
                 timeout=_FORTRAN_TIMEOUT,
             )
             if res.returncode != 0:
+                # main()'s per-backend handler truncates the exception message to
+                # ~70 chars, so print the full captured output here first -- a
+                # native crash (bad LAPACK/MPI linkage, malformed param, segfault)
+                # has many platform-specific causes and the transcript is the only
+                # place to see why.
+                print(
+                    f"    native fortran exit {res.returncode}\n"
+                    f"    --- stderr ---\n{res.stderr[-2000:]}\n"
+                    f"    --- stdout ---\n{res.stdout[-2000:]}"
+                )
                 raise RuntimeError(
-                    f"native fortran run failed (exit {res.returncode}).\n"
-                    f"stderr:\n{res.stderr[-2000:]}\nstdout:\n{res.stdout[-2000:]}"
+                    f"native fortran run failed (exit {res.returncode}); "
+                    "see stderr/stdout printed above"
                 )
             secs, final_ll = _parse_fortran_out(work / "bench_out" / "out.txt")
             if len(secs) < 2:
@@ -367,7 +381,9 @@ def _available(
         except Exception:
             return False
     if kind == "fortran":
-        # amica15 (MPI+OpenMP) is single-model; sharing is not wired here.
+        # amica15 supports num_models > 1, but this adapter is only validated
+        # single-model in Phase 1 (#85); component sharing is hardcoded off (not
+        # wired here), so only the share config is gated out.
         return not share and _fortran_available(fortran_bin)
     if kind == "numpy":
         return True
@@ -470,11 +486,28 @@ def main() -> int:
             b for b in _BACKENDS if _available(b, n_models, share, args.fortran_bin)
         ]
     else:
+        requested = args.backends.split(",")
         backends = [
-            b
-            for b in args.backends.split(",")
-            if _available(b, n_models, share, args.fortran_bin)
+            b for b in requested if _available(b, n_models, share, args.fortran_bin)
         ]
+        # Do not silently drop an explicitly requested backend: an unbuilt
+        # native-fortran binary or a mistyped/unavailable device would otherwise
+        # leave the sweep quietly benchmarking fewer backends than asked (or
+        # nothing at all) while still exiting 0.
+        for b in requested:
+            if b not in _BACKENDS:
+                print(f"WARNING: unknown backend {b!r} (skipped)")
+            elif b not in backends:
+                print(
+                    f"WARNING: requested backend {b!r} is unavailable on this host "
+                    f"(config m{n_models}{'+share' if share else ''}"
+                    + (
+                        f"; native binary {args.fortran_bin!r} not built?"
+                        if b == "native-fortran-f64"
+                        else ""
+                    )
+                    + ") -- skipped"
+                )
 
     info = _platform_info()
     print(f"platform: {info}")

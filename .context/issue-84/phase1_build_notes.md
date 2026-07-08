@@ -19,8 +19,9 @@ reference is never modified):
 
 Also `-std=legacy -fallow-argument-mismatch -ffree-line-length-none`. Built clean on both
 **macOS arm64 (gfortran 16, brew open-mpi + lapack)** and **Ubuntu 24.04 x86_64
-(gfortran 13, apt openmpi + liblapack-dev)**. Upstream target: sccn/amica #44 (M1 compile),
-#49 (Ubuntu recompile).
+(gfortran 13, apt openmpi + liblapack-dev)**. Upstream target: sccn/amica #44 (compile on
+M1) is an exact match; #49 asks about Ubuntu builds too, though via Intel OneAPI rather than
+this gfortran path.
 
 ## Timing method
 

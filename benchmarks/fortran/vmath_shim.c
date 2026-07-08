@@ -10,9 +10,10 @@
  * These are simple element-wise ops, so this shim provides them as loops over
  * standard libm exp/log. gfortran calls them by reference with a trailing
  * underscore (`call vrda_exp(n, x, y)` -> `vrda_exp_(int* n, double* x,
- * double* y)`), which is the ABI matched here. Using scalar libm exp/log gives
- * IEEE-accurate results (equal or better than the vendor vector routines); the
- * only cost is that a vendor SIMD math library could compute the exp/log-heavy
+ * double* y)`), which is the ABI matched here. Scalar libm exp/log are
+ * correctly-rounded/IEEE-accurate (vendor SIMD transcendental libraries such as
+ * AMD LibM typically trade some accuracy for throughput); the cost here is speed,
+ * not accuracy -- a vendor SIMD math library could compute the exp/log-heavy
  * E-step somewhat faster (documented as a caveat in README.md).
  */
 #include <math.h>

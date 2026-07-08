@@ -32,7 +32,8 @@ benchmarks/results/
 # Real EEG benchmark data (fetched from OpenNeuro, not committed) + result JSONs
 benchmarks/data/
 benchmarks/*.json
-# Native amica build artifacts (#85; hardware-specific, built on the CUDA host)
+# Native amica build artifacts (#85; hardware-specific, built per host via
+# benchmarks/fortran/build_amica.sh -- Apple Silicon or the x86 host, not in CI)
 benchmarks/fortran/amica15
 benchmarks/fortran/build/
 bench_out/

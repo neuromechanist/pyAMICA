@@ -9,6 +9,7 @@ pointed at by ``AMICA_FORTRAN_BIN``), so CI and Apple-only checkouts stay green.
 
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,11 @@ def _load_bench():
 
 
 bench = _load_bench()
+
+# A runnable native amica binary if one is available (built by
+# benchmarks/fortran/build_amica.sh, or pointed at by AMICA_FORTRAN_BIN). Absent
+# on CI / Apple-only checkouts, which is why the run tests below are skip-gated.
+_FBIN = os.environ.get("AMICA_FORTRAN_BIN")
 
 
 def test_write_fdt_roundtrip(tmp_path):
@@ -84,13 +90,51 @@ def test_write_fortran_param(tmp_path):
         "pdftype 0",
         "do_newton 0",
         "block_size 512",
+        "pcakeep 16",  # must track nc, not the template's 32 (the load-bearing subset line)
         "use_min_dll 0",  # run the full budget, matched to torch/mlx
         "use_grad_norm 0",
     ):
         assert expected in text, f"missing {expected!r} in rendered param"
 
 
-_FBIN = os.environ.get("AMICA_FORTRAN_BIN")
+def test_write_fortran_param_multimodel(tmp_path):
+    """num_models tracks n_models (amica15 supports multi-model; the adapter
+    forwards it, gating only component sharing off)."""
+    bench._write_fortran_param(
+        tmp_path, nc=32, ns=5000, iters=10, threads=4, n_models=2
+    )
+    text = (tmp_path / "input.param").read_text()
+    assert "num_models 2" in text
+    assert "share_comps 0" in text
+
+
+def test_fortran_availability_and_dispatch():
+    """Availability gating is honest without a binary: a missing binary is
+    unavailable, and component sharing is always gated off for this backend
+    (these decide whether native-fortran-f64 joins the auto-detected sweep)."""
+    assert bench._fortran_available("/nonexistent/amica15") is False
+    assert (
+        bench._available("native-fortran-f64", share=True, fortran_bin="/nonexistent")
+        is False
+    )
+    # sharing is refused even if a binary exists
+    assert (
+        bench._available("native-fortran-f64", share=True, fortran_bin=_FBIN) is False
+    )
+
+
+def test_run_fortran_raises_on_nonzero_exit(tmp_path):
+    """A crashed run must raise, never return a bogus fast timing. Uses the real
+    system `false` (exits nonzero) as the binary -- a real failing process, not a
+    mock."""
+    false_bin = shutil.which("false")
+    if false_bin is None:
+        pytest.skip("system 'false' not found")
+    data = load_data_file(str(FDT), DATA_DIM, FIELD_DIM, dtype=np.float32)[:16, :2000]
+    with pytest.raises(RuntimeError, match="native fortran run failed"):
+        bench._run_fortran(
+            np.ascontiguousarray(data), iters=5, repeats=1, binary=false_bin, threads=1
+        )
 
 
 @pytest.mark.skipif(
@@ -102,11 +146,37 @@ _FBIN = os.environ.get("AMICA_FORTRAN_BIN")
 def test_run_fortran_smoke():
     """End-to-end: a short native fit on a real full-width subset yields finite
     per-iteration timing and a sane converged LL. Uses the full 32 channels /
-    all samples so per-iteration time clears amica's ~10 ms stamp resolution
-    (a 16-ch/8k config rounds to 0.00 s and is intentionally rejected)."""
+    all samples so per-iteration time clears amica's ~10 ms stamp resolution."""
     # the committed .fdt is float32 on disk (byte_size 4); _write_fdt recasts to
     # float32 anyway, so read it at its real dtype.
     data = load_data_file(str(FDT), DATA_DIM, FIELD_DIM, dtype=np.float32)
     ms, ll = bench._run_fortran(data, iters=10, repeats=1, binary=_FBIN, threads=4)
     assert ms > 0.0
     assert -5.0 < ll < -2.0
+
+
+@pytest.mark.skipif(
+    not bench._fortran_available(_FBIN),
+    reason="needs a runnable native amica binary; skipped on CI / Apple-only checkouts",
+)
+def test_run_fortran_rejects_sub_resolution_config():
+    """A config whose per-iteration time rounds to 0.00 s (below amica's ~10 ms
+    stamp) raises rather than reporting a bogus 0 ms/iter. 8ch x 2000 samples
+    reliably stays under the floor on real hardware."""
+    data = load_data_file(str(FDT), DATA_DIM, FIELD_DIM, dtype=np.float32)[:8, :2000]
+    with pytest.raises(RuntimeError, match="rounds to 0.00 s"):
+        bench._run_fortran(
+            np.ascontiguousarray(data), iters=8, repeats=1, binary=_FBIN, threads=2
+        )
+
+
+@pytest.mark.skipif(
+    not bench._fortran_available(_FBIN),
+    reason="needs a runnable native amica binary; skipped on CI / Apple-only checkouts",
+)
+def test_run_fortran_requires_two_timed_iters():
+    """A single-iteration run cannot yield a per-iteration mean (iter 1 is the
+    dropped warmup), so it raises rather than dividing by an empty set."""
+    data = load_data_file(str(FDT), DATA_DIM, FIELD_DIM, dtype=np.float32)
+    with pytest.raises(RuntimeError, match="<2 timed iterations"):
+        bench._run_fortran(data, iters=1, repeats=1, binary=_FBIN, threads=4)

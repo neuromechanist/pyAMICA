@@ -91,6 +91,14 @@ cp "$src_dir/funmod2.f90" "$src_dir/amica15.f90" "$src_dir/amica15_header.f90" "
 sed -i.bak \
   's/.*random_seed(PUT = c1 .*/      call random_seed()  ! benchmark build: portable default seed (build_amica.sh)/' \
   "$work_src/amica15.f90"
+# sed exits 0 even on a no-op, so verify the patch landed: if the tracked source
+# ever renames the seed line, an unpatched random_seed(PUT=...) would otherwise
+# reach the compiler and (with -fallow-argument-mismatch) build a binary that
+# only crashes at runtime.
+if ! grep -q 'call random_seed()  ! benchmark build' "$work_src/amica15.f90"; then
+  echo "ERROR: random_seed patch did not apply -- amica15.f90 source may have drifted" >&2
+  exit 1
+fi
 
 # Portable vector-math shim: the non-MKL branch calls AMD LibM's vrda_exp/vrda_log,
 # which are absent in a plain gfortran+LAPACK build. vmath_shim.c provides them as
