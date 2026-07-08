@@ -40,6 +40,13 @@ MPS note: run with `PYTORCH_ENABLE_MPS_FALLBACK=1` for ops MPS does not yet supp
 computes in float64 for Fortran parity, which MPS cannot represent, so parity runs use CPU or CUDA
 (the `AMICA` wrapper falls back to CPU automatically when a device is not pinned).
 
+**Performance (#63, `.context/issue-63/perf_findings.md`, `benchmarks/benchmark_gpu.py`):** the E-step
+pow-dedup (dropping the unused `dpdf`) is ~-35% and bit-identical; `block_size` default is 512 (was
+128, ~-18%). CUDA float64 is ~2.14x over CPU float64 and numerically identical (auto-selected by the
+wrapper). float32 is 5-8x faster but NaNs on full-size data (mixture underflow at ~iter 23), so it is
+experimental only; stabilization is tracked in #70. CPU intra-op threads are workload-limited (~4 is
+the sweet spot; 8+ regresses).
+
 ## Key Files
 - **Main interface:** `pyAMICA/amica.py` (thin wrapper over `AMICATorchNG`)
 - **PyTorch backend:** `pyAMICA/torch_impl/core.py` (`AMICATorchNG`, natural-gradient EM,

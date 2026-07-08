@@ -259,9 +259,14 @@ class AMICATorchNG:
         Number of ICA mixture models.
     n_mix : int, default=3
         Number of mixture components per source.
-    block_size : int, default=128
+    block_size : int, default=512
         Number of samples processed per accumulation block. Peak memory
         during the E-step scales with this, not with the total sample count.
+        Larger blocks give bigger tensor ops (less Python/dispatch overhead,
+        better threading/GPU utilization) at higher memory; 512 matches the
+        Fortran reference. A single iteration's sufficient statistics are
+        block-size-independent to ~1e-8, but the (chaotic) multi-iteration
+        trajectory shifts at the ~1e-6 level as this changes.
     lrate : float, default=0.1
         Initial/maximum natural-gradient learning rate (``lrate0`` in NumPy).
     minlrate : float, default=1e-12
@@ -380,7 +385,7 @@ class AMICATorchNG:
         n_channels: int,
         n_models: int = 1,
         n_mix: int = 3,
-        block_size: int = 128,
+        block_size: int = 512,
         lrate: float = 0.1,
         minlrate: float = 1e-12,
         lratefact: float = 0.5,
