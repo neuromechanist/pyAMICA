@@ -31,14 +31,22 @@ strong NVIDIA GPU", not a same-box comparison.
 | 48 | -3.20951 | -3.20952 | -3.20953 | -3.20951 | -3.21019 |
 | 70 | -3.21579 | -3.21562 | -3.21560 | -3.21570 | -3.21315 |
 
-## Multi-model -- ms/it and LL (Mac; MLX excluded = single-model MVP; CUDA pending)
+## Multi-model (n_models=2) -- ms/it (Mac; CUDA pending)
 
-m2 (no share), 70ch: torch-cpu-f32 **224** / cpu-f64 253 / mps-f32 270 / numpy 928 ms.
-m2+share, 70ch: cpu-f32 **224** / cpu-f64 253 / mps-f32 262 / numpy 934 ms.
-Sharing activates in torch (70ch LL -2.943 -> -3.049); numpy's sharing diverges
-(-2.919 -> -2.917) -- multi-model is not partition-identifiable and has no
-bit-exact oracle (#27/#60), so cross-backend LL differs by intrinsic estimator
-spread, not a defect.
+MLX now supports multi-model (issue #81), so it is measured here too:
+
+| channels | **mlx-f32** | torch-cpu-f32 | torch-mps-f32 | numpy-cpu-f64 |
+|---:|---:|---:|---:|---:|
+| 32 | **38** | 187 | 291 | 869 |
+| 70 | **45** | 224 | 270 | 928 |
+
+**The Apple-GPU win extends to multi-model: MLX ~38-45 ms/it, ~5x over torch-CPU**
+(and MPS still loses). Converged LL matches torch-float32 (32ch -3.0883 both; the
+one-iteration sufficient stats agree to float32 precision, `tests/mlx_tests`).
+Component sharing stays a fast-follow for MLX; in torch, sharing activates (70ch
+LL -2.943 -> -3.049) while numpy's sharing diverges -- multi-model is not
+partition-identifiable and has no bit-exact oracle (#27/#60), so cross-backend LL
+differs by intrinsic estimator spread, not a defect.
 
 ## Findings
 
@@ -60,19 +68,20 @@ spread, not a defect.
    implementation, not a production path. (numpy is benchmarked with the same
    fixed block_size=512 and `do_opt_block=False`; leaving its default on ran an
    in-fit block-size auto-tune that ~doubled its time -- fixed in the harness.)
-6. **Multi-model has no GPU acceleration today**: MLX (the only Apple-GPU win) is
-   single-model-only (v1 MVP), and MPS loses. **Extending `AMICAMLXNG` to
-   multi-model is the highest-value fast-follow** -- it would carry the ~7x MLX
-   win to multi-model AMICA.
+6. **Multi-model MLX now carries the win (issue #81)**: ~38-45 ms/it, ~5x over
+   torch-CPU (MPS still loses), LL matching torch-float32. The remaining MLX
+   fast-follow is component sharing; a 128-256 ch / many-model sweep would find
+   the eventual MLX/CUDA crossover.
 
 ## Recommendation
 
-- **Apple Silicon: use the MLX backend** for single-model AMICA (~7x over CPU);
-  avoid `device="mps"` (no gain). **NVIDIA: float64-CUDA** stays the bit-safe
-  production GPU path.
-- **Fast-follow: multi-model MLX** (issue TBD) to extend the win beyond
-  single-model; and a high-dimensional (128-256 ch, many-model) sweep to find the
-  MLX/CUDA crossover.
+- **Apple Silicon: use the MLX backend** for single- and multi-model AMICA (~5-7x
+  over CPU); avoid `device="mps"` (no gain). **NVIDIA: float64-CUDA** stays the
+  bit-safe production GPU path.
+- **Fast-follows:** MLX component sharing; a high-dimensional (128-256 ch,
+  many-model) sweep to find the MLX/CUDA crossover; and a native-Fortran /
+  CPU-core-scaling cross-platform benchmark (its own effort, on a native-x86
+  Linux + CUDA host, since Apple's Fortran binary is x86-under-Rosetta).
 
 ## Caveats / pending
 

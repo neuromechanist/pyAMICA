@@ -51,11 +51,12 @@ def _load_real_data() -> np.ndarray:
     )
 
 
-def test_mvp_rejects_unsupported_config():
-    """The v1 MVP boundaries fail loudly, not silently."""
+def test_rejects_unsupported_config():
+    """The still-deferred configs (Newton, non-GG families) fail loudly, not
+    silently. Multi-model IS supported (issue #81), so it is not rejected."""
     from pyAMICA.mlx_impl import AMICAMLXNG
 
-    for kw in ({"n_models": 2}, {"do_newton": True}, {"pdftype": 2, "n_mix": NMIX}):
+    for kw in ({"do_newton": True}, {"pdftype": 2, "n_mix": NMIX}):
         with pytest.raises(NotImplementedError):
             AMICAMLXNG(n_channels=NW, n_mix=kw.pop("n_mix", 1), **kw)
 
@@ -85,7 +86,8 @@ def test_sufficient_stats_match_numpy_reference():
     npm.block_size = blk
     npm.comp_list = np.arange(NW).reshape(NW, 1)
     npm.A = np.array(m.A, dtype=np.float64)
-    npm.W = np.array(m.W, dtype=np.float64)[:, :, None]  # NumPy expects (n,n,models)
+    # MLX W is (n_models, n, n); NumPy expects (n, n, n_models).
+    npm.W = np.array(m.W, dtype=np.float64).transpose(1, 2, 0)
     npm.c = np.zeros((NW, 1))
     npm.mu = np.array(m.mu, dtype=np.float64)
     npm.alpha = np.array(m.alpha, dtype=np.float64)
@@ -117,6 +119,9 @@ def test_backend_stable_on_full_data():
     assert np.all(np.isfinite(np.array(m.A)))
     assert m.stop_reason not in AMICAMLXNG._DEGENERATE_STOP_REASONS
     assert hist[-1] > hist[0]  # ascent
+    # Single-model must never touch the bias c (the n_models>1-only update); a
+    # nonzero c would signal the #24 bit-exact single-model path was perturbed.
+    assert np.all(np.array(m.c) == 0.0)
 
 
 def test_converged_ll_matches_torch_float32():
@@ -147,3 +152,86 @@ def test_converged_ll_matches_torch_float32():
 
     assert np.isfinite(mlx_m.final_ll_)
     assert abs(mlx_m.final_ll_ - torch_m.final_ll_) < 1e-2
+
+
+def test_multimodel_matches_torch_float32():
+    """Multi-model (n_models=2) MLX matches the PyTorch float32 backend (issue
+    #81): the one-iteration sufficient stats agree to float32 precision, and the
+    converged LL matches (measured gap ~1e-5). Single-model stays byte-identical
+    (covered by the tests above)."""
+    import torch
+
+    from pyAMICA.mlx_impl import AMICAMLXNG
+    from pyAMICA.torch_impl import AMICATorchNG
+
+    data = _load_real_data()
+    m = 2
+
+    # One iteration of sufficient stats from identical (shared-seed) init.
+    mlx_m = AMICAMLXNG(n_channels=NW, n_models=m, n_mix=NMIX, seed=SEED, block_size=512)
+    xt = mlx_m._preprocess(data)
+    mlx_m._initialize_parameters()
+    ma = mlx_m._accumulate_blocks(xt)
+
+    ng = AMICATorchNG(
+        n_channels=NW,
+        n_models=m,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float32,
+        do_newton=False,
+        block_size=512,
+    )
+    xt2 = ng._preprocess(data)
+    ng._initialize_parameters()
+    na = ng._accumulate_blocks(xt2)
+    # Every accumulator, including dWtmp (input to the gm-weighted comp_list A
+    # scatter) and the scattered mixture stats. rtol=5e-3 (looser than the 1e-3
+    # single-model-vs-numpy check) because this compares two float32 backends on
+    # different devices, whose reduction orders diverge more than float32-vs-f64.
+    for key in (
+        "dgm",
+        "dalpha_n",
+        "dmu_n",
+        "dmu_d",
+        "dbeta_d",
+        "drho_n",
+        "dc_numer",
+        "dWtmp",
+    ):
+        a = np.asarray(np.array(ma[key]), dtype=np.float64)
+        b = na[key].cpu().numpy().astype(np.float64)
+        if key == "dWtmp":  # torch (n, n, n_models) -> MLX (n_models, n, n)
+            b = np.transpose(b, (2, 0, 1))
+        assert np.allclose(a, b.reshape(a.shape), rtol=5e-3, atol=1e-4), (
+            f"{key}: {np.abs(a - b.reshape(a.shape)).max():.2e}"
+        )
+
+    # The per-model bias c update (the n_models>1-only formula) is the
+    # responsibility-weighted data mean c[:,h] = sum_t v_h*x / sum_t v_h, and the
+    # two models' c must differ (a would-be no-op would leave them equal at 0).
+    mlx_m._update_parameters(ma, xt.shape[1])
+    c = np.array(mlx_m.c)
+    dc = np.array(ma["dc_numer"]) / np.array(ma["dgm"])[None, :]
+    assert np.allclose(c, dc, rtol=1e-5, atol=1e-6)
+    assert not np.allclose(c[:, 0], c[:, 1])
+
+    # Converged LL (multi-model is not partition-identifiable, but at matched
+    # init/settings both backends track the same trajectory).
+    mlx_c = AMICAMLXNG(n_channels=NW, n_models=m, n_mix=NMIX, seed=SEED)
+    mlx_c.fit(data, max_iter=60, verbose=False)
+    ng_c = AMICATorchNG(
+        n_channels=NW,
+        n_models=m,
+        n_mix=NMIX,
+        seed=SEED,
+        device="cpu",
+        dtype=torch.float32,
+        do_newton=False,
+        keep_best=False,
+    )
+    ng_c.fit(data, max_iter=60, verbose=False)
+    assert np.isfinite(mlx_c.final_ll_)
+    assert mlx_c.stop_reason not in AMICAMLXNG._DEGENERATE_STOP_REASONS
+    assert abs(mlx_c.final_ll_ - ng_c.final_ll_) < 1e-2

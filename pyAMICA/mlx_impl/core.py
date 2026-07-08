@@ -1,6 +1,6 @@
-"""MLX natural-gradient EM backend for AMICA (issue #76, epic #74 Phase C).
+"""MLX natural-gradient EM backend for AMICA (issue #76/#81, epic #74 Phase C/D).
 
-``AMICAMLXNG`` is a v1 MVP port of :class:`pyAMICA.torch_impl.core.AMICATorchNG`
+``AMICAMLXNG`` is a port of :class:`pyAMICA.torch_impl.core.AMICATorchNG`
 to Apple's MLX array framework, so the per-block E/M-step runs on the Apple GPU.
 It is structurally parallel to the PyTorch backend (same method names/order and
 Fortran citations) so the two can be diffed method-by-method.
@@ -19,11 +19,12 @@ Design constraints (verified against MLX 0.32, see ``.context/mps_pathways.md``)
   and the rho-update ``digamma(1+1/rho)`` depend only on the small ``rho`` array,
   so they are computed host-side with SciPy once per iteration.
 
-MVP scope: single model (``n_models=1``), generalized Gaussian (``pdftype=0``),
-natural gradient (``do_newton=False``). Newton, the other PDF families and
-multi-model are rejected in ``__init__`` with a clear ``NotImplementedError``
-(``transform`` likewise). Component sharing, outlier rejection, ``keep_best``
-and save/load are simply absent (no such parameter/method) -- all fast-follows.
+Scope: single- and multi-model (``n_models >= 1``, issue #81), generalized
+Gaussian (``pdftype=0``), natural gradient (``do_newton=False``). Newton and the
+other PDF families are rejected in ``__init__`` with a clear
+``NotImplementedError`` (``transform`` likewise). Component sharing, outlier
+rejection, ``keep_best`` and save/load are simply absent (no such
+parameter/method) -- all fast-follows.
 """
 
 from __future__ import annotations
@@ -72,9 +73,9 @@ def _log_pdf_gg(
 
 
 class AMICAMLXNG:
-    """MLX natural-gradient EM backend (single-model GG MVP, issue #76).
+    """MLX natural-gradient EM backend (GG, single- and multi-model; #76/#81).
 
-    Parameters mirror the subset of :class:`AMICATorchNG` that the MVP supports;
+    Parameters mirror the subset of :class:`AMICATorchNG` that is supported;
     the same ``seed`` produces the same initial parameters as the PyTorch/NumPy
     backends, so cross-backend equivalence is testable.
     """
@@ -106,27 +107,22 @@ class AMICAMLXNG:
         do_approx_sphere: bool = True,
         seed: Optional[int] = None,
     ):
-        # --- MVP boundaries: reject the deferred configurations up front. -----
-        if n_models != 1:
-            raise NotImplementedError(
-                "AMICAMLXNG (v1) supports single-model only (n_models=1); "
-                "multi-model is a fast-follow. Use AMICATorchNG for n_models>1."
-            )
+        # --- Boundaries: reject the still-deferred configurations up front. ---
         if pdftype != 0:
             raise NotImplementedError(
-                "AMICAMLXNG (v1) supports the generalized-Gaussian family "
+                "AMICAMLXNG supports the generalized-Gaussian family "
                 "(pdftype=0) only; the other families are a fast-follow."
             )
         if do_newton:
             raise NotImplementedError(
-                "AMICAMLXNG (v1) supports the natural gradient only "
+                "AMICAMLXNG supports the natural gradient only "
                 "(do_newton=False); Newton is a fast-follow."
             )
 
         self.n_channels = n_channels
-        self.n_models = 1
+        self.n_models = n_models  # multi-model supported (issue #81); no sharing yet
         self.n_mix = n_mix
-        self.n_comps = n_channels
+        self.n_comps = n_channels * n_models
         self.block_size = block_size
 
         self.lrate0 = lrate
@@ -164,9 +160,9 @@ class AMICAMLXNG:
 
         # Populated by fit()/_initialize_parameters().
         self.A = self.W = self.mu = self.alpha = self.beta = self.rho = None
-        self.gm = self.mean = self.sphere = None
+        self.gm = self.c = self.comp_list = self.mean = self.sphere = None
         self.sldet = 0.0
-        self._lgamma_table = None  # mx.array (n_mix, n_channels): lgamma(1+1/rho)
+        self._lgamma_table = None  # mx.array (n_mix, n_comps): lgamma(1+1/rho)
         self._logdet_W = None  # mx.array scalar: log|det W|, refreshed per iter
 
     _DEGENERATE_STOP_REASONS = ("nan_ll", "singular_ll", "nan_params")
@@ -223,9 +219,16 @@ class AMICAMLXNG:
         order as AMICATorchNG/AMICA_NumPy (core.py:688-725), so a shared seed
         gives a bit-identical (float32-cast) starting point."""
         rng = np.random.RandomState(self.seed)
-        n, ncomp, nmix = self.n_channels, self.n_comps, self.n_mix
+        n, m, ncomp, nmix = self.n_channels, self.n_models, self.n_comps, self.n_mix
 
-        A_np = np.eye(n) + 0.01 * (0.5 - rng.rand(n, n))
+        # Per-model mixing blocks + comp_list mapping each (channel, model) to its
+        # column in A (identical RNG draw order to AMICATorchNG; for m=1 the loop
+        # runs once, so single-model init stays byte-for-byte).
+        A_np = np.zeros((n, ncomp))
+        comp_list_np = np.zeros((n, m), dtype=np.int64)
+        for h in range(m):
+            A_np[:, h * n : (h + 1) * n] = np.eye(n) + 0.01 * (0.5 - rng.rand(n, n))
+            comp_list_np[:, h] = np.arange(h * n, (h + 1) * n)
 
         mu_np = np.zeros((nmix, ncomp))
         for k in range(ncomp):
@@ -237,11 +240,13 @@ class AMICAMLXNG:
         rho_np = self.rho0 * np.ones((nmix, ncomp))
 
         self.A = mx.array(A_np.astype(np.float32))
+        self.comp_list = mx.array(comp_list_np)  # (n_channels, n_models) int
         self.mu = mx.array(mu_np.astype(np.float32))
         self.alpha = mx.array(alpha_np.astype(np.float32))
         self.beta = mx.array(beta_np.astype(np.float32))
         self.rho = mx.array(rho_np.astype(np.float32))
-        self.gm = mx.array(np.ones(1, dtype=np.float32))
+        self.gm = mx.array((np.ones(m) / m).astype(np.float32))
+        self.c = mx.array(np.zeros((n, m), dtype=np.float32))
 
         self.lrate = self.lrate0
         self.lrate_cap = self.lrate0
@@ -252,84 +257,120 @@ class AMICAMLXNG:
 
     def _refresh_lgamma_table(self):
         """Recompute ``lgamma(1+1/rho)`` host-side (MLX has no lgamma). Called at
-        init and after every rho update. Cheap: rho is ``(n_mix, n_channels)``."""
+        init and after every rho update. Cheap: rho is ``(n_mix, n_comps)``."""
         rho_np = np.array(self.rho, dtype=np.float64)
         self._lgamma_table = mx.array(gammaln(1.0 + 1.0 / rho_np).astype(np.float32))
 
     def _update_unmixing_matrices(self):
-        """W = inv(A) and the LL Jacobian log|det W|, both on the CPU stream
-        (MLX linalg is CPU-only) and hoisted to once per iteration.
+        """Per-model ``W_h = inv(A[:, comp_list[:, h]])`` and the LL Jacobian
+        ``log|det W_h|``, on the CPU stream (MLX linalg is CPU-only), hoisted to
+        once per iteration. ``W`` is ``(n_models, n, n)`` and ``_logdet_W`` is
+        ``(n_models,)``. For n_models=1 this is ``inv(A)`` unchanged.
 
         These build lazy graph nodes; a singular ``A`` therefore raises not here
         but where the graph is materialized (the ``mx.eval`` in ``fit``), so a
         LinAlg traceback rooted in ``fit`` actually originates in this method.
         """
-        self.W = mx.linalg.inv(self.A, stream=_CPU)
-        self._logdet_W = mx.linalg.slogdet(self.W, stream=_CPU)[1]
+        ws, logdets = [], []
+        for h in range(self.n_models):
+            wh = mx.linalg.inv(self.A[:, self.comp_list[:, h]], stream=_CPU)
+            ws.append(wh)
+            logdets.append(mx.linalg.slogdet(wh, stream=_CPU)[1])
+        self.W = mx.stack(ws, axis=0)  # (n_models, n, n)
+        self._logdet_W = mx.stack(logdets)  # (n_models,)
 
     # ------------------------------------------------------------------
     # E-step
     # ------------------------------------------------------------------
     def _forward(self, Xb: mx.array):
-        """E-step forward pass for one block (single model). ``Xb`` is
-        ``(n_channels, batch)``. Returns ``(logV, b, z, y, az_rho)``."""
-        b = Xb.T @ self.W  # (batch, n_channels); c == 0 for single model
-        mu_h = self.mu.T[None]  # (1, n_channels, n_mix)
-        beta_h = self.beta.T[None]
-        rho_h = self.rho.T[None]
-        alpha_h = self.alpha.T[None]
-        lgamma_h = self._lgamma_table.T[None]
+        """E-step forward pass for one block, per model (AMICATorchNG._forward,
+        core.py:762-825). ``Xb`` is ``(n_channels, batch)``. Returns ``logV``
+        ``(batch, n_models)`` and per-model lists ``(b, z, y, az_rho)``. For
+        n_models=1 (c=0, gm=1, comp_list=identity) this is numerically identical
+        to the single-model path."""
+        b_list, z_list, y_list, azrho_list, logv_cols = [], [], [], [], []
+        for h in range(self.n_models):
+            idx = self.comp_list[:, h]
+            b = (Xb - self.c[:, h][:, None]).T @ self.W[h]  # (batch, n_channels)
+            mu_h = self.mu[:, idx].T[None]  # (1, n_channels, n_mix)
+            beta_h = self.beta[:, idx].T[None]
+            rho_h = self.rho[:, idx].T[None]
+            alpha_h = self.alpha[:, idx].T[None]
+            lgamma_h = self._lgamma_table[:, idx].T[None]
 
-        y = beta_h * (b[..., None] - mu_h)  # (batch, n_channels, n_mix)
-        log_pdf, az_rho = _log_pdf_gg(y, rho_h, lgamma_h)
-        z0 = mx.log(alpha_h) + mx.log(beta_h) + log_pdf
-        ll_i = mx.logsumexp(z0, axis=-1)  # (batch, n_channels)
-        z = mx.softmax(z0, axis=-1)
-        # Single model: log(gm)=0; logdet_W + sldet are the Jacobian terms.
-        logV = self._logdet_W + self.sldet + ll_i.sum(axis=-1)  # (batch,)
-        return logV, b, z, y, az_rho
+            y = beta_h * (b[..., None] - mu_h)  # (batch, n_channels, n_mix)
+            log_pdf, az_rho = _log_pdf_gg(y, rho_h, lgamma_h)
+            z0 = mx.log(alpha_h) + mx.log(beta_h) + log_pdf
+            ll_i = mx.logsumexp(z0, axis=-1)  # (batch, n_channels)
+            z = mx.softmax(z0, axis=-1)
+            logv_cols.append(
+                mx.log(self.gm[h]) + self._logdet_W[h] + self.sldet + ll_i.sum(axis=-1)
+            )
+            b_list.append(b)
+            z_list.append(z)
+            y_list.append(y)
+            azrho_list.append(az_rho)
+        logV = mx.stack(logv_cols, axis=1)  # (batch, n_models)
+        return logV, b_list, z_list, y_list, azrho_list
 
     def _get_block_updates(self, Xb: mx.array) -> dict:
-        """Exact-EM sufficient statistics for one block (single-model,
-        non-Newton subset of AMICATorchNG._get_block_updates, core.py:891-944;
-        the bias-c accumulator is excluded -- single-model has no c update)."""
-        logV, b, z, y, az_rho = self._forward(Xb)
-        block_ll = logV.sum()  # single model: logsumexp over one model is identity
-        beta_h = self.beta.T[None]  # (1, n_channels, n_mix)
-        rho_h = self.rho.T[None]
-
-        fp = _score_gg(y, rho_h)
-        u = z  # u = v*z with v == 1 (single model)
-        ufp = u * fp
-
-        dgm = mx.array(float(Xb.shape[1]), dtype=mx.float32)  # sum_t v_h = n samples
-        dalpha_n = u.sum(0).T  # (n_mix, n_channels)
-        dmu_n = ufp.sum(0).T
-        # Phase A guard: float32 can round y to exactly 0 (fp(0)=0 => ufp=0), so
-        # ufp/y is 0/0=NaN; where y==0, 0/1 contributes 0 (issue #75).
-        safe_y = mx.where(y == 0, mx.ones_like(y), y)
-        dmu_d = (beta_h[0] * (ufp / safe_y).sum(0)).T
-        dbeta_n = u.sum(0).T
-        dbeta_d = (ufp * y).sum(0).T
-
-        ay = mx.abs(y)
+        """Exact-EM sufficient statistics for one block (non-Newton subset of
+        AMICATorchNG._get_block_updates, core.py:833-953). Mixture stats are
+        scattered into their ``comp_list`` columns; ``dWtmp``/``dgm``/``dc_numer``
+        are per-model. For n_models=1 (v==1, identity comp_list) this reproduces
+        the single-model accumulators exactly."""
+        logV, b_list, z_list, y_list, azrho_list = self._forward(Xb)
+        block_ll = mx.logsumexp(logV, axis=1).sum()
+        v = mx.softmax(logV, axis=1)  # (batch, n_models) model responsibilities
+        nmix, ncomp = self.n_mix, self.n_comps
         tiny = float(np.finfo(np.float32).tiny)
-        logab = rho_h * mx.log(mx.maximum(ay, tiny))
-        logab = mx.where(az_rho < _EPSDBLE, mx.zeros_like(logab), logab)
-        drho_n = (u * (az_rho * logab)).sum(0).T
 
-        g = (beta_h * ufp).sum(-1)  # (batch, n_channels)
-        dWtmp = g.T @ b  # (n_channels, n_channels)
+        def zeros():
+            return mx.zeros((nmix, ncomp), dtype=mx.float32)
+
+        dalpha_n, dmu_n, dmu_d = zeros(), zeros(), zeros()
+        dbeta_n, dbeta_d, drho_n = zeros(), zeros(), zeros()
+        dgm_cols, dwtmp_mods, dc_cols = [], [], []
+
+        for h in range(self.n_models):
+            idx = self.comp_list[:, h]
+            b, zr, y, az_rho = b_list[h], z_list[h], y_list[h], azrho_list[h]
+            v_h = v[:, h]
+            beta_h = self.beta[:, idx].T[None]  # (1, n_channels, n_mix)
+            rho_h = self.rho[:, idx].T[None]
+
+            fp = _score_gg(y, rho_h)
+            u = v_h[:, None, None] * zr  # u = v*z, (batch, n_channels, n_mix)
+            ufp = u * fp
+
+            dgm_cols.append(v_h.sum())
+            dalpha_n = dalpha_n.at[:, idx].add(u.sum(0).T)
+            dmu_n = dmu_n.at[:, idx].add(ufp.sum(0).T)
+            # Phase A guard: float32 can round y to exactly 0 (fp(0)=0 => ufp=0),
+            # so ufp/y is 0/0=NaN; where y==0, 0/1 contributes 0 (issue #75).
+            safe_y = mx.where(y == 0, mx.ones_like(y), y)
+            dmu_d = dmu_d.at[:, idx].add((beta_h[0] * (ufp / safe_y).sum(0)).T)
+            dbeta_n = dbeta_n.at[:, idx].add(u.sum(0).T)
+            dbeta_d = dbeta_d.at[:, idx].add((ufp * y).sum(0).T)
+
+            logab = rho_h * mx.log(mx.maximum(mx.abs(y), tiny))
+            logab = mx.where(az_rho < _EPSDBLE, mx.zeros_like(logab), logab)
+            drho_n = drho_n.at[:, idx].add((u * (az_rho * logab)).sum(0).T)
+
+            g = (beta_h * ufp).sum(-1)  # (batch, n_channels)
+            dwtmp_mods.append(g.T @ b)  # (n_channels, n_channels)
+            dc_cols.append(Xb @ v_h)  # data-space bias numerator sum_t v_h*x
 
         return {
-            "dgm": dgm,
+            "dgm": mx.stack(dgm_cols),  # (n_models,)
             "dalpha_n": dalpha_n,
             "dmu_n": dmu_n,
             "dmu_d": dmu_d,
             "dbeta_n": dbeta_n,
             "dbeta_d": dbeta_d,
             "drho_n": drho_n,
-            "dWtmp": dWtmp,
+            "dWtmp": mx.stack(dwtmp_mods, axis=0),  # (n_models, n_ch, n_ch)
+            "dc_numer": mx.stack(dc_cols, axis=1),  # (n_channels, n_models)
             "ll": block_ll,
         }
 
@@ -352,9 +393,27 @@ class AMICAMLXNG:
     # M-step
     # ------------------------------------------------------------------
     def _update_parameters(self, acc: dict, n_samples: int):
-        """Exact-EM mixture updates + natural-gradient A-update (single-model,
-        non-Newton subset of AMICATorchNG._update_parameters, core.py:1049-1247)."""
-        self.gm = acc["dgm"] / n_samples  # == 1 for single model
+        """Exact-EM mixture updates + natural-gradient A-update (non-Newton subset
+        of AMICATorchNG._update_parameters, core.py:1049-1247)."""
+        self.gm = acc["dgm"] / n_samples  # (n_models,); == 1 for single model
+        tiny = float(np.finfo(np.float32).tiny)
+
+        # Per-model data-space bias c[i,h] = sum_t v_h*x / sum_t v_h (Fortran
+        # update_c, core.py:1083-1092). Skipped for n_models=1 (v==1 => c is the
+        # zero data mean; the update would add a float-sum residual and break the
+        # #24 bit-exact single-model path). A dead model (dgm[h]==0) keeps its
+        # prior c rather than writing 0/0, and is surfaced (matching AMICATorchNG).
+        if self.n_models > 1:
+            dgm = acc["dgm"]
+            live = dgm > 0.0
+            new_c = acc["dc_numer"] / mx.maximum(dgm, tiny)[None, :]
+            self.c = mx.where(live[None, :], new_c, self.c)
+            if not bool(mx.all(live).item()):
+                logger.warning(
+                    "Zero-responsibility model(s) at iter %d; kept their prior "
+                    "bias c (dead-model guard).",
+                    self.iteration,
+                )
 
         self.alpha = acc["dalpha_n"] / acc["dalpha_n"].sum(axis=0, keepdims=True)
         self.mu = self.mu + acc["dmu_n"] / acc["dmu_d"]
@@ -386,13 +445,25 @@ class AMICAMLXNG:
 
         # Natural-gradient A-update. A is stored as Fortran's A^T, so the update
         # is a LEFT-multiply by the transposed direction (core.py:1176-1184,
-        # #24 root cause). Single-model collapses the gm-weighted column average.
+        # #24 root cause). Each model's direction is scattered into its mixing
+        # columns as a gm-weighted average (Fortran dAk/zeta, core.py:1231-1247):
+        # for the default disjoint comp_list every column has one contributor, so
+        # gm cancels and n_models=1 is byte-for-byte the old `A - lrate*(dA.T@A)`.
         eye = mx.eye(self.n_channels)
-        dA = -acc["dWtmp"] / acc["dgm"] + eye  # I - <g b^T>/dgm
+        directions = [
+            -acc["dWtmp"][h] / acc["dgm"][h] + eye for h in range(self.n_models)
+        ]
         self.lrate = min(
             self.lrate_cap, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
         )
-        self.A = self.A - self.lrate * (dA.T @ self.A)
+        dAk = mx.zeros_like(self.A)
+        zeta = mx.zeros((self.n_comps,), dtype=mx.float32)
+        for h in range(self.n_models):
+            idx = self.comp_list[:, h]
+            dAk = dAk.at[:, idx].add(self.gm[h] * (directions[h].T @ self.A[:, idx]))
+            zeta = zeta.at[idx].add(self.gm[h] + mx.zeros((self.n_channels,)))
+        dAk = dAk / mx.maximum(zeta, tiny)
+        self.A = self.A - self.lrate * dAk
 
         if self.doscaling and (self.iteration % self.scalestep == 0):
             scale = mx.sqrt((self.A**2).sum(axis=0))  # (n_comps,)
@@ -454,15 +525,26 @@ class AMICAMLXNG:
 
             self._update_parameters(acc, n_total)
             # One eval per iteration bounds the lazy graph to a single iteration's
-            # worth of ops (the updated params feed the next accumulate).
-            mx.eval(self.A, self.W, self.mu, self.alpha, self.beta, self.rho)
+            # worth of ops (the updated params feed the next accumulate). gm/c are
+            # included so their dependency chain is materialized each iteration too
+            # (c depends on the prior iteration's c), not left to grow unbounded.
+            mx.eval(
+                self.A,
+                self.W,
+                self.mu,
+                self.alpha,
+                self.beta,
+                self.rho,
+                self.gm,
+                self.c,
+            )
 
             # Surface a corrupted M-step (component collapse / float32 overflow)
             # at the iteration it happens. The ll check above only catches a
             # corruption via the NEXT iteration's E-step, so a final-iteration
             # blow-up would otherwise complete as max_iter with silently NaN
             # parameters (the torch backend has state_dict as a backstop; the
-            # MLX MVP does not, so guard in fit()). Params are already
+            # MLX backend does not, so guard in fit()). Params are already
             # materialized by the mx.eval above, so this is a cheap read.
             params_finite = (
                 mx.all(mx.isfinite(self.A))
@@ -470,6 +552,8 @@ class AMICAMLXNG:
                 & mx.all(mx.isfinite(self.alpha))
                 & mx.all(mx.isfinite(self.beta))
                 & mx.all(mx.isfinite(self.rho))
+                & mx.all(mx.isfinite(self.gm))
+                & mx.all(mx.isfinite(self.c))
             )
             if not bool(params_finite.item()):
                 logger.warning(
@@ -507,10 +591,10 @@ class AMICAMLXNG:
         return self
 
     def transform(self, X: np.ndarray, model_idx: int = 0) -> np.ndarray:
-        """Not in the v1 MVP -- fail with a clear boundary rather than a bare
+        """Not yet implemented -- fail with a clear boundary rather than a bare
         AttributeError. Use ``AMICATorchNG.transform`` for source extraction; the
-        MLX backend (issue #76) validates via ``final_ll_``/``ll_history``."""
+        MLX backend validates via ``final_ll_``/``ll_history``."""
         raise NotImplementedError(
-            "AMICAMLXNG (v1) does not implement transform yet; it is a "
-            "fast-follow. Use AMICATorchNG for source extraction."
+            "AMICAMLXNG does not implement transform yet; it is a fast-follow. "
+            "Use AMICATorchNG for source extraction."
         )
