@@ -338,7 +338,7 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
     top_runs = [r for r in runs if r["channels"] == top_ch]
     # legacy npz (pre-#90) carry no frame count (frames == -1); they can't join a
     # k-sweep and won't group with per-frame npz in the matrix below, so warn rather
-    # than silently mis-group when the two formats are merged in one --compare.
+    # than silently group them wrong when the two formats are merged in one --compare.
     if any(r["frames"] < 0 for r in top_runs) and any(
         r["frames"] > 0 for r in top_runs
     ):
