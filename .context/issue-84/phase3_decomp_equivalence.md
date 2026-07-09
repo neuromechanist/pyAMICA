@@ -19,12 +19,13 @@ numpy is excluded (too slow, not a recommended backend).
 ## Result 1: pyAMICA is device- and precision-invariant (the headline)
 
 Cross-backend mean Hungarian-matched |corr| @ 70ch, 2000 iters (see
-`equiv_heatmap_70ch.png`):
+`benchmarks/figures/phase3_equivalence_matrix_70ch.png`):
 
-**All six torch/MLX backends are identical to each other at 1.000** -- torch-cpu, torch-cuda,
-torch-mps, and MLX, across **both f32 and f64**. Same decomposition on any device at any
-precision. This is the definitive "f32 == f64" and "GPU == CPU" result: pyAMICA gives the same
-ICs regardless of where or how it runs.
+**Every torch/MLX backend is identical to each other at 1.000** -- torch-cpu (both machines),
+torch-cuda, torch-mps, and MLX, across **both f32 and f64** (8 backend/precision/device
+combinations). Same decomposition on any device at any precision. This is the definitive
+"f32 == f64" and "GPU == CPU" result: pyAMICA gives the same ICs regardless of where or how it
+runs.
 
 The two native-Fortran runs (Mac arm64 + Linux x86_64) agree with each other at 0.972 and with
 the torch/MLX cluster at ~0.90 -- a different local optimum from a different (clock-seeded)
@@ -63,9 +64,10 @@ MLX is again the efficiency winner; MPS is the worst (use MLX, never MPS on Appl
 finally runs sustained here (a full decomposition, not the per-iteration blips of Phase 2).
 
 ## Figures
-- `equiv_heatmap_70ch.png` -- square cross-backend IC-equivalence matrix (the 6x6 torch/MLX
-  1.000 block + the Fortran rows), adaptive color scale so the ~0.90 vs 1.00 differences show.
-- `ic_topomaps_70ch.png` -- IC scalp maps, variance-ordered (IC1 = highest variance, EEGLAB
+- `benchmarks/figures/phase3_equivalence_matrix_70ch.png` -- square cross-backend IC-equivalence
+  matrix (the 8-backend torch/MLX 1.000 block + the 2 Fortran rows), adaptive color scale so the
+  ~0.90 vs 1.00 differences show. `..._16ch.png` is the high-k case where all backends match.
+- `benchmarks/figures/phase3_ic_topomaps_70ch.png` -- IC scalp maps, variance-ordered (IC1 = highest variance, EEGLAB
   convention), each backend's matched + sign-aligned map; columns are visibly identical down
   the rows for the well-determined components.
 

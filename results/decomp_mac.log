@@ -1,0 +1,24 @@
+lrate floor (1e-12) reached at iter 1444; stopping.
+platform Darwin-arm64 | channels [16, 32, 48, 70] | iters 2000 | ['native-fortran-f64', 'mlx-f32']
+
+16ch, 147000 frames (k=574.2)
+  native-fortran-f64          116.6 s   LL=-3.61092   [117s wall]  -> native-fortran-f64_16ch_Darwin-arm64.npz
+  mlx-f32                     171.6 s   LL=-3.61131   [172s wall]  -> mlx-f32_16ch_Darwin-arm64.npz
+
+32ch, 147000 frames (k=143.6)
+  native-fortran-f64          238.2 s   LL=-3.48314   [238s wall]  -> native-fortran-f64_32ch_Darwin-arm64.npz
+  mlx-f32                     249.7 s   LL=-3.48325   [250s wall]  -> mlx-f32_32ch_Darwin-arm64.npz
+
+48ch, 147000 frames (k=63.8)
+  native-fortran-f64          376.7 s   LL=-3.44424   [377s wall]  -> native-fortran-f64_48ch_Darwin-arm64.npz
+  mlx-f32                     268.8 s   LL=-3.44454   [269s wall]  -> mlx-f32_48ch_Darwin-arm64.npz
+
+70ch, 147000 frames (k=30.0)
+  native-fortran-f64          607.7 s   LL=-3.49377   [608s wall]  -> native-fortran-f64_70ch_Darwin-arm64.npz
+  mlx-f32                     307.5 s   LL=-3.49896   [308s wall]  -> mlx-f32_70ch_Darwin-arm64.npz
+platform Darwin-arm64 | channels [70] | iters 2000 | ['torch-mps-f32', 'torch-cpu-f64', 'torch-cpu-f32']
+
+70ch, 147000 frames (k=30.0)
+  torch-mps-f32              2074.8 s   LL=-3.49892   [2075s wall]  -> torch-mps-f32_70ch_Darwin-arm64.npz
+  torch-cpu-f64              1842.2 s   LL=-3.49879   [1842s wall]  -> torch-cpu-f64_70ch_Darwin-arm64.npz
+  torch-cpu-f32              1616.0 s   LL=-3.49895   [1616s wall]  -> torch-cpu-f32_70ch_Darwin-arm64.npz
