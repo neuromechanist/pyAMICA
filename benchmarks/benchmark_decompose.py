@@ -204,7 +204,7 @@ def _match_correlation(W1: np.ndarray, W2: np.ndarray) -> np.ndarray:
     return corr[row, col]
 
 
-def _compare(dirs, figure=None):
+def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6):
     runs = []
     for d in dirs:
         for f in sorted(Path(d).glob("*.npz")):
@@ -216,6 +216,7 @@ def _compare(dirs, figure=None):
                     "time": float(z["time"]),
                     "final_ll": float(z["final_ll"]),
                     "W": z["W"],
+                    "A": z["A"],
                 }
             )
     if not runs:
@@ -253,6 +254,95 @@ def _compare(dirs, figure=None):
 
     if figure:
         _plot(labels, M, target, figure)
+    if topo_figure and montage:
+        _plot_topomaps(group, montage, target, topo_figure, n_topo)
+
+
+def _load_info(montage_tsv, n_channels):
+    """Build an MNE Info with a scalp montage from a BIDS electrodes.tsv.
+
+    NOTE: the tsv coordinates may need a rotation to MNE's head frame (nose +y)
+    for the absolute orientation to be correct -- to be checked/fixed later. A
+    global rotation does NOT affect the cross-backend equivalence (every backend
+    shares the montage), only the absolute nose-up orientation of the maps."""
+    import csv
+
+    import mne
+
+    pos = {}
+    with open(montage_tsv) as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            try:  # skip channels with an 'n/a' (unlocalized / non-EEG) position
+                pos[row["name"]] = (
+                    np.array([float(row["x"]), float(row["y"]), float(row["z"])])
+                    / 100.0  # tsv is in cm; MNE head frame is meters
+                )
+            except ValueError:
+                continue
+    ch_names = [f"EEG{i:03d}" for i in range(1, n_channels + 1)]
+    # some channels can be unlocalized ('n/a'); topomap only the located subset
+    located = np.array([i for i, n in enumerate(ch_names) if n in pos])
+    used = [ch_names[i] for i in located]
+    dig = mne.channels.make_dig_montage(
+        ch_pos={n: pos[n] for n in used}, coord_frame="head"
+    )
+    info = mne.create_info(used, sfreq=250.0, ch_types="eeg")
+    info.set_montage(dig)
+    return info, located
+
+
+def _plot_topomaps(group, montage_tsv, channels, path, n_comps):
+    """Grid of IC scalp maps: rows = backends, cols = the first n_comps
+    reference components, each backend's matched + sign-aligned component. If
+    every backend recovers the same ICs the columns look identical down the rows."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import mne
+    from scipy.optimize import linear_sum_assignment
+
+    info, located = _load_info(montage_tsv, channels)
+    ref = group[0]  # reference backend (first, typically native-fortran)
+    Wref = ref["W"] / (np.linalg.norm(ref["W"], axis=1, keepdims=True) + 1e-12)
+    n_comps = min(n_comps, channels)
+    fig, axes = plt.subplots(
+        len(group),
+        n_comps,
+        figsize=(1.5 * n_comps, 1.5 * len(group) + 0.5),
+        squeeze=False,
+    )
+    for bi, r in enumerate(group):
+        Wb = r["W"] / (np.linalg.norm(r["W"], axis=1, keepdims=True) + 1e-12)
+        corr = Wref @ Wb.T  # signed cosine between ref and this backend
+        _row, col = linear_sum_assignment(-np.abs(corr))
+        for i in range(n_comps):
+            j = col[i]
+            sign = 1.0 if corr[i, j] >= 0 else -1.0
+            # A row = component's channel projection; index to the located subset
+            scalp = r["A"][j, located] * sign
+            ax = axes[bi][i]
+            mne.viz.plot_topomap(scalp, info, axes=ax, show=False, contours=4)
+            if bi == 0:
+                ax.set_title(f"IC{i + 1}", fontsize=9)
+        axes[bi][0].text(
+            -0.35,
+            0.5,
+            r["label"].split("@")[0],
+            rotation=90,
+            fontsize=7,
+            va="center",
+            ha="center",
+            transform=axes[bi][0].transAxes,
+        )
+    fig.suptitle(
+        f"AMICA IC scalp maps @ {channels} channels -- matched across backends "
+        "(rows), same IC (columns)",
+        fontsize=10,
+    )
+    fig.tight_layout(rect=(0.02, 0, 1, 0.97))
+    fig.savefig(path, dpi=150)
+    print(f"wrote {path}")
 
 
 def _plot(labels, M, channels, path):
@@ -303,10 +393,21 @@ def main() -> int:
     ap.add_argument("--out", help="directory to write per-run npz into")
     ap.add_argument("--compare", nargs="+", help="result dirs -> equivalence report")
     ap.add_argument("--figure", help="write the equivalence heatmap PNG here")
+    ap.add_argument("--montage", help="BIDS electrodes.tsv for IC scalp-map topomaps")
+    ap.add_argument(
+        "--topo-figure", dest="topo_figure", help="write the IC topomap grid PNG here"
+    )
+    ap.add_argument(
+        "--n-topo",
+        type=int,
+        default=6,
+        dest="n_topo",
+        help="# components in the topomap grid",
+    )
     args = ap.parse_args()
 
     if args.compare:
-        _compare(args.compare, args.figure)
+        _compare(args.compare, args.figure, args.montage, args.topo_figure, args.n_topo)
         return 0
     if not args.data or not args.out:
         ap.error("--data and --out are required unless --compare is given")
