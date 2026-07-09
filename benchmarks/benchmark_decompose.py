@@ -320,11 +320,18 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
         return
 
     # data-size (k) sweep (#90): at the top channel count, if multiple frame counts
-    # were run, report mean cross-backend equivalence vs k = frames/ch^2.
+    # were run, report mean cross-backend equivalence vs k = frames/ch^2. When a
+    # k-sweep runs it owns --figure (the headline plot); the per-config matrix below
+    # then goes to a derived "{stem}_matrix{suffix}" path so neither overwrites the
+    # other.
     top_ch = max(r["channels"] for r in runs)
     top_runs = [r for r in runs if r["channels"] == top_ch]
+    matrix_figure = figure
     if len({r["frames"] for r in top_runs}) > 1:
         _k_sweep(top_runs, figure)
+        if figure:
+            p = Path(figure)
+            matrix_figure = str(p.with_name(f"{p.stem}_matrix{p.suffix}"))
 
     # single-config equivalence matrix + topomaps: use the largest (channels, frames)
     by_cf: dict = {}
@@ -363,8 +370,8 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
         f"(min {offdiag.min():.4f}) -- ~1.0 => same ICs recovered"
     )
 
-    if figure:
-        _plot(labels, M, target, figure)
+    if matrix_figure:
+        _plot(labels, M, target, matrix_figure)
     if topo_figure and montage:
         _plot_topomaps(group, montage, target, topo_figure, n_topo, full)
 
