@@ -31,10 +31,11 @@ Mean pairwise Hungarian-matched |corr| across the 3 backends
 
 The hypothesis holds **directionally** with an important nuance: equivalence rises sharply from
 0.91 (k=15) to 0.98 (k=60) and then **plateaus at ~0.982**, it does not keep climbing to 1.0.
-The knee is at **k ~= 60** (frames ~= 3 * channels^2): below it the decomposition is
-under-determined and backends settle into different (equally valid) local optima on the weak
-components; above it the strong-and-medium components lock and only the residual precision /
-init spread remains.
+The transition is complete by **k ~= 60** (frames ~= 3 * channels^2); the sweep samples no point
+between k=30 (0.929) and k=60 (0.982), so the exact knee within that gap is unresolved (it is an
+upper bound, not a pinpoint). Below it the decomposition is under-determined and backends settle
+into different (equally valid) local optima on the weak components; above it the
+strong-and-medium components lock and only the residual precision / init spread remains.
 
 ## Why the plateau sits at 0.98, not 1.0
 

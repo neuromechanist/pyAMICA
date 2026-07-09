@@ -240,10 +240,10 @@ def _k_sweep(runs, figure=None):
     nc = runs[0]["channels"]
     by_f: dict = {}
     for r in runs:
+        if r["frames"] <= 0:  # legacy npz without a recorded frame count -> skip
+            continue
         by_f.setdefault(r["frames"], []).append(r)
-    print(f"\n=== data-size (k) sweep @ {nc} channels ===")
-    print("  frames        k   mean|corr|   min    comps>0.95   n")
-    rows = []
+    rows, lines = [], []
     for nf in sorted(by_f):
         g = by_f[nf]
         if len(g) < 2:
@@ -258,11 +258,21 @@ def _k_sweep(runs, figure=None):
         k = nf / nc**2
         mean_eq = float(np.mean(pair_means))
         rows.append((nf, k, mean_eq))
-        print(
+        lines.append(
             f"  {nf:8d}  {k:6.1f}    {mean_eq:.4f}   {min(pair_means):.4f}"
             f"     {(allc > 0.95).mean() * 100:5.1f}%   {len(g)}"
         )
-    if figure and rows:
+    if not rows:  # every frame count had <2 backends -- nothing to compare
+        print(
+            f"\n  data-size (k) sweep @ {nc} channels: need >=2 backends at a shared "
+            "frame count -- nothing to compare"
+        )
+        return
+    print(f"\n=== data-size (k) sweep @ {nc} channels ===")
+    print("  frames        k   mean|corr|   min    comps>0.95   n")
+    for ln in lines:
+        print(ln)
+    if figure:
         _plot_ksweep(rows, nc, figure)
 
 
@@ -326,8 +336,20 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
     # other.
     top_ch = max(r["channels"] for r in runs)
     top_runs = [r for r in runs if r["channels"] == top_ch]
+    # legacy npz (pre-#90) carry no frame count (frames == -1); they can't join a
+    # k-sweep and won't group with per-frame npz in the matrix below, so warn rather
+    # than silently mis-group when the two formats are merged in one --compare.
+    if any(r["frames"] < 0 for r in top_runs) and any(
+        r["frames"] > 0 for r in top_runs
+    ):
+        print(
+            f"  warning: {top_ch}ch mixes legacy npz (no recorded frame count) with "
+            "per-frame npz; legacy runs are excluded from the k-sweep and grouped "
+            "separately in the equivalence matrix"
+        )
+    real_frames = {r["frames"] for r in top_runs if r["frames"] > 0}
     matrix_figure = figure
-    if len({r["frames"] for r in top_runs}) > 1:
+    if len(real_frames) > 1:
         _k_sweep(top_runs, figure)
         if figure:
             p = Path(figure)
@@ -373,7 +395,11 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
     if matrix_figure:
         _plot(labels, M, target, matrix_figure)
     if topo_figure and montage:
-        _plot_topomaps(group, montage, target, topo_figure, n_topo, full)
+        # de-sphere must recompute the sphere from the SAME frames the group was fit
+        # on (#90 --frames can truncate); pass the matching slice, not the full array.
+        nf = target_cf[1]
+        topo_data = full[:, :nf] if (full is not None and nf > 0) else full
+        _plot_topomaps(group, montage, target, topo_figure, n_topo, topo_data)
 
 
 def _load_info(montage_tsv, n_channels):
@@ -581,12 +607,15 @@ def main() -> int:
     tag = _platform_tag()
     print(f"platform {tag} | channels {channels} | iters {args.iters} | {backends}")
 
+    # clamp to the available frames and dedupe up front so two requested counts that
+    # collapse to the same length don't re-fit identical data and clobber each other's npz.
     frame_list = (
-        [int(f) for f in args.frames.split(",")] if args.frames else [full.shape[1]]
+        sorted({min(int(f), full.shape[1]) for f in args.frames.split(",")})
+        if args.frames
+        else [full.shape[1]]
     )
     for nc in channels:
         for nf in frame_list:
-            nf = min(nf, full.shape[1])
             data = np.ascontiguousarray(full[:nc, :nf])
             k = nf / nc**2
             print(f"\n{nc}ch, {nf} frames (k={k:.1f})")
