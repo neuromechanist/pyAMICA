@@ -11,8 +11,8 @@ Three axes (channel x core x FP):
   * channels  -- sweep with --channels (each needs k = frames/ch^2 >= ~20-30 for
     a well-determined decomposition; the k30 data has 147k frames -> k=30 at 70ch)
   * cores     -- --threads for the CPU backends (torch-cpu, native-fortran)
-  * precision -- --dtypes f64,f32 (torch-cpu/cuda run both; mlx/mps are f32-only;
-    native-fortran is f64-only)
+  * precision -- pick the f32/f64 backend names in --backends (torch-cpu/cuda have
+    both; mlx/mps are f32-only; native-fortran is f64-only)
 
 numpy is intentionally excluded (too slow at k30 and not a backend to recommend).
 
@@ -204,14 +204,15 @@ def _match_correlation(W1: np.ndarray, W2: np.ndarray) -> np.ndarray:
     return corr[row, col]
 
 
-def _variance_order(W, data, channels):
-    """EEGLAB-style component order by back-projected variance (highest first).
+def _desphere(W, data, channels):
+    """Recompute the symmetric-ZCA sphere from the data and return the de-sphered
+    mixing (channels x comps, columns = true sensor-space IC scalp maps, the
+    EEGLAB representation) and the source activations (comps x time).
 
-    Recomputes the symmetric-ZCA sphere from the data (every backend spheres the
-    same data the same way), projects the sphered-space unmixing W to source
-    activations, and ranks components by the variance each contributes back to
-    the sensor data (``||desphered mixing col||^2 * var(source)``). torch/mlx
-    normalize the mixing matrix, so the variance lives in the sources, not in A."""
+    The saved A is whitened-space loadings; the sphere is far from identity, so
+    the sensor-space scalp maps and the variance-explained both need de-sphering.
+    Every backend spheres the same data the same way, so the recomputed sphere
+    matches each backend's own (symmetric ZCA, no PCA reduction)."""
     x = np.ascontiguousarray(data[:channels]).astype(np.float64)
     x = x - x.mean(axis=1, keepdims=True)
     cov = (x @ x.T) / x.shape[1]
@@ -219,8 +220,15 @@ def _variance_order(W, data, channels):
     d = np.clip(d, 1e-12, None)
     sphere = (V * (1.0 / np.sqrt(d))) @ V.T  # symmetric ZCA
     U = W @ sphere  # comps x channels, unmixing from the original sensors
-    sources = U @ x
     ades = np.linalg.pinv(U)  # channels x comps, de-sphered mixing (scalp maps)
+    return ades, U @ x
+
+
+def _variance_order(W, data, channels):
+    """EEGLAB-style component order by back-projected variance (highest first):
+    ``||desphered mixing col||^2 * var(source)`` (torch/mlx normalize the
+    whitened-space A, so the variance lives in the sources, not in A)."""
+    ades, sources = _desphere(W, data, channels)
     projvar = (ades**2).sum(axis=0) * sources.var(axis=1)
     return np.argsort(-projvar)
 
@@ -257,6 +265,13 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
     print(f"\n=== decompose time + final LL @ {target} channels, sorted by time ===")
     for r in sorted(group, key=lambda x: x["time"]):
         print(f"  {r['label']:24s} {r['time']:8.1f} s   LL={r['final_ll']:+.5f}")
+
+    if n < 2:
+        print(
+            f"\n  only one backend result at {target} channels -- nothing to "
+            "compare (merge more --out dirs for an equivalence matrix)"
+        )
+        return
 
     print(f"\n=== IC equivalence: mean Hungarian-matched |corr| @ {target}ch ===")
     M = np.eye(n)
@@ -327,7 +342,7 @@ def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
     from scipy.optimize import linear_sum_assignment
 
     info, located = _load_info(montage_tsv, channels)
-    ref = group[0]  # reference backend (first, typically native-fortran)
+    ref = group[0]  # reference backend: the first result loaded (glob order)
     Wref = ref["W"] / (np.linalg.norm(ref["W"], axis=1, keepdims=True) + 1e-12)
     n_ref = Wref.shape[0]
 
@@ -357,11 +372,13 @@ def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
     )
     for bi, r in enumerate(group):
         col, corr = matches[bi]
+        # de-sphered mixing = true sensor-space IC scalp maps (EEGLAB); the saved
+        # A is whitened-space. Fall back to A only if no data to recompute the sphere.
+        ades = _desphere(r["W"], data, channels)[0] if data is not None else r["A"]
         for ci, i in enumerate(order):
             j = col[i]
             sign = 1.0 if corr[i, j] >= 0 else -1.0
-            # A row = component's channel projection; index to the located subset
-            scalp = r["A"][j, located] * sign
+            scalp = ades[located, j] * sign  # column j = component j's scalp map
             ax = axes[bi][ci]
             mne.viz.plot_topomap(scalp, info, axes=ax, show=False, contours=4)
             if bi == 0:

@@ -54,22 +54,30 @@ follow-up test in #90.
 
 | backend | machine | total time |
 |---|---|---|
-| MLX-f32 | Mac (Apple GPU) | **~5 min** |
-| torch-cuda-f32/f64 | hallu (RTX 4090) | ~6 min |
-| native-fortran-f64 | either | ~10 min |
-| torch-cpu-f32/f64 | Mac (14-core) | ~27-31 min |
+| native-fortran-f64 | hallu (Linux, 32 cores) | **~4.4 min** |
+| MLX-f32 | Mac (Apple GPU) | ~5.1 min |
+| torch-cuda-f32 / f64 | hallu (RTX 4090) | ~5.6 / ~6.1 min |
+| native-fortran-f64 | Mac (arm64) | ~10.1 min |
+| torch-cpu-f32 / f64 | Mac (14 cores) | ~27 / ~31 min |
+| torch-cpu-f32 / f64 | hallu (32 cores, default threads) | ~29 / **~67 min** |
 | torch-mps-f32 | Mac | ~35 min |
 
-MLX is again the efficiency winner; MPS is the worst (use MLX, never MPS on Apple). The GPU
-finally runs sustained here (a full decomposition, not the per-iteration blips of Phase 2).
+Native Fortran on the 32-core Linux host is the fastest end-to-end (~4.4 min), ~2x its own Mac
+time; MLX and CUDA follow at ~5-6 min. The GPU finally runs sustained here (a full
+decomposition, not the per-iteration blips of Phase 2). Two cautions confirmed from Phase 2:
+torch-cpu-f64 on hallu at the default (all-32-core) thread count is the worst CPU number
+(~67 min, oversubscription), and torch-MPS is the worst GPU path (~35 min) -- use MLX, never
+MPS, on Apple.
 
 ## Figures
 - `benchmarks/figures/phase3_equivalence_matrix_70ch.png` -- square cross-backend IC-equivalence
   matrix (the 8-backend torch/MLX 1.000 block + the 2 Fortran rows), adaptive color scale so the
   ~0.90 vs 1.00 differences show. `..._16ch.png` is the high-k case where all backends match.
-- `benchmarks/figures/phase3_ic_topomaps_70ch.png` -- IC scalp maps, variance-ordered (IC1 = highest variance, EEGLAB
-  convention), each backend's matched + sign-aligned map; columns are visibly identical down
-  the rows for the well-determined components.
+- `benchmarks/figures/phase3_ic_topomaps_70ch.png` -- IC scalp maps, variance-ordered (IC1 =
+  highest variance, EEGLAB convention). Each map is the **de-sphered** sensor-space projection
+  (the saved A is whitened-space loadings; the harness recomputes the symmetric-ZCA sphere from
+  the data and de-spheres, so these are true EEGLAB-style scalp maps), Hungarian-matched and
+  sign-aligned; columns are visibly identical down the rows for the well-determined components.
 
 ## Caveats / follow-ups
 - Electrode positions from the BIDS electrodes.tsv may need a rotation to MNE's head frame for
