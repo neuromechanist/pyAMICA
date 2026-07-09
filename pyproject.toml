@@ -31,6 +31,7 @@ dependencies = [
     "tqdm",
     "json5",
     "torch>=2.12.1",
+    "threadpoolctl>=3",
 ]
 
 # Optional Apple-Silicon GPU backend (AMICAMLXNG). MLX is Apple-only, so it is
