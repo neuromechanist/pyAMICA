@@ -41,3 +41,6 @@ bench_out/
 # Local secrets (never commit)
 .env
 .env.*
+
+# Decomposition benchmark run artifacts (#87)
+results/
