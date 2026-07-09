@@ -204,7 +204,29 @@ def _match_correlation(W1: np.ndarray, W2: np.ndarray) -> np.ndarray:
     return corr[row, col]
 
 
-def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6):
+def _variance_order(W, data, channels):
+    """EEGLAB-style component order by back-projected variance (highest first).
+
+    Recomputes the symmetric-ZCA sphere from the data (every backend spheres the
+    same data the same way), projects the sphered-space unmixing W to source
+    activations, and ranks components by the variance each contributes back to
+    the sensor data (``||desphered mixing col||^2 * var(source)``). torch/mlx
+    normalize the mixing matrix, so the variance lives in the sources, not in A."""
+    x = np.ascontiguousarray(data[:channels]).astype(np.float64)
+    x = x - x.mean(axis=1, keepdims=True)
+    cov = (x @ x.T) / x.shape[1]
+    d, V = np.linalg.eigh(cov)
+    d = np.clip(d, 1e-12, None)
+    sphere = (V * (1.0 / np.sqrt(d))) @ V.T  # symmetric ZCA
+    U = W @ sphere  # comps x channels, unmixing from the original sensors
+    sources = U @ x
+    ades = np.linalg.pinv(U)  # channels x comps, de-sphered mixing (scalp maps)
+    projvar = (ades**2).sum(axis=0) * sources.var(axis=1)
+    return np.argsort(-projvar)
+
+
+def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=None):
+    full = np.load(data).astype(np.float64) if data else None
     runs = []
     for d in dirs:
         for f in sorted(Path(d).glob("*.npz")):
@@ -255,7 +277,7 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6):
     if figure:
         _plot(labels, M, target, figure)
     if topo_figure and montage:
-        _plot_topomaps(group, montage, target, topo_figure, n_topo)
+        _plot_topomaps(group, montage, target, topo_figure, n_topo, full)
 
 
 def _load_info(montage_tsv, n_channels):
@@ -291,10 +313,12 @@ def _load_info(montage_tsv, n_channels):
     return info, located
 
 
-def _plot_topomaps(group, montage_tsv, channels, path, n_comps):
-    """Grid of IC scalp maps: rows = backends, cols = the first n_comps
-    reference components, each backend's matched + sign-aligned component. If
-    every backend recovers the same ICs the columns look identical down the rows."""
+def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
+    """Grid of IC scalp maps: rows = backends, cols = components. Columns are
+    ordered by the reference's back-projected variance (EEGLAB convention, IC1 =
+    highest variance) when ``data`` is given, else by cross-backend match. Each
+    cell is that backend's Hungarian-matched, sign-aligned map; identical columns
+    down the rows mean every backend recovered the same IC."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -305,26 +329,44 @@ def _plot_topomaps(group, montage_tsv, channels, path, n_comps):
     info, located = _load_info(montage_tsv, channels)
     ref = group[0]  # reference backend (first, typically native-fortran)
     Wref = ref["W"] / (np.linalg.norm(ref["W"], axis=1, keepdims=True) + 1e-12)
-    n_comps = min(n_comps, channels)
-    fig, axes = plt.subplots(
-        len(group),
-        n_comps,
-        figsize=(1.5 * n_comps, 1.5 * len(group) + 0.5),
-        squeeze=False,
-    )
-    for bi, r in enumerate(group):
+    n_ref = Wref.shape[0]
+
+    # per-backend Hungarian match to the reference + a per-ref-component match score
+    matches = []
+    score = np.zeros(n_ref)
+    for r in group:
         Wb = r["W"] / (np.linalg.norm(r["W"], axis=1, keepdims=True) + 1e-12)
         corr = Wref @ Wb.T  # signed cosine between ref and this backend
         _row, col = linear_sum_assignment(-np.abs(corr))
-        for i in range(n_comps):
+        matches.append((col, corr))
+        if r is not ref:
+            score += np.abs(corr[np.arange(n_ref), col])
+    score /= max(len(group) - 1, 1)
+
+    # column order: EEGLAB back-projected variance if data available, else match
+    if data is not None:
+        order = _variance_order(ref["W"], data, channels)[:n_comps]
+    else:
+        order = np.argsort(-score)[: min(n_comps, n_ref)]
+
+    fig, axes = plt.subplots(
+        len(group),
+        len(order),
+        figsize=(1.5 * len(order), 1.5 * len(group) + 0.5),
+        squeeze=False,
+    )
+    for bi, r in enumerate(group):
+        col, corr = matches[bi]
+        for ci, i in enumerate(order):
             j = col[i]
             sign = 1.0 if corr[i, j] >= 0 else -1.0
             # A row = component's channel projection; index to the located subset
             scalp = r["A"][j, located] * sign
-            ax = axes[bi][i]
+            ax = axes[bi][ci]
             mne.viz.plot_topomap(scalp, info, axes=ax, show=False, contours=4)
             if bi == 0:
-                ax.set_title(f"IC{i + 1}", fontsize=9)
+                # IC index is the variance rank (IC1 = highest variance); r = match
+                ax.set_title(f"IC{ci + 1}\n(r={score[i]:.3f})", fontsize=8)
         axes[bi][0].text(
             -0.35,
             0.5,
@@ -351,28 +393,36 @@ def _plot(labels, M, channels, path):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(1.1 * len(labels) + 2, 1.0 * len(labels) + 1.5))
-    im = ax.imshow(M, vmin=0.9, vmax=1.0, cmap="viridis")
-    ax.set_xticks(range(len(labels)))
-    ax.set_yticks(range(len(labels)))
+    n = len(labels)
+    # square figure + equal-aspect cells so the matrix reads as a true square.
+    fig, ax = plt.subplots(figsize=(0.85 * n + 3.5, 0.85 * n + 3.0))
+    # stretch the color range to the actual off-diagonal spread so the small
+    # differences (e.g. fortran ~0.90 vs torch/mlx 1.000) are visible, not washed
+    # out by a fixed 0.9-1.0 scale.
+    off = M[~np.eye(n, dtype=bool)]
+    vmin = np.floor(off.min() * 100) / 100
+    im = ax.imshow(M, vmin=vmin, vmax=1.0, cmap="viridis", aspect="equal")
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
     ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
     ax.set_yticklabels(labels, fontsize=8)
-    for i in range(len(labels)):
-        for j in range(len(labels)):
+    mid = (vmin + 1.0) / 2
+    for i in range(n):
+        for j in range(n):
             ax.text(
                 j,
                 i,
                 f"{M[i, j]:.3f}",
                 ha="center",
                 va="center",
-                color="white" if M[i, j] < 0.97 else "black",
-                fontsize=7,
+                color="white" if M[i, j] < mid else "black",
+                fontsize=8,
             )
     ax.set_title(
         f"AMICA cross-backend IC equivalence @ {channels} channels\n"
         "mean Hungarian-matched |correlation| of unmixing components"
     )
-    fig.colorbar(im, ax=ax, label="mean |corr|")
+    fig.colorbar(im, ax=ax, label="mean |corr|", fraction=0.046, pad=0.04)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     print(f"wrote {path}")
@@ -407,7 +457,14 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.compare:
-        _compare(args.compare, args.figure, args.montage, args.topo_figure, args.n_topo)
+        _compare(
+            args.compare,
+            args.figure,
+            args.montage,
+            args.topo_figure,
+            args.n_topo,
+            args.data,
+        )
         return 0
     if not args.data or not args.out:
         ap.error("--data and --out are required unless --compare is given")
