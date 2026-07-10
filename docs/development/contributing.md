@@ -1,8 +1,9 @@
 # Contributing
 
-Contributions are welcome. This page summarizes the development workflow; a
-top-level `CONTRIBUTING.md` with the full community guidelines will accompany the
-first public release.
+Contributions are welcome. This page summarizes the development workflow; see the
+full [CONTRIBUTING](https://github.com/neuromechanist/pyAMICA/blob/main/CONTRIBUTING.md)
+and [Code of Conduct](https://github.com/neuromechanist/pyAMICA/blob/main/CODE_OF_CONDUCT.md)
+in the repository root.
 
 ## Development setup
 

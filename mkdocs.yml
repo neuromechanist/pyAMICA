@@ -43,6 +43,8 @@ theme:
 markdown_extensions:
   - admonition
   - pymdownx.details
+  - pymdownx.arithmatex: # LaTeX math via MathJax (see extra_javascript below)
+      generic: true
   - pymdownx.superfences
   - pymdownx.highlight:
       anchor_linenums: true
@@ -75,9 +77,19 @@ plugins:
       enable_creation_date: true
       fallback_to_build_date: true
 
+# MathJax (LaTeX math) — see docs/javascripts/mathjax.js for the arithmatex hookup
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Background:
+      - Overview: concepts/index.md
+      - What is ICA?: concepts/what-is-ica.md
+      - What is AMICA?: concepts/what-is-amica.md
+      - How AMICA works: concepts/how-amica-works.md
   - User Guide:
       - Overview: guides/index.md
       - Backends & Devices: guides/backends.md
