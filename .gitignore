@@ -44,3 +44,6 @@ bench_out/
 
 # Decomposition benchmark run artifacts (#87)
 results/
+
+# MkDocs build output
+site/

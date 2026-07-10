@@ -39,6 +39,13 @@ dependencies = [
 # pyAMICA[mlx]`. `import pyAMICA` never requires it (mlx_impl is imported lazily).
 [project.optional-dependencies]
 mlx = ["mlx>=0.32"]
+# Documentation stack (MkDocs Material + mkdocstrings). Built and deployed to
+# GitHub Pages by .github/workflows/docs.yml via `uv sync --extra docs`.
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+    "mkdocs-git-revision-date-localized-plugin>=1.2",
+]
 
 [project.urls]
 Homepage = "http://github.com/neuromechanist/pyAMICA"
