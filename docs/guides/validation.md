@@ -43,7 +43,31 @@ rule-of-thumb minimum (`k` around 20-30) only the strongest components are
 backend-reproducible, while the rest are under-determined and settle into
 different but equally valid local optima (AMICA is non-convex).
 
-!!! info "Data-size sweep in progress"
-    A quantitative data-size sweep at 70 channels (holding channels fixed and
-    increasing frames so `k` rises) is being finalized to chart cross-backend
-    equivalence versus `k`. The results figure and table will be added here.
+### Data-size sweep: equivalence versus k
+
+Holding channels fixed at 70 and increasing the number of frames (so `k` rises),
+on real EEG (ds002718 sub-002), cross-backend IC equivalence climbs sharply and
+then saturates once the decomposition is well-determined:
+
+![Cross-backend IC equivalence versus the data-adequacy factor k at 70 channels.](../assets/figures/kfactor-equivalence.png){ width=640 }
+/// caption
+Mean Hungarian-matched cross-backend |correlation| versus $k = \text{frames} /
+\text{channels}^2$ (70 channels, 2000 iterations, native-Fortran and PyTorch-CUDA
+float64/float32 backends). Equivalence saturates at ~0.98 once $k \geq 60$.
+///
+
+| frames | k | mean \|corr\| | components >0.95 |
+|---|---|---|---|
+| 73,500 | 15 | 0.892 | 49.5% |
+| 147,000 | 30 | 0.932 | 61.4% |
+| 294,000 | 60 | 0.983 | 92.9% |
+| 490,000 | 100 | 0.983 | 96.2% |
+| 747,750 | 152 | 0.982 | 92.4% |
+
+!!! note "The threshold is data-specific"
+    For this recording the equivalence knee falls **between k=30 and k=60**; below
+    it the backends settle into different (equally valid) local optima, above it
+    they recover the same components. Where that knee sits depends on the data
+    (signal-to-noise ratio, effective rank, source structure), so this is not a
+    universal value of `k`. The plateau is ~0.98 rather than 1.0 because of
+    intrinsic estimator spread and the float32 path, not a backend defect.
