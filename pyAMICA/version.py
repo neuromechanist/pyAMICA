@@ -20,7 +20,7 @@ CLASSIFIERS = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Topic :: Scientific/Engineering",
@@ -50,7 +50,7 @@ DESCRIPTION = description
 LONG_DESCRIPTION = long_description
 URL = "http://github.com/neuromechanist/pyAMICA"
 DOWNLOAD_URL = ""
-LICENSE = "MIT"
+LICENSE = "BSD-3-Clause"
 AUTHOR = "Seyed Yahya Shirazi"
 AUTHOR_EMAIL = "shirazi@ieee.org"
 PLATFORMS = "OS Independent"
