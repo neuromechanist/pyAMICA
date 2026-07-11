@@ -12,9 +12,17 @@ authors:
     orcid: 0000-0001-5557-259X
     corresponding: true
     affiliation: 1
+  - name: Arnaud Delorme
+    orcid: 0000-0002-0799-3557
+    affiliation: "1, 2"
+  - name: Scott Makeig
+    orcid: 0000-0002-9048-8438
+    affiliation: 1
 affiliations:
   - name: Swartz Center for Computational Neuroscience, Institute for Neural Computation, University of California San Diego, USA
     index: 1
+  - name: Centre de Recherche Cerveau et Cognition (CerCo), CNRS, University of Toulouse, France
+    index: 2
 date: 11 July 2026
 bibliography: paper.bib
 ---
@@ -51,9 +59,9 @@ AMICA yields components that are well suited to equivalent-dipole source
 localization and to automated classification of independent components
 [@piontonachini2019iclabel], and it separates EEG more effectively than most
 alternatives [@delorme2012independent; @palmer2012amica]. The reference
-implementation is the original Fortran code: it depends on a Message Passing
-Interface (MPI) toolchain and precompiled binaries that are awkward to build
-across platforms, it cannot use a GPU, and it is invoked as an external process
+implementation is the original Fortran code: it depends on an MPI toolchain and
+precompiled binaries that are awkward to build across platforms, it cannot use a
+GPU, and it is invoked as an external process
 from MATLAB rather than called from Python. As neuroimaging analysis has moved
 toward Python, for example MNE-Python [@gramfort2013meg], an AMICA that runs
 natively in Python and on a GPU, and that is validated to reproduce the Fortran
@@ -119,8 +127,8 @@ output, and by an MLX backend for Apple GPUs.
 
 # Acknowledgements
 
-We thank Jason Palmer, Ken Kreutz-Delgado, and Scott Makeig for developing AMICA
-and making the reference implementation available, and the EEGLAB community for
-the tools and sample data used to validate this work.
+We thank Jason Palmer and Ken Kreutz-Delgado, co-developers of AMICA, for the
+reference implementation, and the EEGLAB community for the tools and sample data
+used to validate this work.
 
 # References
