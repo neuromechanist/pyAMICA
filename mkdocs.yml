@@ -1,17 +1,16 @@
 # pyAMICA documentation (MkDocs Material).
-# Deployed to GitHub Pages by .github/workflows/docs.yml. Once the repo lives at
-# github.com/sccn/pyAMICA, its project Pages inherit the sccn org Pages custom
+# Deployed to GitHub Pages by .github/workflows/docs.yml. The repo lives at
+# github.com/sccn/pyAMICA, whose project Pages inherit the sccn org Pages custom
 # domain (eeglab.org) at the /pyAMICA subpath, so the site is served at
-# https://eeglab.org/pyAMICA/. Links are relative so the same build also works at
-# https://neuromechanist.github.io/pyAMICA/ before the transfer.
+# https://eeglab.org/pyAMICA/. Links are relative so the build is location-independent.
 
 site_name: pyAMICA Documentation
 site_url: https://eeglab.org/pyAMICA/
 site_description: Python (PyTorch) implementation of Adaptive Mixture ICA (AMICA) with Fortran parity and GPU/MPS/CPU support.
 site_author: Seyed Yahya Shirazi
 
-repo_url: https://github.com/neuromechanist/pyAMICA/
-repo_name: neuromechanist/pyAMICA
+repo_url: https://github.com/sccn/pyAMICA/
+repo_name: sccn/pyAMICA
 edit_uri: edit/main/docs/
 
 theme:

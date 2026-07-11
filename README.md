@@ -1,7 +1,7 @@
 # pyAMICA: Adaptive Mixture ICA
 
-[![CI](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/neuromechanist/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/neuromechanist/pyAMICA)
+[![CI](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/sccn/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/sccn/pyAMICA)
 
 Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis
 (AMICA) that reproduces the reference Fortran implementation within numerical
@@ -31,7 +31,7 @@ AMICA (Adaptive Mixture ICA) is an advanced blind source separation algorithm th
 The canonical environment is [uv](https://docs.astral.sh/uv/):
 
 ```bash
-git clone https://github.com/neuromechanist/pyAMICA.git
+git clone https://github.com/sccn/pyAMICA.git
 cd pyAMICA
 uv sync                     # install dependencies into a managed venv
 uv run pytest               # optional: run the tests
