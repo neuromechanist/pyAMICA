@@ -233,6 +233,81 @@ def _variance_order(W, data, channels):
     return np.argsort(-projvar)
 
 
+def _k_sweep(runs, figure=None):
+    """Data-size hypothesis test (#90): at fixed channels, mean cross-backend
+    Hungarian-matched |corr| vs k = frames/ch^2. Equivalence should rise toward
+    1.0 as k grows (the decomposition becomes well-determined)."""
+    nc = runs[0]["channels"]
+    by_f: dict = {}
+    for r in runs:
+        if r["frames"] <= 0:  # legacy npz without a recorded frame count -> skip
+            continue
+        by_f.setdefault(r["frames"], []).append(r)
+    rows, lines = [], []
+    for nf in sorted(by_f):
+        g = by_f[nf]
+        if len(g) < 2:
+            continue
+        pair_means, all_c = [], []
+        for i in range(len(g)):
+            for j in range(i + 1, len(g)):
+                c = _match_correlation(g[i]["W"], g[j]["W"])
+                pair_means.append(c.mean())
+                all_c.append(c)
+        allc = np.concatenate(all_c)
+        k = nf / nc**2
+        mean_eq = float(np.mean(pair_means))
+        rows.append((nf, k, mean_eq))
+        lines.append(
+            f"  {nf:8d}  {k:6.1f}    {mean_eq:.4f}   {min(pair_means):.4f}"
+            f"     {(allc > 0.95).mean() * 100:5.1f}%   {len(g)}"
+        )
+    if not rows:  # every frame count had <2 backends -- nothing to compare
+        print(
+            f"\n  data-size (k) sweep @ {nc} channels: need >=2 backends at a shared "
+            "frame count -- nothing to compare"
+        )
+        return
+    print(f"\n=== data-size (k) sweep @ {nc} channels ===")
+    print("  frames        k   mean|corr|   min    comps>0.95   n")
+    for ln in lines:
+        print(ln)
+    if figure:
+        _plot_ksweep(rows, nc, figure)
+
+
+def _plot_ksweep(rows, channels, path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ks = [r[1] for r in rows]
+    eq = [r[2] for r in rows]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(ks, eq, "o-", color="#2a7")
+    for nf, k, e in rows:
+        ax.annotate(
+            f"{nf // 1000}k",
+            (k, e),
+            fontsize=7,
+            xytext=(0, 6),
+            textcoords="offset points",
+            ha="center",
+        )
+    ax.axhline(1.0, ls="--", lw=0.8, color="0.6")
+    ax.set_xlabel("k = frames / channels^2")
+    ax.set_ylabel("mean cross-backend |correlation|")
+    ax.set_title(
+        f"AMICA cross-backend IC equivalence vs data size @ {channels} channels\n"
+        "(more data -> better-determined decomposition -> higher equivalence)"
+    )
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    print(f"wrote {path}")
+
+
 def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=None):
     full = np.load(data).astype(np.float64) if data else None
     runs = []
@@ -243,6 +318,7 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
                 {
                     "label": str(z["label"]),
                     "channels": int(z["channels"]),
+                    "frames": int(z["frames"]) if "frames" in z else -1,
                     "time": float(z["time"]),
                     "final_ll": float(z["final_ll"]),
                     "W": z["W"],
@@ -253,12 +329,39 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
         print("no result npz found")
         return
 
-    # equivalence is per channel-count (W shapes must match); use the largest
-    by_ch: dict = {}
+    # data-size (k) sweep (#90): at the top channel count, if multiple frame counts
+    # were run, report mean cross-backend equivalence vs k = frames/ch^2. When a
+    # k-sweep runs it owns --figure (the headline plot); the per-config matrix below
+    # then goes to a derived "{stem}_matrix{suffix}" path so neither overwrites the
+    # other.
+    top_ch = max(r["channels"] for r in runs)
+    top_runs = [r for r in runs if r["channels"] == top_ch]
+    # legacy npz (pre-#90) carry no frame count (frames == -1); they can't join a
+    # k-sweep and won't group with per-frame npz in the matrix below, so warn rather
+    # than silently group them wrong when the two formats are merged in one --compare.
+    if any(r["frames"] < 0 for r in top_runs) and any(
+        r["frames"] > 0 for r in top_runs
+    ):
+        print(
+            f"  warning: {top_ch}ch mixes legacy npz (no recorded frame count) with "
+            "per-frame npz; legacy runs are excluded from the k-sweep and grouped "
+            "separately in the equivalence matrix"
+        )
+    real_frames = {r["frames"] for r in top_runs if r["frames"] > 0}
+    matrix_figure = figure
+    if len(real_frames) > 1:
+        _k_sweep(top_runs, figure)
+        if figure:
+            p = Path(figure)
+            matrix_figure = str(p.with_name(f"{p.stem}_matrix{p.suffix}"))
+
+    # single-config equivalence matrix + topomaps: use the largest (channels, frames)
+    by_cf: dict = {}
     for r in runs:
-        by_ch.setdefault(r["channels"], []).append(r)
-    target = max(by_ch)
-    group = by_ch[target]
+        by_cf.setdefault((r["channels"], r["frames"]), []).append(r)
+    target_cf = max(by_cf)
+    target = target_cf[0]
+    group = by_cf[target_cf]
     labels = [r["label"] for r in group]
     n = len(group)
 
@@ -289,10 +392,14 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
         f"(min {offdiag.min():.4f}) -- ~1.0 => same ICs recovered"
     )
 
-    if figure:
-        _plot(labels, M, target, figure)
+    if matrix_figure:
+        _plot(labels, M, target, matrix_figure)
     if topo_figure and montage:
-        _plot_topomaps(group, montage, target, topo_figure, n_topo, full)
+        # de-sphere must recompute the sphere from the SAME frames the group was fit
+        # on (#90 --frames can truncate); pass the matching slice, not the full array.
+        nf = target_cf[1]
+        topo_data = full[:, :nf] if (full is not None and nf > 0) else full
+        _plot_topomaps(group, montage, target, topo_figure, n_topo, topo_data)
 
 
 def _load_info(montage_tsv, n_channels):
@@ -449,6 +556,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", help="path to the (channels, frames) real-EEG .npy")
     ap.add_argument("--channels", default="70")
+    ap.add_argument(
+        "--frames",
+        default=None,
+        help="data-size sweep (#90): comma-separated frame counts (first N samples). "
+        "Default: all frames. At fixed channels this sweeps k = frames/ch^2.",
+    )
     ap.add_argument("--iters", type=int, default=2000)
     ap.add_argument("--threads", type=int, default=None)
     ap.add_argument("--backends", default="auto")
@@ -494,33 +607,42 @@ def main() -> int:
     tag = _platform_tag()
     print(f"platform {tag} | channels {channels} | iters {args.iters} | {backends}")
 
+    # clamp to the available frames and dedupe up front so two requested counts that
+    # collapse to the same length don't re-fit identical data and clobber each other's npz.
+    frame_list = (
+        sorted({min(int(f), full.shape[1]) for f in args.frames.split(",")})
+        if args.frames
+        else [full.shape[1]]
+    )
     for nc in channels:
-        data = np.ascontiguousarray(full[:nc, :])
-        k = data.shape[1] / nc**2
-        print(f"\n{nc}ch, {data.shape[1]} frames (k={k:.1f})")
-        for b in backends:
-            label = f"{b}@{tag}"
-            try:
-                t0 = perf_counter()
-                res = _fit(b, data, args.iters, args.fortran_bin, args.threads)
-                fname = out / f"{b}_{nc}ch_{tag}.npz"
-                np.savez_compressed(
-                    fname,
-                    label=label,
-                    backend=b,
-                    channels=nc,
-                    iters=args.iters,
-                    time=res["time"],
-                    final_ll=res["final_ll"],
-                    W=res["W"],
-                    A=res["A"],
-                )
-                print(
-                    f"  {b:24s} {res['time']:8.1f} s   LL={res['final_ll']:+.5f}"
-                    f"   [{perf_counter() - t0:.0f}s wall]  -> {fname.name}"
-                )
-            except Exception as exc:  # noqa: BLE001 - report and continue
-                print(f"  {b:24s} FAILED: {type(exc).__name__}: {str(exc)[:80]}")
+        for nf in frame_list:
+            data = np.ascontiguousarray(full[:nc, :nf])
+            k = nf / nc**2
+            print(f"\n{nc}ch, {nf} frames (k={k:.1f})")
+            for b in backends:
+                label = f"{b}@{tag}"
+                try:
+                    t0 = perf_counter()
+                    res = _fit(b, data, args.iters, args.fortran_bin, args.threads)
+                    fname = out / f"{b}_{nc}ch_{nf}f_{tag}.npz"
+                    np.savez_compressed(
+                        fname,
+                        label=label,
+                        backend=b,
+                        channels=nc,
+                        frames=nf,
+                        iters=args.iters,
+                        time=res["time"],
+                        final_ll=res["final_ll"],
+                        W=res["W"],
+                        A=res["A"],
+                    )
+                    print(
+                        f"  {b:24s} {res['time']:8.1f} s   LL={res['final_ll']:+.5f}"
+                        f"   [{perf_counter() - t0:.0f}s wall]  -> {fname.name}"
+                    )
+                except Exception as exc:  # noqa: BLE001 - report and continue
+                    print(f"  {b:24s} FAILED: {type(exc).__name__}: {str(exc)[:80]}")
     return 0
 
 

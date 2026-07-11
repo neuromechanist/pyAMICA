@@ -47,8 +47,10 @@ When the decomposition is well-determined (high k) **every backend, including Fo
 identical ICs** (0.997 at k=574). At k=30 -- the rule-of-thumb minimum -- only the strongest
 ~20/70 components are reproducible; the rest are under-determined and different inits settle
 into different, equally valid local optima (AMICA is non-convex). This validates both backend
-correctness *and* the data-adequacy rule. Pushing 70ch to k=152 with the full recording is the
-follow-up test in #90.
+correctness *and* the data-adequacy rule. Pushing 70ch to k=152 with the full recording (#90,
+`.context/issue-90/`) confirms the trend saturates: equivalence climbs to ~0.98 at k~=60 and
+plateaus (the two f64 implementations reach 0.995), it does not reach 1.0 because of float32
+precision + non-convex local-optimum spread on the weakest components.
 
 ## Result 3: total decompose time (2000 iters, 147k frames, 70ch)
 
@@ -85,5 +87,6 @@ MPS, on Apple.
   montage). Tracked informally; refine later.
 - Channel subsets use the first N electrodes (spatially clustered) -> #91 (use distributed
   subsets so reduced-channel maps are whole-head).
-- Data-size/k sweep at 70ch (full recording, k=152) -> #90.
+- Data-size/k sweep at 70ch (full recording, k=152) -> #90 DONE
+  (`.context/issue-90/ksweep_findings.md`): equivalence saturates at ~0.98 past k~=60.
 - Output-format/convention parity for a true EEGLAB drop-in -> #92.
