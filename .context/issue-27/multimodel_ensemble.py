@@ -116,7 +116,51 @@ def pairwise(A, B, same):
     )
 
 
-def figure(within_F, within_G, between, F_ll, G_ll, mw, p_tost, ks, out):
+def perm_test_not_worse(Fs, Gs, n_perm=20000, seed=0):
+    """Run-level permutation test for 'between-implementation agreement is not
+    worse than Fortran's own run-to-run agreement'.
+
+    The pairwise cross-correlations are NOT independent (each of the 2N runs
+    appears in ~2N-1 pairs), so a Mann-Whitney/TOST on the pairwise values is
+    pseudoreplicated and its p-value is invalid. This test instead permutes the
+    2N runs as intact units: the statistic is mean(within-group-A pairs) -
+    mean(A-vs-B pairs), and the null relabels which N runs are "group A". That
+    respects the shared-run dependence, so the p-value is valid.
+
+    Returns (observed diff = mean(between) - mean(within-Fortran), one-sided p
+    for 'between worse than within-Fortran').
+    """
+    rng = np.random.default_rng(seed)
+    allW = np.concatenate([Fs, Gs], axis=0)
+    m = len(allW)
+    n = len(Fs)
+    P = np.zeros((m, m))
+    for i in range(m):
+        for j in range(i + 1, m):
+            P[i, j] = P[j, i] = xcorr(allW[i], allW[j])
+
+    def gap(mask):  # within-group-A minus A-vs-rest (large => between worse)
+        a = np.flatnonzero(mask)
+        b = np.flatnonzero(~mask)
+        within = P[np.ix_(a, a)][np.triu_indices(a.size, 1)].mean()
+        betw = P[np.ix_(a, b)].mean()
+        return within - betw
+
+    true_mask = np.zeros(m, dtype=bool)
+    true_mask[:n] = True  # Fortran is group A
+    obs_gap = gap(true_mask)
+    ge = 1  # +1: include the observed permutation
+    for _ in range(n_perm):
+        mask = np.zeros(m, dtype=bool)
+        mask[rng.permutation(m)[:n]] = True
+        if gap(mask) >= obs_gap:
+            ge += 1
+    p = ge / (n_perm + 1)
+    between_minus_withinF = -obs_gap
+    return between_minus_withinF, p
+
+
+def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     plt.rcParams.update(
         {"font.size": 11, "axes.spines.top": False, "axes.spines.right": False}
     )
@@ -124,8 +168,8 @@ def figure(within_F, within_G, between, F_ll, G_ll, mw, p_tost, ks, out):
     bins = np.linspace(0.5, 1.0, 26)
     for arr, col, lab in [
         (within_F, C_FORT, "within-Fortran"),
-        (within_G, C_NG, "within-NG"),
-        (between, C_BET, "between (NG-Fortran)"),
+        (within_G, C_NG, "within-pyAMICA"),
+        (between, C_BET, "between (pyAMICA-Fortran)"),
     ]:
         axA.hist(arr, bins=bins, density=True, color=col, alpha=0.35)
         axA.hist(
@@ -139,9 +183,10 @@ def figure(within_F, within_G, between, F_ll, G_ll, mw, p_tost, ks, out):
     axA.text(
         0.02,
         0.97,
-        f"means: F-F {within_F.mean():.3f} | NG-NG {within_G.mean():.3f} | "
-        f"NG-F {between.mean():.3f}\nMann-Whitney (between<within-F): p={mw:.2f}\n"
-        f"TOST equivalence (±0.05): p={p_tost:.0e} → EQUIVALENT",
+        f"means: within-F {within_F.mean():.3f} | within-pyA {within_G.mean():.3f} | "
+        f"between {between.mean():.3f}\n"
+        f"means differ by {abs(diff):.3f} (within a 0.05 margin)\n"
+        f"run-level permutation (between not worse): p={p_perm:.2f}",
         transform=axA.transAxes,
         va="top",
         fontsize=8.5,
@@ -150,7 +195,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, mw, p_tost, ks, out):
     bins_ll = np.linspace(
         min(F_ll.min(), G_ll.min()) - 0.005, max(F_ll.max(), G_ll.max()) + 0.005, 24
     )
-    for arr, col, lab in [(F_ll, C_FORT, "Fortran"), (G_ll, C_NG, "NG")]:
+    for arr, col, lab in [(F_ll, C_FORT, "Fortran"), (G_ll, C_NG, "pyAMICA")]:
         axB.hist(arr, bins=bins_ll, density=True, color=col, alpha=0.35)
         axB.hist(
             arr, bins=bins_ll, density=True, histtype="step", color=col, lw=2, label=lab
@@ -164,7 +209,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, mw, p_tost, ks, out):
         0.98,
         0.97,
         f"Fortran {F_ll.mean():.4f} (sd {F_ll.std():.3f})\n"
-        f"NG {G_ll.mean():.4f} (sd {G_ll.std():.3f})\nKS p={ks:.0e}",
+        f"pyAMICA {G_ll.mean():.4f} (sd {G_ll.std():.3f})\nKS p={ks:.0e}",
         transform=axB.transAxes,
         va="top",
         ha="right",
@@ -172,7 +217,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, mw, p_tost, ks, out):
         bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.9),
     )
     fig.suptitle(
-        "Multi-model AMICA (n_models=2): NG vs Fortran ensembles, real sample EEG",
+        "Multi-model AMICA (n_models=2): pyAMICA vs Fortran ensembles, real sample EEG",
         fontweight="bold",
         y=1.02,
     )
@@ -202,17 +247,17 @@ def main():
     Fs, Gs = np.array(Fs), np.array(Gs)
     F_ll, G_ll = np.array(F_ll), np.array(G_ll)
 
+    # Persist the raw ensemble so the figure/tests can be regenerated without
+    # re-running the 40 fits (the earlier run's data was lost, forcing this rerun).
+    np.savez(HERE / "ensemble.npz", Fs=Fs, Gs=Gs, F_ll=F_ll, G_ll=G_ll)
+
     within_F = pairwise(Fs, Fs, True)
     within_G = pairwise(Gs, Gs, True)
     between = pairwise(Gs, Fs, False)
-    mw = stats.mannwhitneyu(between, within_F, alternative="less").pvalue
     diff = between.mean() - within_F.mean()
-    se = np.sqrt(
-        between.var(ddof=1) / between.size + within_F.var(ddof=1) / within_F.size
-    )
-    p_tost = max(
-        stats.norm.sf((diff + DELTA) / se), stats.norm.cdf((diff - DELTA) / se)
-    )
+    # Valid run-level test (permutes whole runs), replacing the pseudoreplicated
+    # Mann-Whitney/TOST on non-independent pairwise correlations.
+    _, p_perm = perm_test_not_worse(Fs, Gs)
     ks = stats.ks_2samp(G_ll, F_ll).pvalue
 
     print(f"\n==== N={n} each ====")
@@ -222,16 +267,15 @@ def main():
         ("between", between),
     ]:
         print(f"{name:16s} mean={a.mean():.4f} sd={a.std():.4f} n={a.size}")
-    print(f"Mann-Whitney (between<within-F): p={mw:.3f}")
+    print(f"between - within-Fortran mean diff = {diff:+.4f} (|diff| < {DELTA} margin)")
     print(
-        f"TOST (±{DELTA}): diff={diff:+.4f} p={p_tost:.2e} "
-        f"{'EQUIVALENT' if p_tost < 0.05 else 'inconclusive'}"
+        f"run-level permutation (between not worse than within-Fortran): p={p_perm:.3f}"
     )
     print(
         f"LL Fortran={F_ll.mean():.4f}({F_ll.std():.3f}) "
         f"NG={G_ll.mean():.4f}({G_ll.std():.3f}) KS p={ks:.2e}"
     )
-    figure(within_F, within_G, between, F_ll, G_ll, mw, p_tost, ks, HERE)
+    figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, HERE)
     print(f"figure -> {HERE / 'multimodel_ensemble_distributions.png'}")
 
 

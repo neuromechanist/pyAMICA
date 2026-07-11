@@ -47,3 +47,6 @@ results/
 
 # MkDocs build output
 site/
+
+# Regenerated multi-model ensemble data (issue #27); recreate with multimodel_ensemble.py
+.context/issue-27/ensemble.npz
