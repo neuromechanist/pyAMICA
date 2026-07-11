@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "pyAMICA: a Python implementation of Adaptive Mixture ICA"
+abstract: >-
+  pyAMICA is a Python (PyTorch) implementation of Adaptive Mixture Independent
+  Component Analysis (AMICA) that reproduces the reference Fortran
+  implementation, with GPU (CUDA), Apple-GPU (MLX), and CPU support. It targets
+  EEG/EMG blind source separation.
+type: software
+authors:
+  - family-names: Shirazi
+    given-names: Seyed Yahya
+    email: shirazi@ieee.org
+version: 0.1.dev0
+license: BSD-3-Clause
+repository-code: "https://github.com/neuromechanist/pyAMICA"
+url: "https://github.com/neuromechanist/pyAMICA"
+keywords:
+  - AMICA
+  - independent component analysis
+  - blind source separation
+  - EEG
+  - EMG
+  - PyTorch
+references:
+  - type: article
+    title: "AMICA: An adaptive mixture of independent component analyzers with shared components"
+    authors:
+      - family-names: Palmer
+        given-names: Jason A.
+      - family-names: Kreutz-Delgado
+        given-names: Kenneth
+      - family-names: Makeig
+        given-names: Scott
+    year: 2012
+    institution:
+      name: Swartz Center for Computational Neuroscience, University of California San Diego

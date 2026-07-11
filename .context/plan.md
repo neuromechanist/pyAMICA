@@ -76,3 +76,61 @@
 ## Notes
 - Correctness is defined by parity with the Fortran binary, not by convergence alone.
 - Detailed feature status: `feature_parity.md`; migration record: `migration_plan.md`.
+
+## Release Readiness (JOSS track) — started 2026-07-10
+Endgame ordering: finish the three open benchmark issues -> documentation ->
+transfer to github.com/sccn -> JOSS paper. The repo will move to
+`github.com/sccn/pyAMICA` (full transfer, preserving issues/PRs/history) and docs
+will be hosted at `eeglab.org/pyAMICA`.
+
+### Phase R1: Benchmark completion (#90, #91, #92)
+- [~] #90 Data-size (k-factor) frames sweep at 70ch. Code + data staged on hallu
+      (branch `feature/issue-90-datasize-sweep`, origin-pushed; based on current main).
+      Full 747,750-frame npy present (`ds002718_sub-002_eeg70_full.npy`). CUDA sweep
+      (torch-cuda-f64/f32) + native-fortran-f64 launched on hallu 2026-07-10:
+      frames 73.5k/147k/294k/490k/747.75k -> k=15/30/60/100/152, 2000 iters,
+      out=`benchmarks/results_k90_hallu`. Probe: largest frames ~1.1 s/it (f64) ->
+      ~36 min/run; CUDA sweep ETA ~2.5 h. Remaining: finish runs -> `--compare`
+      cross-backend |corr| vs k figure + report -> PR.
+- [ ] #91 Spatially-distributed channel subsets: replace `full[:nc]` first-N slicing
+      in `benchmark_dimsweep.py`/`benchmark_decompose.py` with farthest-point sampling
+      over real electrode 3D coords (whole-head 16/32/48ch montages). Local; formalize
+      `mne` as a viz/benchmark extra (not in core env). Prereq for #92 reduced-montage.
+- [ ] #92 EEGLAB drop-in output parity: variance-ordered ICs (back-projected variance,
+      IC1=highest), `loadmodout15`/`pop_runamica`-readable output, sign/scale
+      conventions, documented MATLAB+EEGLAB round-trip. MATLAB R2025b and EEGLAB both
+      present locally (`~/Documents/git/eeg/eeglab`).
+
+### Phase R2: Documentation (MkDocs Material, per /project:init-project)
+Use the init-project docs templates verbatim where possible
+(`~/.claude/plugins/cache/research-skills/project/0.5.0/templates/config/mkdocs.yml`
++ `github/workflows/docs.yml`), adapted for pyAMICA:
+- Material theme (light/dark palette toggle, navigation.tabs/sections/indexes/top/
+  instant, search.suggest/highlight, content.code.copy, toc.integrate).
+- Plugins: `search`, `mkdocstrings` (python) with **`docstring_style: numpy`** (repo
+  uses numpy docstrings, NOT the template's `google` default), `git-revision-date-localized`.
+- Add a `docs` optional-dependency extra (mkdocs-material, mkdocstrings[python],
+  mkdocs-git-revision-date-localized-plugin) — the `docs.yml` workflow runs
+  `uv sync --extra docs` then `uv run mkdocs build`. Currently only an `mlx` extra exists.
+- **Hosting:** GitHub Pages via `docs.yml` (build+deploy on push to main). Served at
+  `eeglab.org/pyAMICA` because `sccn/pyAMICA` *project* Pages inherit the sccn org
+  Pages custom domain (`eeglab.org`) at the `/pyAMICA` subpath. `site_url:
+  https://eeglab.org/pyAMICA/`, relative links; stages at
+  `neuromechanist.github.io/pyAMICA/` pre-transfer.
+- [ ] De-WIP `README.md` (drop the "do not rely on this" disclaimer; `uv` install;
+      quickstart; backend-selection guide MLX/CUDA/CPU + f32/f64; results table).
+- [ ] mkdocs.yml + docs/ skeleton (Home, Getting Started, User Guide, API Reference
+      via mkdocstrings, Development, Changelog) + `docs` extra + `docs.yml` workflow.
+- [ ] Community health: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CITATION.cff`,
+      issue/PR templates (JOSS-expected).
+
+### Phase R3: Transfer to github.com/sccn (before JOSS submission)
+- [ ] GitHub repo transfer (preserves issues/PRs/stars/history; auto-redirects old
+      URLs). Post-transfer: update badge/repo URLs (README, CITATION.cff, paper.md),
+      wire up the `eeglab.org/pyAMICA` docs deploy target.
+
+### Phase R4: JOSS paper (/manuscript:manuscript-writing)
+- [ ] `paper.md` (~1000 words) + `paper.bib`: summary, statement of need (GPU +
+      cross-platform AMICA with Fortran parity; drop-in for EEGLAB AMICA), comparison
+      vs EEGLAB AMICA / Picard / FastICA, backend + parity results, acknowledgments;
+      `repository -> github.com/sccn/pyAMICA`.

@@ -1,0 +1,107 @@
+# pyAMICA documentation (MkDocs Material).
+# Deployed to GitHub Pages by .github/workflows/docs.yml. Once the repo lives at
+# github.com/sccn/pyAMICA, its project Pages inherit the sccn org Pages custom
+# domain (eeglab.org) at the /pyAMICA subpath, so the site is served at
+# https://eeglab.org/pyAMICA/. Links are relative so the same build also works at
+# https://neuromechanist.github.io/pyAMICA/ before the transfer.
+
+site_name: pyAMICA Documentation
+site_url: https://eeglab.org/pyAMICA/
+site_description: Python (PyTorch) implementation of Adaptive Mixture ICA (AMICA) with Fortran parity and GPU/MPS/CPU support.
+site_author: Seyed Yahya Shirazi
+
+repo_url: https://github.com/neuromechanist/pyAMICA/
+repo_name: neuromechanist/pyAMICA
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - navigation.instant
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - toc.integrate
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.arithmatex: # LaTeX math via MathJax (see extra_javascript below)
+      generic: true
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            heading_level: 2
+            docstring_style: numpy
+            members_order: source
+            filters: ["!^_"]
+  - git-revision-date-localized:
+      enable_creation_date: true
+      fallback_to_build_date: true
+
+# MathJax (LaTeX math) — see docs/javascripts/mathjax.js for the arithmatex hookup
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Background:
+      - Overview: concepts/index.md
+      - What is ICA?: concepts/what-is-ica.md
+      - What is AMICA?: concepts/what-is-amica.md
+      - How AMICA works: concepts/how-amica-works.md
+  - User Guide:
+      - Overview: guides/index.md
+      - Backends & Devices: guides/backends.md
+      - Validation & Parity: guides/validation.md
+  - API Reference:
+      - Overview: api/index.md
+      - AMICA: api/amica.md
+      - PyTorch backend: api/torch-backend.md
+      - NumPy backend: api/numpy-backend.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Testing: development/testing.md
+  - Changelog: changelog.md
+
+copyright: Copyright &copy; 2023-2025 Seyed Yahya Shirazi
