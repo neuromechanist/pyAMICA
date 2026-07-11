@@ -1,0 +1,42 @@
+{
+  "title": "pyAMICA: a Python implementation of Adaptive Mixture ICA",
+  "description": "pyAMICA is a Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis (AMICA) that reproduces the reference Fortran implementation within numerical tolerance, with CPU, NVIDIA GPU (CUDA), and Apple GPU (MLX) support. It targets EEG/EMG blind source separation and provides a scikit-learn-style interface and byte-identical EEGLAB (loadmodout15) output.",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "bsd-3-clause",
+  "creators": [
+    {
+      "name": "Shirazi, Seyed Yahya",
+      "orcid": "0000-0001-5557-259X",
+      "affiliation": "Swartz Center for Computational Neuroscience, University of California San Diego"
+    },
+    {
+      "name": "Delorme, Arnaud",
+      "orcid": "0000-0002-0799-3557",
+      "affiliation": "Swartz Center for Computational Neuroscience, University of California San Diego; Centre de Recherche Cerveau et Cognition (CerCo), CNRS, University of Toulouse"
+    },
+    {
+      "name": "Makeig, Scott",
+      "orcid": "0000-0002-9048-8438",
+      "affiliation": "Swartz Center for Computational Neuroscience, University of California San Diego"
+    }
+  ],
+  "keywords": [
+    "AMICA",
+    "independent component analysis",
+    "blind source separation",
+    "EEG",
+    "EMG",
+    "PyTorch",
+    "MLX",
+    "EEGLAB"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://eeglab.org/pyAMICA/",
+      "relation": "isDocumentedBy",
+      "scheme": "url",
+      "resource_type": "publication-softwaredocumentation"
+    }
+  ]
+}
