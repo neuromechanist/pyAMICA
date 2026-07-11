@@ -45,6 +45,7 @@ markdown_extensions:
   - pymdownx.arithmatex: # LaTeX math via MathJax (see extra_javascript below)
       generic: true
   - pymdownx.superfences
+  - pymdownx.blocks.caption  # renders `/// caption` blocks under figures
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
