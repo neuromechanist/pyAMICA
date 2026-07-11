@@ -98,6 +98,7 @@ nav:
       - Overview: api/index.md
       - AMICA: api/amica.md
       - PyTorch backend: api/torch-backend.md
+      - MLX backend: api/mlx-backend.md
       - NumPy backend: api/numpy-backend.md
   - Development:
       - Contributing: development/contributing.md

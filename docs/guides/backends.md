@@ -8,7 +8,7 @@ interface, plus an optional Apple-GPU backend and a legacy NumPy reference.
 | Backend | Class | Role |
 |---|---|---|
 | PyTorch natural-gradient EM | [`AMICATorchNG`](../api/torch-backend.md) | **Default.** Fortran-parity backend; CUDA / CPU, and float32 on MPS. |
-| MLX (Apple GPU) | `AMICAMLXNG` (`pyAMICA.mlx_impl`) | Optional Apple-Silicon GPU backend; float32 only. |
+| MLX (Apple GPU) | [`AMICAMLXNG`](../api/mlx-backend.md) (`pyAMICA.mlx_impl`) | Optional Apple-Silicon GPU backend; float32 only. |
 | NumPy reference | [`AMICA_NumPy`](../api/numpy-backend.md) | Legacy oracle + CLI; carries the same parity fixes. |
 
 The `AMICA` wrapper uses `AMICATorchNG`. The MLX backend is imported separately
