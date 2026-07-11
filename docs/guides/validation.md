@@ -29,8 +29,8 @@ Fortran is the wrong acceptance bar. The right test is whether the two
 implementations sample the same distribution over solutions. Running an ensemble
 of `N = 20` fits per implementation on the real sample EEG (`n_models = 2`, 3
 mixture components, 100 iterations, matched schedule), the pyAMICA-vs-Fortran
-partition cross-correlation distribution is statistically equivalent to Fortran's
-own run-to-run distribution:
+partition cross-correlation distribution overlaps Fortran's own run-to-run
+distribution:
 
 | Distribution (pairwise Hungarian-matched \|corr\|) | Mean | SD | Range |
 |---|---:|---:|---|
@@ -46,11 +46,20 @@ between-implementation distributions overlap: the estimators sample the same
 solution space.
 ///
 
-- **Mann-Whitney** (one-sided, H1: between worse than within-Fortran):
-  $p = 0.97$, so there is no evidence that cross-implementation agreement is worse
-  than Fortran's own run-to-run agreement.
-- **TOST** equivalence of the means within a $\pm 0.05$ margin: equivalent
-  (mean difference $+0.004$).
+The three distribution means lie within 0.01 of each other, well inside a
+$\pm 0.05$ margin. Supporting tests point the same way: a one-sided Mann-Whitney
+test finds no evidence the between-implementation agreement is *worse* than
+Fortran's own ($p = 0.97$), and a two-one-sided-tests (TOST) equivalence check
+against a $\pm 0.05$ margin passes.
+
+!!! note "Read the tests as supporting, not inferential"
+    The tests above are computed over *pairwise* correlations (190 within-group and
+    400 between-group values) built from only 20 independent runs per group, so the
+    pairwise values are not independent draws and the nominal p-values are
+    optimistic. The load-bearing evidence is therefore the descriptive overlap of
+    the three distributions (means within 0.01, comparable spread), not the exact
+    p-values; a run-level permutation test is the correct way to obtain a strictly
+    valid p-value.
 
 The single-run cross-correlation of ~0.64 is therefore intrinsic estimator
 spread, not a shortfall: Fortran agrees with *itself* at 0.63. The per-block
