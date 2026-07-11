@@ -19,3 +19,6 @@ the default import surface:
 ```python
 from pyAMICA.mlx_impl import AMICAMLXNG  # requires the `mlx` extra
 ```
+
+- **[`AMICAMLXNG`](mlx-backend.md)** — the optional Apple-GPU (MLX) backend; the
+  fastest option on Apple Silicon (float32).
