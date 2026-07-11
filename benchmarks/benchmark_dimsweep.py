@@ -508,6 +508,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", help="path to the (70, n_samples) real-EEG .npy")
     ap.add_argument("--channels", default="16,32,48,70")
+    ap.add_argument(
+        "--montage",
+        help="BIDS electrodes.tsv; when given, reduced channel counts use "
+        "spatially-distributed (whole-head) subsets instead of the first N (#91)",
+    )
     ap.add_argument("--samples", type=int, default=30000)
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--repeats", type=int, default=3)
@@ -608,7 +613,24 @@ def main() -> int:
 
     rows = []
     for nc in channels:
-        data = np.ascontiguousarray(full[:nc, : args.samples])
+        # #91: with a montage, time whole-head distributed subsets rather than the
+        # first nc electrodes (a spatial cluster). Channel count is unchanged, so the
+        # timing is unaffected; this only makes the reduced montages physical.
+        if args.montage and nc < full.shape[0]:
+            from channel_selection import (
+                positions_for_channels,
+                select_distributed_channels,
+            )
+
+            sel = select_distributed_channels(
+                positions_for_channels(args.montage, full.shape[0]), nc
+            )
+        else:
+            sel = np.arange(nc)
+        # a montage with fewer localized electrodes than requested yields fewer
+        # channels than nc; record/print the actual count so the sweep is honest.
+        n_sel = len(sel)
+        data = np.ascontiguousarray(full[sel][:, : args.samples])
         for b in backends:
             for t in _thread_points(b):
                 tag = f"@{t}t" if t is not None else ""
@@ -626,7 +648,7 @@ def main() -> int:
                     rows.append(
                         {
                             "config": config,
-                            "channels": nc,
+                            "channels": n_sel,
                             "backend": b,
                             "threads": t,
                             "ms_per_iter": ms,
@@ -634,18 +656,18 @@ def main() -> int:
                         }
                     )
                     print(
-                        f"  [{config}] {nc:3d}ch {b:18s}{tag:5s} "
+                        f"  [{config}] {n_sel:3d}ch {b:18s}{tag:5s} "
                         f"{ms:9.2f} ms/it   LL={ll:+.5f}"
                     )
                 except Exception as exc:  # noqa: BLE001 - report and continue
                     print(
-                        f"  [{config}] {nc:3d}ch {b:18s}{tag:5s} "
+                        f"  [{config}] {n_sel:3d}ch {b:18s}{tag:5s} "
                         f"FAILED: {type(exc).__name__}: {str(exc)[:60]}"
                     )
                     rows.append(
                         {
                             "config": config,
-                            "channels": nc,
+                            "channels": n_sel,
                             "backend": b,
                             "threads": t,
                             "error": str(exc)[:120],

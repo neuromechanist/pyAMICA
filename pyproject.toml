@@ -46,6 +46,9 @@ docs = [
     "mkdocstrings[python]>=0.26",
     "mkdocs-git-revision-date-localized-plugin>=1.2",
 ]
+# Visualization for the benchmark sweeps: MNE builds the scalp-map montage for
+# the IC topomaps and (issue #91) the distributed channel-subset positions.
+viz = ["mne>=1.6"]
 
 [project.urls]
 Homepage = "http://github.com/neuromechanist/pyAMICA"

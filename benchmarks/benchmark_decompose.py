@@ -318,6 +318,9 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
                 {
                     "label": str(z["label"]),
                     "channels": int(z["channels"]),
+                    "channel_indices": z["channel_indices"]
+                    if "channel_indices" in z
+                    else np.arange(int(z["channels"])),
                     "frames": int(z["frames"]) if "frames" in z else -1,
                     "time": float(z["time"]),
                     "final_ll": float(z["final_ll"]),
@@ -395,15 +398,24 @@ def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=N
     if matrix_figure:
         _plot(labels, M, target, matrix_figure)
     if topo_figure and montage:
-        # de-sphere must recompute the sphere from the SAME frames the group was fit
-        # on (#90 --frames can truncate); pass the matching slice, not the full array.
+        # de-sphere must recompute the sphere from the SAME frames AND channels the
+        # group was fit on (#90 --frames truncates frames; #91 selects distributed
+        # channels), so slice full to both, not the whole array.
+        sel = group[0]["channel_indices"]
         nf = target_cf[1]
-        topo_data = full[:, :nf] if (full is not None and nf > 0) else full
-        _plot_topomaps(group, montage, target, topo_figure, n_topo, topo_data)
+        if full is None:
+            topo_data = None
+        else:
+            topo_data = full[sel][:, :nf] if nf > 0 else full[sel]
+        _plot_topomaps(group, montage, sel, topo_figure, n_topo, topo_data)
 
 
-def _load_info(montage_tsv, n_channels):
+def _load_info(montage_tsv, channel_indices):
     """Build an MNE Info with a scalp montage from a BIDS electrodes.tsv.
+
+    ``channel_indices`` are the 0-based data-channel indices actually used (issue
+    #91 selects a distributed subset, so they need not be contiguous); the
+    electrode name for data channel ``i`` is ``EEG{i+1:03d}``.
 
     NOTE: the tsv coordinates may need a rotation to MNE's head frame (nose +y)
     for the absolute orientation to be correct -- to be checked/fixed later. A
@@ -423,7 +435,7 @@ def _load_info(montage_tsv, n_channels):
                 )
             except ValueError:
                 continue
-    ch_names = [f"EEG{i:03d}" for i in range(1, n_channels + 1)]
+    ch_names = [f"EEG{i + 1:03d}" for i in channel_indices]
     # some channels can be unlocalized ('n/a'); topomap only the located subset
     located = np.array([i for i, n in enumerate(ch_names) if n in pos])
     used = [ch_names[i] for i in located]
@@ -435,12 +447,14 @@ def _load_info(montage_tsv, n_channels):
     return info, located
 
 
-def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
+def _plot_topomaps(group, montage_tsv, channel_indices, path, n_comps, data=None):
     """Grid of IC scalp maps: rows = backends, cols = components. Columns are
     ordered by the reference's back-projected variance (EEGLAB convention, IC1 =
     highest variance) when ``data`` is given, else by cross-backend match. Each
     cell is that backend's Hungarian-matched, sign-aligned map; identical columns
-    down the rows mean every backend recovered the same IC."""
+    down the rows mean every backend recovered the same IC.
+
+    ``channel_indices`` are the 0-based data channels used (issue #91)."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -448,7 +462,8 @@ def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
     import mne
     from scipy.optimize import linear_sum_assignment
 
-    info, located = _load_info(montage_tsv, channels)
+    info, located = _load_info(montage_tsv, channel_indices)
+    n_ch = len(channel_indices)
     ref = group[0]  # reference backend: the first result loaded (glob order)
     Wref = ref["W"] / (np.linalg.norm(ref["W"], axis=1, keepdims=True) + 1e-12)
     n_ref = Wref.shape[0]
@@ -467,7 +482,7 @@ def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
 
     # column order: EEGLAB back-projected variance if data available, else match
     if data is not None:
-        order = _variance_order(ref["W"], data, channels)[:n_comps]
+        order = _variance_order(ref["W"], data, n_ch)[:n_comps]
     else:
         order = np.argsort(-score)[: min(n_comps, n_ref)]
 
@@ -481,7 +496,7 @@ def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
         col, corr = matches[bi]
         # de-sphered mixing = true sensor-space IC scalp maps (EEGLAB); the saved
         # A is whitened-space. Fall back to A only if no data to recompute the sphere.
-        ades = _desphere(r["W"], data, channels)[0] if data is not None else r["A"]
+        ades = _desphere(r["W"], data, n_ch)[0] if data is not None else r["A"]
         for ci, i in enumerate(order):
             j = col[i]
             sign = 1.0 if corr[i, j] >= 0 else -1.0
@@ -502,7 +517,7 @@ def _plot_topomaps(group, montage_tsv, channels, path, n_comps, data=None):
             transform=axes[bi][0].transAxes,
         )
     fig.suptitle(
-        f"AMICA IC scalp maps @ {channels} channels -- matched across backends "
+        f"AMICA IC scalp maps @ {n_ch} channels -- matched across backends "
         "(rows), same IC (columns)",
         fontsize=10,
     )
@@ -615,10 +630,24 @@ def main() -> int:
         else [full.shape[1]]
     )
     for nc in channels:
+        # #91: with a montage, pick spatially-distributed (whole-head) channels
+        # rather than the first nc electrodes in file order (a spatial cluster);
+        # the selected data-channel indices are saved so the topomaps use them.
+        if args.montage and nc < full.shape[0]:
+            from channel_selection import (
+                positions_for_channels,
+                select_distributed_channels,
+            )
+
+            sel = select_distributed_channels(
+                positions_for_channels(args.montage, full.shape[0]), nc
+            )
+        else:
+            sel = np.arange(nc)
         for nf in frame_list:
-            data = np.ascontiguousarray(full[:nc, :nf])
-            k = nf / nc**2
-            print(f"\n{nc}ch, {nf} frames (k={k:.1f})")
+            data = np.ascontiguousarray(full[sel][:, :nf])
+            k = nf / len(sel) ** 2
+            print(f"\n{len(sel)}ch, {nf} frames (k={k:.1f})")
             for b in backends:
                 label = f"{b}@{tag}"
                 try:
@@ -629,7 +658,8 @@ def main() -> int:
                         fname,
                         label=label,
                         backend=b,
-                        channels=nc,
+                        channels=len(sel),
+                        channel_indices=sel,
                         frames=nf,
                         iters=args.iters,
                         time=res["time"],
