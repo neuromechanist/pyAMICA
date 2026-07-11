@@ -1,20 +1,30 @@
 name: CI
 
-# Python jobs (lint/test/build) skip when a change touches only prose --
-# Markdown or docs (incl. a future mkdocs site). Spell-checking lives in the
-# separate typos.yml, which has no such filter so docs are always checked.
+# Python jobs (lint/test/build) skip when a change touches only prose or
+# metadata -- Markdown, the docs site, the JOSS paper (paper.md/paper.bib), and
+# citation/archive metadata (CITATION.cff, .zenodo.json, LICENSE) -- none of
+# which affect the package. Spell-checking (typos.yml) and the paper PDF build
+# (draft-pdf.yml) have their own triggers, so prose is still checked.
 on:
   push:
     branches: [main]
     paths-ignore:
       - "**.md"
+      - "**.bib"
       - "docs/**"
       - "mkdocs.yml"
+      - "CITATION.cff"
+      - ".zenodo.json"
+      - "LICENSE"
   pull_request:
     paths-ignore:
       - "**.md"
+      - "**.bib"
       - "docs/**"
       - "mkdocs.yml"
+      - "CITATION.cff"
+      - ".zenodo.json"
+      - "LICENSE"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
