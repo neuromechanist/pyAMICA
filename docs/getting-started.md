@@ -5,7 +5,7 @@
 pyAMICA uses [UV](https://docs.astral.sh/uv/) for environment and dependency
 management.
 
-### From source (development)
+### From source
 
 ```bash
 git clone https://github.com/neuromechanist/pyAMICA.git
@@ -13,11 +13,8 @@ cd pyAMICA
 uv sync            # install the project and its dependencies into .venv
 ```
 
-### As a dependency
-
-```bash
-uv add pyAMICA     # or: uv pip install pyAMICA
-```
+A packaged release on the Python Package Index (PyPI) is planned; until then,
+install from source as above.
 
 ### Optional Apple-Silicon GPU backend
 
@@ -25,7 +22,7 @@ The MLX backend is Apple-only and is therefore an optional extra; `import
 pyAMICA` never requires it.
 
 ```bash
-uv pip install "pyAMICA[mlx]"   # or: uv pip install mlx
+uv sync --extra mlx   # or, in an existing environment: uv pip install mlx
 ```
 
 ## Quickstart
