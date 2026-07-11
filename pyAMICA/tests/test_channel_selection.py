@@ -40,6 +40,9 @@ def test_read_electrode_positions():
     assert pos.shape[1] == 3
     assert "EEG001" in names
     assert np.isfinite(pos).all()
+    # ds002718 sub-002 fixture: 74 electrode rows, 70 with a localized position;
+    # the 4 external channels (n/a coords) are skipped.
+    assert len(names) == 70
 
 
 def test_positions_for_channels_alignment():
@@ -88,3 +91,29 @@ def test_unlocalized_rows_excluded():
     idx = cs.select_distributed_channels(pos, 16)
     assert 5 not in idx.tolist()
     assert len(idx) == 16
+
+
+def test_n_zero_returns_empty():
+    pos = cs.positions_for_channels(_FIXTURE, 70)
+    idx = cs.select_distributed_channels(pos, 0)
+    assert len(idx) == 0
+
+
+def test_seed_is_centroid_nearest():
+    """The greedy selection seeds from the localized channel nearest the montage
+    centroid; that seed must appear in any non-trivial subset."""
+    pos = cs.positions_for_channels(_FIXTURE, 70)
+    localized = np.where(np.isfinite(pos).all(axis=1))[0]
+    pts = pos[localized]
+    centroid = pts.mean(axis=0)
+    seed = int(localized[np.argmin(((pts - centroid) ** 2).sum(axis=1))])
+    assert seed in cs.select_distributed_channels(pos, 8).tolist()
+
+
+def test_coincident_coordinates_stay_unique():
+    """Two channels at the exact same position must not both collapse onto one
+    index: the subset stays unique even when candidates tie at distance 0."""
+    pos = cs.positions_for_channels(_FIXTURE, 70)
+    pos[1] = pos[0]  # duplicate a real electrode position onto another channel
+    idx = cs.select_distributed_channels(pos, 16)
+    assert len(set(idx.tolist())) == 16

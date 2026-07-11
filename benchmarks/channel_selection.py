@@ -95,6 +95,8 @@ def select_distributed_channels(positions, n):
     positions = np.asarray(positions, dtype=float)
     localized = np.where(np.isfinite(positions).all(axis=1))[0]
     pts = positions[localized]
+    if n <= 0:
+        return localized[:0]
     if n >= len(localized):
         return localized
     centroid = pts.mean(axis=0)
@@ -102,8 +104,13 @@ def select_distributed_channels(positions, n):
     selected = [first]
     # running min distance from every point to the selected set
     dist = np.sqrt(((pts - pts[first]) ** 2).sum(axis=1))
+    # exclude already-selected points from argmax so coincident coordinates
+    # (dist ties at 0) can never be picked twice -- keeps the subset unique.
+    avail = np.ones(len(pts), dtype=bool)
+    avail[first] = False
     while len(selected) < n:
-        nxt = int(np.argmax(dist))
+        nxt = int(np.argmax(np.where(avail, dist, -np.inf)))
         selected.append(nxt)
+        avail[nxt] = False
         dist = np.minimum(dist, np.sqrt(((pts - pts[nxt]) ** 2).sum(axis=1)))
     return np.sort(localized[np.asarray(selected, dtype=int)])

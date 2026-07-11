@@ -627,6 +627,9 @@ def main() -> int:
             )
         else:
             sel = np.arange(nc)
+        # a montage with fewer localized electrodes than requested yields fewer
+        # channels than nc; record/print the actual count so the sweep is honest.
+        n_sel = len(sel)
         data = np.ascontiguousarray(full[sel][:, : args.samples])
         for b in backends:
             for t in _thread_points(b):
@@ -645,7 +648,7 @@ def main() -> int:
                     rows.append(
                         {
                             "config": config,
-                            "channels": nc,
+                            "channels": n_sel,
                             "backend": b,
                             "threads": t,
                             "ms_per_iter": ms,
@@ -653,18 +656,18 @@ def main() -> int:
                         }
                     )
                     print(
-                        f"  [{config}] {nc:3d}ch {b:18s}{tag:5s} "
+                        f"  [{config}] {n_sel:3d}ch {b:18s}{tag:5s} "
                         f"{ms:9.2f} ms/it   LL={ll:+.5f}"
                     )
                 except Exception as exc:  # noqa: BLE001 - report and continue
                     print(
-                        f"  [{config}] {nc:3d}ch {b:18s}{tag:5s} "
+                        f"  [{config}] {n_sel:3d}ch {b:18s}{tag:5s} "
                         f"FAILED: {type(exc).__name__}: {str(exc)[:60]}"
                     )
                     rows.append(
                         {
                             "config": config,
-                            "channels": nc,
+                            "channels": n_sel,
                             "backend": b,
                             "threads": t,
                             "error": str(exc)[:120],
