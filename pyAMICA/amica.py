@@ -319,6 +319,54 @@ class AMICA:
 
         return self.model_.get_unmixing_matrix(model_idx=model_idx)
 
+    def variance_order(
+        self, model_idx: int = 0, return_svar: bool = False
+    ) -> Union[np.ndarray, tuple]:
+        """
+        Component order by EEGLAB back-projected variance (IC1 = highest).
+
+        Reports the display order EEGLAB's ``loadmodout15.m`` applies on load,
+        without mutating the fitted parameters. Apply it to the columns of
+        :meth:`get_mixing_matrix` (or rows of :meth:`get_unmixing_matrix`) to get
+        EEGLAB-ordered components in Python.
+
+        Parameters
+        ----------
+        model_idx : int, default=0
+            Which model's components to order.
+        return_svar : bool, default=False
+            If True, also return the per-source variance sorted to ``order``.
+
+        Returns
+        -------
+        order : np.ndarray of int
+            Source indices, highest back-projected variance first.
+        """
+        self._check_usable("compute the variance order")
+
+        return self.model_.variance_order(model_idx=model_idx, return_svar=return_svar)
+
+    def write_amica_output(self, outdir: str) -> None:
+        """
+        Write the fitted model as an EEGLAB-readable AMICA output directory.
+
+        Emits the raw binary files that EEGLAB's ``loadmodout15.m`` reads (``W``,
+        ``S``, ``gm``, ``mean``, ``c``, ``alpha``, ``mu``, ``sbeta``, ``rho``,
+        ``comp_list``, ``LL``), so a pyAMICA fit drops directly into an EEGLAB
+        workflow (``mod = loadmodout15(outdir)``). ``loadmodout15`` applies the
+        variance-ordering and normalization on load, so no manual re-ordering or
+        sign-flipping is needed. Single-model output is byte-compatible with the
+        Fortran reference (issue #92).
+
+        Parameters
+        ----------
+        outdir : str
+            Destination directory (created if absent).
+        """
+        self._check_usable("write EEGLAB output")
+
+        self.model_.write_amica_output(outdir)
+
     def save(self, filepath: str) -> None:
         """
         Save the fitted model to ``filepath`` via ``torch.save``.

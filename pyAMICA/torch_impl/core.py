@@ -1768,6 +1768,107 @@ class AMICATorchNG:
         return self.W[:, :, model_idx].T.cpu().numpy()
 
     # ------------------------------------------------------------------
+    # EEGLAB drop-in output (issue #92)
+    # ------------------------------------------------------------------
+    def variance_order(
+        self, model_idx: int = 0, return_svar: bool = False
+    ) -> Union[np.ndarray, tuple]:
+        """EEGLAB back-projected-variance component order (IC1 = highest variance).
+
+        Returns the source indices sorted by descending back-projected variance,
+        the ordering EEGLAB's ``loadmodout15.m`` applies on load (so ``order[0]``
+        is IC1). The de-sphered sensor-space mixing column ``a_i = pinv(W S)[:, i]``
+        contributes ``||a_i||^2 * sum_k alpha_ki (mu_ki^2 + r_ki / sbeta_ki^2)``
+        with ``r_ki = gamma(3/rho_ki)/gamma(1/rho_ki)`` (the source's mixture
+        variance), matching ``loadmodout15`` exactly. Non-mutating: the stored
+        parameters keep their fit order; this only reports the display order.
+
+        Parameters
+        ----------
+        model_idx : int, default=0
+            Which model's components to order.
+        return_svar : bool, default=False
+            If True, also return the per-source variance sorted to ``order``.
+
+        Returns
+        -------
+        order : np.ndarray of int, shape (n_sources,)
+            Source indices, highest back-projected variance first.
+        svar : np.ndarray, optional
+            Present only when ``return_svar``; the sorted variances.
+        """
+        from scipy.special import gamma
+
+        cl = self.comp_list[:, model_idx].cpu().numpy()
+        alpha = self.alpha[:, cl].cpu().numpy()
+        mu = self.mu[:, cl].cpu().numpy()
+        sbeta = self.beta[:, cl].cpu().numpy()
+        rho = self.rho[:, cl].cpu().numpy()
+        # source mixture variance (sum over the mixture components); unused
+        # mixtures carry alpha == 0 and drop out, matching loadmodout15.
+        ratio = gamma(3.0 / rho) / gamma(1.0 / rho)
+        mix_var = (alpha * (mu**2 + ratio / sbeta**2)).sum(axis=0)
+        # de-sphered sensor-space mixing: A = pinv(W_fort @ S), columns = maps.
+        w_fort = self.W[:, :, model_idx].T.cpu().numpy()
+        sphere = self.sphere.cpu().numpy()
+        a_sensor = np.linalg.pinv(w_fort @ sphere)
+        svar = mix_var * (a_sensor**2).sum(axis=0)
+        order = np.argsort(-svar)
+        if return_svar:
+            return order, svar[order]
+        return order
+
+    def write_amica_output(self, outdir) -> None:
+        """Write this fitted model as the Fortran/EEGLAB AMICA output directory.
+
+        Produces the raw binary files that EEGLAB's ``loadmodout15.m`` (and the
+        Python port :func:`pyAMICA.numpy_impl.load.loadmodout`) read, so a
+        PyTorch NG fit drops directly into an EEGLAB workflow (issue #92).
+        ``loadmodout15`` performs the variance-ordering and unit-norm
+        normalization on load, so the on-disk parameters are written in fit
+        order. Single-model output is byte-compatible with the Fortran reference.
+
+        Parameters
+        ----------
+        outdir : str or path-like
+            Destination directory (created if absent).
+        """
+        from ..numpy_impl.load import write_amicaout
+
+        def _np(t):
+            return t.detach().cpu().numpy()
+
+        # The exported parameters are the fit()-kept iterate (LL == final_ll_).
+        # Under the keep_best safeguard (#51) that can be an earlier iterate than
+        # the last, so end the written LL trajectory at that iterate rather than
+        # at a later, discarded overshoot -- otherwise LL[-1] would not match the
+        # model just written. Monotone runs keep the full trajectory unchanged.
+        ll = np.asarray(self.ll_history, dtype=np.float64)
+        if (
+            self.final_ll_ is not None
+            and np.isfinite(self.final_ll_)
+            and ll.size
+            and not np.isclose(ll[-1], self.final_ll_)
+        ):
+            ll = ll[: int(np.argmax(ll)) + 1]
+
+        write_amicaout(
+            outdir,
+            gm=_np(self.gm),
+            W=_np(self.W),
+            sphere=_np(self.sphere),
+            mean=_np(self.mean),
+            c=_np(self.c),
+            alpha=_np(self.alpha),
+            mu=_np(self.mu),
+            sbeta=_np(self.beta),  # Fortran's 'sbeta' is pyAMICA's beta (scale)
+            rho=_np(self.rho),
+            comp_list=_np(self.comp_list),
+            ll=ll,
+            A=_np(self.A),
+        )
+
+    # ------------------------------------------------------------------
     # Persistence (issue #36)
     # ------------------------------------------------------------------
     # Full fitted-parameter snapshot. A/W/c/comp_list/mean/sphere are what

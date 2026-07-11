@@ -93,6 +93,7 @@ nav:
   - User Guide:
       - Overview: guides/index.md
       - Backends & Devices: guides/backends.md
+      - EEGLAB interoperability: guides/eeglab.md
       - Validation & Parity: guides/validation.md
   - API Reference:
       - Overview: api/index.md

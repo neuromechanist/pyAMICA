@@ -48,6 +48,84 @@ def read_binary_file(
         return None
 
 
+def write_amicaout(
+    outdir: Union[str, Path],
+    *,
+    gm,
+    W,
+    sphere,
+    mean,
+    c,
+    alpha,
+    mu,
+    sbeta,
+    rho,
+    comp_list,
+    ll,
+    A=None,
+):
+    """Write a fitted AMICA model as the Fortran/EEGLAB binary output directory.
+
+    Emits the raw little-endian files that :func:`loadmodout` and EEGLAB's
+    ``loadmodout15.m`` read: ``gm``, ``W``, ``S``, ``mean``, ``c``, ``alpha``,
+    ``mu``, ``sbeta``, ``rho``, ``comp_list`` (1-based ``int32``) and ``LL``.
+    This is the write counterpart of :func:`loadmodout`, so a pyAMICA fit (either
+    backend) drops into an EEGLAB workflow (issue #92).
+
+    Both backends store these arrays in the same convention, so for a single
+    model the bytes are identical to the Fortran reference's ``amicaout`` files;
+    for ``num_models > 1`` the per-model axis nesting is self-consistent (it
+    round-trips through :func:`loadmodout`) but not byte-identical to genuine
+    multi-model Fortran output (issue #27).
+
+    Parameters
+    ----------
+    outdir : str or path-like
+        Destination directory (created if absent).
+    gm, W, sphere, mean, c, alpha, mu, sbeta, rho : array-like
+        Model weights, unmixing, sphere, data mean, per-model centers and the
+        mixture-density parameters (``sbeta`` is the scale, pyAMICA's ``beta``).
+    comp_list : array-like of int
+        0-based component ids; written 1-based to match the Fortran format.
+    ll : array-like
+        Per-iteration log-likelihood history.
+    A : array-like, optional
+        Mixing matrix. ``loadmodout15`` derives ``A`` from ``W`` and ``S`` and
+        ignores this file; it is written (when given) only so pyAMICA's own
+        ``load_results`` can restore ``A`` directly for the viz helpers.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    def _w(name, arr, dtype=np.float64, order="C"):
+        # Fortran dumps arrays column-major; ``order="F"`` reproduces that byte
+        # layout so real EEGLAB ``loadmodout15.m`` reads the file correctly.
+        np.asarray(arr, dtype=dtype).ravel(order=order).tofile(outdir / name)
+
+    _w("gm", gm)
+    if A is not None:
+        _w("A", A)
+    # W is byte-identical to Fortran in C order: the internal-vs-true-unmixing
+    # transpose (issue #24) cancels against Fortran's column-major storage, so a
+    # square W written C-order equals the Fortran/EEGLAB column-major bytes. The
+    # symmetric sphere S is order-agnostic; mean/gm/LL are 1-D.
+    _w("W", W)
+    _w("S", sphere)
+    _w("mean", mean)
+    # The (num_mix, num_comps) mixture params and (num_comps, num_models) c /
+    # comp_list are non-square, so their byte layout DOES depend on order: they
+    # must be column-major (Fortran) for loadmodout15 to read them correctly
+    # (e.g. mixture proportions per component sum to 1). Issue #92.
+    _w("c", c, order="F")
+    _w("alpha", alpha, order="F")
+    _w("mu", mu, order="F")
+    _w("sbeta", sbeta, order="F")
+    _w("rho", rho, order="F")
+    # comp_list is 1-based on disk (loadmodout subtracts 1 when indexing).
+    _w("comp_list", np.asarray(comp_list) + 1, dtype=np.int32, order="F")
+    _w("LL", np.asarray(ll))
+
+
 def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
     """Load AMICA output files from directory.
 
@@ -106,9 +184,9 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
         # else is a corrupt or unexpected file and should fail loudly
         # rather than silently truncating.
         if comp_list.size == expected:
-            comp_list = comp_list.reshape(nw, num_models)
+            comp_list = comp_list.reshape(nw, num_models, order="F")
         elif comp_list.size == 2 * expected and not np.any(comp_list[expected:]):
-            comp_list = comp_list[:expected].reshape(nw, num_models)
+            comp_list = comp_list[:expected].reshape(nw, num_models, order="F")
         else:
             raise ValueError(
                 f"comp_list has {comp_list.size} elements; expected {expected} "
@@ -136,13 +214,15 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
     if c is None:
         c = np.zeros((nw, num_models))
     else:
-        c = c.reshape(nw, num_models)
+        c = c.reshape(nw, num_models, order="F")
 
-    # Read mixture parameters
+    # Read mixture parameters. Stored column-major (Fortran), so reshape order="F"
+    # (matches loadmodout15.m and the write_amicaout writer); a C-order read would
+    # scramble the (num_mix, num_comps) layout. Issue #92.
     alpha_tmp = read_binary_file(outdir / "alpha")
     if alpha_tmp is not None:
         num_mix = len(alpha_tmp) // (nw * num_models)
-        alpha_tmp = alpha_tmp.reshape(num_mix, nw * num_models)
+        alpha_tmp = alpha_tmp.reshape(num_mix, nw * num_models, order="F")
         alpha = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):
@@ -158,7 +238,7 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
     # Read mu, sbeta, rho
     mu_tmp = read_binary_file(outdir / "mu")
     if mu_tmp is not None:
-        mu_tmp = mu_tmp.reshape(num_mix, nw * num_models)
+        mu_tmp = mu_tmp.reshape(num_mix, nw * num_models, order="F")
         mu = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):

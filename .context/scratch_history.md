@@ -45,6 +45,30 @@ python -m pyAMICA.amica_cli pyAMICA/sample_data/sample_params.json --verbose --o
 gfortran -O3 -fopenmp amica17.f90 funmod2.f90 -o amica -llapack -lblas
 ```
 
+## Issue #92 (EEGLAB drop-in output): the column-major layout fix (KEY)
+Fortran/EEGLAB store arrays **column-major**. The MATLAB round-trip exposed that
+pyAMICA wrote the non-square mixture params (`alpha`/`mu`/`sbeta`/`rho`, shape
+`(num_mix, num_comps)`) and `c`/`comp_list` in **C-order**, so real MATLAB
+`loadmodout15.m` (column-major reads) got scrambled mixture params -- e.g. the
+per-component mixture proportions did NOT sum to 1. FIXED (issue #92): the writer
+`write_amicaout` and BOTH numpy readers (`loadmodout`, `data.py:load_results`) now
+use `order="F"` for those arrays. Diagnostic that nails the layout: read genuine
+`sample_data/amicaout/alpha` -- `reshape(3,32,order='F').sum(0)` is all 1.0
+(correct); C-order is garbage `[0.49..1.31]`.
+- `W` (square) stays C-order in the writer AND is byte-identical to Fortran: the
+  internal-vs-true-unmixing transpose (#24) cancels against Fortran's column-major
+  storage (`self.W` C-order bytes == Fortran column-major `W_true` bytes). `S` is
+  symmetric (order-agnostic); `mean`/`gm`/`LL` are 1-D.
+- Remaining, deliberately-out-of-scope quirk: `loadmodout`/`load_results` still
+  read the **W** file C-order, so the port's `mod.W` is the transpose of MATLAB's
+  and its derived `A`/`svar`/`origord` use `pinv(self.W_int @ S)`. This does NOT
+  corrupt values (unlike the mixture bug, which did) and nothing consumes those
+  fields for correctness; every parity test matches `W` via transpose-tolerant
+  Hungarian |corr|. Do NOT flip the W read without re-checking #24/#37 parity.
+  Consequence: `AMICATorchNG.variance_order()` (uses `W_fort=self.W.T`, matching
+  real MATLAB) is validated against the MATLAB-faithful column-major reader, NOT
+  the numpy port's `origord`.
+
 ## Lessons / check first next time
 - [ ] Positive LL almost always means a wrong PDF normalization constant.
 - [ ] NaN at a phase transition (e.g. Newton start) points at unclipped gradients or zero denominators.

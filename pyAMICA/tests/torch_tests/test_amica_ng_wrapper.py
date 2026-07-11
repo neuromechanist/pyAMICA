@@ -139,6 +139,119 @@ def test_ng_mps_float32_escape_hatch(real_data):
     assert model.model_.dtype == torch.float32
 
 
+# --- EEGLAB drop-in output (issue #92) -------------------------------------
+# Files EEGLAB's loadmodout15.m / the numpy port loadmodout() read.
+_AMICAOUT_FILES = ("gm", "W", "S", "mean", "c", "alpha", "mu", "sbeta", "rho",
+                   "comp_list", "LL")  # fmt: skip
+
+
+def test_write_amica_output_requires_fit(tmp_path):
+    """An unfit model must refuse to write output, mirroring save() (#50)."""
+    model = AMICA(verbose=False)
+    with pytest.raises(ValueError, match="fitted"):
+        model.write_amica_output(str(tmp_path / "amicaout"))
+
+
+def test_variance_order_requires_fit():
+    """variance_order also refuses an unfit model (same _check_usable guard)."""
+    model = AMICA(verbose=False)
+    with pytest.raises(ValueError, match="fitted"):
+        model.variance_order()
+
+
+def test_write_amica_output_bytes(fitted_ng, tmp_path):
+    """The written files are the model's exact float64 parameters: the on-disk
+    EEGLAB directory is a lossless serialization, not a lossy export (#92). W and
+    the symmetric sphere are byte-identical in C order; the non-square mixture
+    params and c/comp_list are column-major (Fortran layout), so read order="F".
+    """
+    outdir = tmp_path / "amicaout"
+    fitted_ng.write_amica_output(str(outdir))
+    ng = fitted_ng.model_
+
+    for name, attr in [("gm", ng.gm), ("W", ng.W), ("S", ng.sphere),
+                       ("mean", ng.mean)]:  # fmt: skip
+        got = np.fromfile(outdir / name).reshape(attr.shape)  # C order
+        np.testing.assert_array_equal(got, attr.cpu().numpy(), err_msg=name)
+    for name, attr in [("c", ng.c), ("alpha", ng.alpha), ("mu", ng.mu),
+                       ("sbeta", ng.beta), ("rho", ng.rho)]:  # fmt: skip
+        got = np.fromfile(outdir / name).reshape(attr.shape, order="F")
+        np.testing.assert_array_equal(got, attr.cpu().numpy(), err_msg=name)
+    # comp_list is written 1-based int32, column-major.
+    np.testing.assert_array_equal(
+        np.fromfile(outdir / "comp_list", np.int32).reshape(
+            ng.comp_list.shape, order="F"
+        ),
+        ng.comp_list.cpu().numpy() + 1,
+    )
+    # LL ends at the exported (kept) iterate; the fixture fit is monotone, so the
+    # full trajectory is written.
+    ll = np.fromfile(outdir / "LL")
+    assert ll[-1] == ng.final_ll_
+    np.testing.assert_array_equal(
+        ll, np.asarray(ng.ll_history[: len(ll)], dtype=np.float64)
+    )
+
+
+def test_write_amica_output_loadmodout_readable(fitted_ng, tmp_path):
+    """A PyTorch NG fit written with write_amica_output() is a directory the
+    EEGLAB reader (loadmodout / loadmodout15) loads with the expected shapes and
+    correct Fortran (column-major) mixture-param layout (issue #92)."""
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    outdir = tmp_path / "amicaout"
+    fitted_ng.write_amica_output(str(outdir))
+    for name in _AMICAOUT_FILES:
+        assert (outdir / name).exists(), f"missing {name}"
+
+    mod = loadmodout(outdir)
+    assert mod.num_models == 1
+    assert mod.W.shape == (NW, NW, 1)
+    assert mod.A.shape == (NW, NW, 1)
+    assert mod.S.shape == (NW, NW)
+    # Mixture proportions per component must sum to 1: a meaningful check that the
+    # (num_mix, n_comp) params were read back with the correct column-major layout
+    # (a C-order write would scramble them and break this).
+    np.testing.assert_allclose(mod.alpha[:, :, 0].sum(axis=0), 1.0, atol=1e-9)
+
+
+def test_variance_order(fitted_ng):
+    """variance_order() returns a permutation of the sources ranked by descending
+    back-projected variance (EEGLAB IC1 = highest), for use in Python without a
+    disk round-trip (issue #92)."""
+    order, svar = fitted_ng.variance_order(return_svar=True)
+    assert sorted(order.tolist()) == list(range(NW))  # a permutation
+    assert np.all(np.diff(svar) <= 1e-9)  # descending
+
+
+def test_write_amica_output_ll_matches_kept_iterate(real_data, tmp_path):
+    """When keep_best (#51) restores an earlier iterate, the written LL trajectory
+    ends at that kept iterate (LL[-1] == final_ll_), not at a later discarded
+    overshoot -- so a user reading mod.LL(end) in EEGLAB sees the loaded model's
+    likelihood (review finding, #92)."""
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(
+        real_data[:, :4096],
+        max_iter=60,
+        do_newton=True,
+        newt_start=1,
+        lrate=0.5,
+        seed=0,
+        block_size=1024,
+    )
+    if not model.is_fitted_:
+        pytest.skip("aggressive run ended degenerate; not the case under test")
+    ng = model.model_
+    if np.isclose(ng.ll_history[-1], ng.final_ll_):
+        pytest.skip("run was monotone; keep_best restore did not fire")
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+    ll = np.fromfile(outdir / "LL")
+    assert np.isclose(ll[-1], ng.final_ll_)  # ends at the kept iterate
+    assert len(ll) < len(ng.ll_history)  # the later overshoot is dropped
+
+
 def test_ng_wrapper_fit_transform_real_data(fitted_ng, real_data):
     assert fitted_ng.is_fitted_
     assert len(fitted_ng.ll_history_) >= 1
@@ -202,6 +315,8 @@ def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
         lambda: model.get_mixing_matrix(),
         lambda: model.get_unmixing_matrix(),
         lambda: model.save(str(tmp_path / "degenerate.pt")),
+        lambda: model.write_amica_output(str(tmp_path / "degenerate_out")),
+        lambda: model.variance_order(),
     ):
         with pytest.raises(RuntimeError, match="degenerate.*nan_ll"):
             action()
