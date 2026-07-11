@@ -48,6 +48,74 @@ def read_binary_file(
         return None
 
 
+def write_amicaout(
+    outdir: Union[str, Path],
+    *,
+    gm,
+    W,
+    sphere,
+    mean,
+    c,
+    alpha,
+    mu,
+    sbeta,
+    rho,
+    comp_list,
+    ll,
+    A=None,
+):
+    """Write a fitted AMICA model as the Fortran/EEGLAB binary output directory.
+
+    Emits the raw little-endian files that :func:`loadmodout` and EEGLAB's
+    ``loadmodout15.m`` read: ``gm``, ``W``, ``S``, ``mean``, ``c``, ``alpha``,
+    ``mu``, ``sbeta``, ``rho``, ``comp_list`` (1-based ``int32``) and ``LL``.
+    This is the write counterpart of :func:`loadmodout`, so a pyAMICA fit (either
+    backend) drops into an EEGLAB workflow (issue #92).
+
+    Both backends store these arrays in the same convention, so for a single
+    model the bytes are identical to the Fortran reference's ``amicaout`` files;
+    for ``num_models > 1`` the per-model axis nesting is self-consistent (it
+    round-trips through :func:`loadmodout`) but not byte-identical to genuine
+    multi-model Fortran output (issue #27).
+
+    Parameters
+    ----------
+    outdir : str or path-like
+        Destination directory (created if absent).
+    gm, W, sphere, mean, c, alpha, mu, sbeta, rho : array-like
+        Model weights, unmixing, sphere, data mean, per-model centers and the
+        mixture-density parameters (``sbeta`` is the scale, pyAMICA's ``beta``).
+    comp_list : array-like of int
+        0-based component ids; written 1-based to match the Fortran format.
+    ll : array-like
+        Per-iteration log-likelihood history.
+    A : array-like, optional
+        Mixing matrix. ``loadmodout15`` derives ``A`` from ``W`` and ``S`` and
+        ignores this file; it is written (when given) only so pyAMICA's own
+        ``load_results`` can restore ``A`` directly for the viz helpers.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    def _w(name, arr, dtype=np.float64):
+        np.ascontiguousarray(arr, dtype=dtype).tofile(outdir / name)
+
+    _w("gm", gm)
+    if A is not None:
+        _w("A", A)
+    _w("W", W)
+    _w("S", sphere)
+    _w("mean", mean)
+    _w("c", c)
+    _w("alpha", alpha)
+    _w("mu", mu)
+    _w("sbeta", sbeta)
+    _w("rho", rho)
+    # comp_list is 1-based on disk (loadmodout subtracts 1 when indexing).
+    _w("comp_list", np.asarray(comp_list) + 1, dtype=np.int32)
+    _w("LL", np.asarray(ll))
+
+
 def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
     """Load AMICA output files from directory.
 

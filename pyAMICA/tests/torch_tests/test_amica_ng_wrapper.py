@@ -139,6 +139,78 @@ def test_ng_mps_float32_escape_hatch(real_data):
     assert model.model_.dtype == torch.float32
 
 
+# --- EEGLAB drop-in output (issue #92) -------------------------------------
+# Files EEGLAB's loadmodout15.m / the numpy port loadmodout() read.
+_AMICAOUT_FILES = ("gm", "W", "S", "mean", "c", "alpha", "mu", "sbeta", "rho",
+                   "comp_list", "LL")  # fmt: skip
+
+
+def test_write_amica_output_requires_fit(tmp_path):
+    """An unfit model must refuse to write output, mirroring save() (#50)."""
+    model = AMICA(verbose=False)
+    with pytest.raises(ValueError, match="fitted"):
+        model.write_amica_output(str(tmp_path / "amicaout"))
+
+
+def test_write_amica_output_bytes(fitted_ng, tmp_path):
+    """The written files are the model's exact float64 parameters: the on-disk
+    EEGLAB directory is a lossless serialization, not a lossy export (#92).
+    Convention-free (compares raw bytes, no reader in the loop)."""
+    outdir = tmp_path / "amicaout"
+    fitted_ng.write_amica_output(str(outdir))
+    ng = fitted_ng.model_
+
+    def _read(name, dtype=np.float64):
+        return np.fromfile(outdir / name, dtype=dtype)
+
+    for name, attr in [
+        ("gm", ng.gm), ("W", ng.W), ("S", ng.sphere), ("mean", ng.mean),
+        ("c", ng.c), ("alpha", ng.alpha), ("mu", ng.mu), ("sbeta", ng.beta),
+        ("rho", ng.rho),
+    ]:  # fmt: skip
+        np.testing.assert_array_equal(
+            _read(name).reshape(attr.shape), attr.cpu().numpy(), err_msg=name
+        )
+    # comp_list is written 1-based int32.
+    np.testing.assert_array_equal(
+        _read("comp_list", np.int32).reshape(ng.comp_list.shape),
+        ng.comp_list.cpu().numpy() + 1,
+    )
+    np.testing.assert_array_equal(
+        _read("LL"), np.asarray(ng.ll_history, dtype=np.float64)
+    )
+
+
+def test_write_amica_output_loadmodout_readable(fitted_ng, tmp_path):
+    """A PyTorch NG fit written with write_amica_output() is a directory the
+    EEGLAB reader (loadmodout / loadmodout15) loads, with the expected shapes
+    and EEGLAB's back-projected-variance ordering applied (issue #92)."""
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    outdir = tmp_path / "amicaout"
+    fitted_ng.write_amica_output(str(outdir))
+    for name in _AMICAOUT_FILES:
+        assert (outdir / name).exists(), f"missing {name}"
+
+    mod = loadmodout(outdir)
+    assert mod.num_models == 1
+    assert mod.W.shape == (NW, NW, 1)
+    assert mod.A.shape == (NW, NW, 1)
+    assert mod.S.shape == (NW, NW)
+    # origord holds the fit-order indices sorted by descending back-projected
+    # variance (EEGLAB IC1 = highest): svar taken in that order is non-increasing.
+    assert np.all(np.diff(mod.svar[mod.origord[:, 0], 0]) <= 1e-9)
+
+
+def test_variance_order(fitted_ng):
+    """variance_order() returns a permutation of the sources ranked by descending
+    back-projected variance (EEGLAB IC1 = highest), for use in Python without a
+    disk round-trip (issue #92)."""
+    order, svar = fitted_ng.variance_order(return_svar=True)
+    assert sorted(order.tolist()) == list(range(NW))  # a permutation
+    assert np.all(np.diff(svar) <= 1e-9)  # descending
+
+
 def test_ng_wrapper_fit_transform_real_data(fitted_ng, real_data):
     assert fitted_ng.is_fitted_
     assert len(fitted_ng.ll_history_) >= 1
