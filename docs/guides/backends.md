@@ -30,9 +30,12 @@ requires MLX.
 
 - **float64** — the default; required for Fortran-parity runs. CUDA float64
   agrees with the CPU log-likelihood to ~5 significant digits.
-- **float32** — 5-19x faster and required on MPS/MLX, but ~7-significant-digit,
-  not float64-parity. Use it for exploratory or large-scale runs where exact
-  reference parity is not required.
+- **float32** — required on the Apple GPUs (MPS/MLX have no float64) and
+  ~7-significant-digit, not float64-parity. It is not a general speedup: CUDA is
+  overhead-bound so float32 is about as fast as float64, while on CPU float32 is
+  modestly faster and scales better across cores. The Apple-GPU speed win comes
+  from the MLX backend (see below), not float32 itself. Use it for exploratory or
+  large-scale runs where exact reference parity is not required.
 
 ## Performance on real EEG
 

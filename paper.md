@@ -182,6 +182,9 @@ We thank Jason Palmer and Ken Kreutz-Delgado, co-developers of AMICA, for the
 reference implementation, and the EEGLAB community for the tools and sample data
 used to validate this work. Two of the authors are original developers of the
 methods `pyAMICA` builds on: S.M. co-developed the AMICA algorithm (Palmer et al.,
-cited above) and A.D. is a lead developer of EEGLAB [@delorme2004eeglab].
+cited above) and A.D. is a lead developer of EEGLAB [@delorme2004eeglab]. This
+work was supported by The Swartz Foundation (Old Field, NY) to the Swartz Center
+for Computational Neuroscience and by National Institutes of Health grant
+R01-NS047293 (to A.D. and S.M.).
 
 # References
