@@ -26,10 +26,47 @@ solution within ~0.005 log-likelihood.
 
 Multi-model AMICA is not partition-identifiable, so exact partition parity with
 Fortran is the wrong acceptance bar. The right test is whether the two
-implementations sample the same distribution over solutions. On an ensemble of
-real sample EEG runs, the pyAMICA-vs-Fortran partition cross-correlation
-distribution is statistically equivalent to Fortran's own run-to-run
-distribution.
+implementations sample the same distribution over solutions. Running an ensemble
+of `N = 20` fits per implementation on the real sample EEG (`n_models = 2`, 3
+mixture components, 100 iterations, matched schedule), the pyAMICA-vs-Fortran
+partition cross-correlation distribution overlaps Fortran's own run-to-run
+distribution:
+
+| Distribution (pairwise Hungarian-matched \|corr\|) | Mean | SD | Range |
+|---|---:|---:|---|
+| within-Fortran (Fortran vs Fortran) | 0.634 | 0.042 | [0.567, 0.772] |
+| within-pyAMICA (pyAMICA vs pyAMICA) | 0.644 | 0.046 | [0.537, 0.798] |
+| between (pyAMICA vs Fortran) | 0.638 | 0.047 | [0.525, 0.938] |
+
+![Multi-model solution-ensemble cross-correlation distributions for pyAMICA and Fortran.](../assets/figures/multimodel-ensemble.png){ width=640 }
+/// caption
+Pairwise Hungarian-matched component correlation for 20 pyAMICA and 20 Fortran
+multi-model fits of the sample EEG. The within-Fortran, within-pyAMICA, and
+between-implementation distributions overlap: the estimators sample the same
+solution space.
+///
+
+The three distribution means lie within 0.01 of each other, well inside a
+$\pm 0.05$ margin. Supporting tests point the same way: a one-sided Mann-Whitney
+test finds no evidence the between-implementation agreement is *worse* than
+Fortran's own ($p = 0.97$), and a two-one-sided-tests (TOST) equivalence check
+against a $\pm 0.05$ margin passes.
+
+!!! note "Read the tests as supporting, not inferential"
+    The tests above are computed over *pairwise* correlations (190 within-group and
+    400 between-group values) built from only 20 independent runs per group, so the
+    pairwise values are not independent draws and the nominal p-values are
+    optimistic. The load-bearing evidence is therefore the descriptive overlap of
+    the three distributions (means within 0.01, comparable spread), not the exact
+    p-values; a run-level permutation test is the correct way to obtain a strictly
+    valid p-value.
+
+The single-run cross-correlation of ~0.64 is therefore intrinsic estimator
+spread, not a shortfall: Fortran agrees with *itself* at 0.63. The per-block
+sufficient statistics and one M-step are bit-exact against Fortran (~$10^{-15}$),
+so the update equations are correct; a small residual in the log-likelihood
+*distribution* (pyAMICA $-3.374 \pm 0.040$ vs Fortran $-3.354 \pm 0.003$) is an
+optimizer-quality effect, not a model-correctness defect.
 
 ## Data adequacy and cross-backend equivalence
 
@@ -71,3 +108,64 @@ float64/float32 backends). Equivalence saturates at ~0.98 once $k \geq 60$.
     (signal-to-noise ratio, effective rank, source structure), so this is not a
     universal value of `k`. The plateau is ~0.98 rather than 1.0 because of
     intrinsic estimator spread and the float32 path, not a backend defect.
+
+### Why the plateau sits at ~0.98, not 1.0
+
+At the largest data size (k=152) the residual below 1.0 splits cleanly by
+precision. The two double-precision implementations, an independent native
+Fortran binary and the PyTorch-CUDA backend, agree at 0.995:
+
+| Pair (at k=152) | \|corr\| |
+|---|---:|
+| native-Fortran f64 vs PyTorch-CUDA f64 | 0.995 |
+| native-Fortran f64 vs PyTorch-CUDA f32 | 0.971 |
+| PyTorch-CUDA f64 vs PyTorch-CUDA f32 | 0.979 |
+
+This is cross-*implementation* agreement, not just cross-device. The residual gap
+is dominated by the float32 path (rounding accumulated over 2000 iterations, plus
+an early stop when the natural-gradient learning rate hit its floor), which is a
+convergence/precision effect rather than a backend defect.
+
+## Performance across backends
+
+Throughput on real EEG (OpenNeuro ds002718 sub-002; `n_mix=3`, `pdftype=0`,
+`block_size=512`, warmed, min-of-repeats). CPU, MPS, and MLX were measured on
+Apple Silicon; CUDA on a separate NVIDIA RTX 4090 host, so MLX-versus-CUDA reads
+as "best Apple-GPU path versus a strong NVIDIA GPU", not a same-box comparison.
+
+### Single-model, ms/iteration
+
+| channels | MLX f32 | CUDA f32 | CUDA f64 | torch-CPU f32 | torch-CPU f64 | torch-MPS f32 | NumPy f64 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 15.4 | 35.5 | 35.0 | 52 | 71 | 189 | 142 |
+| 32 | 21.3 | 35.5 | 36.2 | 143 | 161 | 162 | 287 |
+| 48 | 19.5 | 36.0 | 35.9 | 151 | 168 | 168 | 426 |
+| 70 | 25.2 | 35.6 | 38.6 | 173 | 193 | 255 | 622 |
+
+MLX is the fastest option on Apple Silicon and stays roughly flat with channel
+count (~7x over torch-CPU). PyTorch-MPS is *not* a win (at or worse than CPU), so
+use MLX rather than `device="mps"` on Apple hardware. CUDA float32 and float64 are
+near-identical here (launch-bound at this size). NumPy is the reference
+implementation, not a production path.
+
+### Multi-model (n_models=2), ms/iteration
+
+| channels | MLX f32 | torch-CPU f32 | torch-MPS f32 | NumPy f64 |
+|---:|---:|---:|---:|---:|
+| 32 | 38 | 187 | 291 | 869 |
+| 70 | 45 | 224 | 270 | 928 |
+
+The Apple-GPU win extends to multi-model: MLX ~38-45 ms/iteration, ~5x over
+torch-CPU, with MPS still losing.
+
+### Cross-backend log-likelihood agreement (single-model)
+
+Every backend converges to the same log-likelihood to ~3 significant digits on
+real EEG, across device and precision, confirming the whole backend family
+end-to-end:
+
+| channels | MLX f32 | CUDA f64 | torch-CPU f64 | torch-MPS f32 | NumPy f64 |
+|---:|---:|---:|---:|---:|---:|
+| 32 | -3.28634 | -3.28635 | -3.28636 | -3.28635 | -3.28620 |
+| 48 | -3.20951 | -3.20952 | -3.20953 | -3.20951 | -3.21019 |
+| 70 | -3.21579 | -3.21562 | -3.21560 | -3.21570 | -3.21315 |
