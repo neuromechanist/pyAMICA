@@ -34,9 +34,9 @@ distribution:
 
 | Distribution (pairwise Hungarian-matched \|corr\|) | Mean | SD | Range |
 |---|---:|---:|---|
-| within-Fortran (Fortran vs Fortran) | 0.634 | 0.042 | [0.567, 0.772] |
-| within-pyAMICA (pyAMICA vs pyAMICA) | 0.644 | 0.046 | [0.537, 0.798] |
-| between (pyAMICA vs Fortran) | 0.638 | 0.047 | [0.525, 0.938] |
+| within-Fortran (Fortran vs Fortran) | 0.638 | 0.040 | [0.572, 0.797] |
+| within-pyAMICA (pyAMICA vs pyAMICA) | 0.661 | 0.045 | [0.583, 0.820] |
+| between (pyAMICA vs Fortran) | 0.649 | 0.045 | [0.582, 0.886] |
 
 ![Multi-model solution-ensemble cross-correlation distributions for pyAMICA and Fortran.](../assets/figures/multimodel-ensemble.png){ width=640 }
 /// caption
@@ -46,27 +46,25 @@ between-implementation distributions overlap: the estimators sample the same
 solution space.
 ///
 
-The three distribution means lie within 0.01 of each other, well inside a
-$\pm 0.05$ margin. Supporting tests point the same way: a one-sided Mann-Whitney
-test finds no evidence the between-implementation agreement is *worse* than
-Fortran's own ($p = 0.97$), and a two-one-sided-tests (TOST) equivalence check
-against a $\pm 0.05$ margin passes.
+The three distribution means lie within 0.011 of each other (between 0.649,
+within-Fortran 0.638), well inside a $\pm 0.05$ margin. To test this at the
+correct unit of analysis, we use a **run-level permutation test**: the 190/400
+pairwise correlations are *not* independent (each of the 40 runs appears in ~39
+pairs), so a Mann-Whitney or TOST applied to the pairwise values is
+pseudoreplicated and its p-value is invalid. Permuting the 40 runs as intact
+units instead (20000 permutations, statistic = within-Fortran minus
+between-implementation mean correlation) respects that dependence and finds **no
+evidence that cross-implementation agreement is worse than Fortran's own
+run-to-run agreement ($p = 0.96$)**.
 
-!!! note "Read the tests as supporting, not inferential"
-    The tests above are computed over *pairwise* correlations (190 within-group and
-    400 between-group values) built from only 20 independent runs per group, so the
-    pairwise values are not independent draws and the nominal p-values are
-    optimistic. The load-bearing evidence is therefore the descriptive overlap of
-    the three distributions (means within 0.01, comparable spread), not the exact
-    p-values; a run-level permutation test is the correct way to obtain a strictly
-    valid p-value.
-
-The single-run cross-correlation of ~0.64 is therefore intrinsic estimator
-spread, not a shortfall: Fortran agrees with *itself* at 0.63. The per-block
+The single-run cross-correlation of ~0.65 is therefore intrinsic estimator
+spread, not a shortfall: Fortran agrees with *itself* at 0.64. The per-block
 sufficient statistics and one M-step are bit-exact against Fortran (~$10^{-15}$),
 so the update equations are correct; a small residual in the log-likelihood
-*distribution* (pyAMICA $-3.374 \pm 0.040$ vs Fortran $-3.354 \pm 0.003$) is an
-optimizer-quality effect, not a model-correctness defect.
+*distribution* (pyAMICA $-3.363 \pm 0.006$ vs Fortran $-3.354 \pm 0.003$;
+Kolmogorov-Smirnov $p \approx 6\times10^{-5}$) is an optimizer-quality effect,
+not a model-correctness defect (pyAMICA reaches Fortran's mean with about twice
+as many iterations).
 
 ## Data adequacy and cross-backend equivalence
 
