@@ -8,7 +8,7 @@ management.
 ### From source
 
 ```bash
-git clone https://github.com/neuromechanist/pyAMICA.git
+git clone https://github.com/sccn/pyAMICA.git
 cd pyAMICA
 uv sync            # install the project and its dependencies into .venv
 ```

@@ -1,14 +1,14 @@
 # Contributing
 
 Contributions are welcome. This page summarizes the development workflow; see the
-full [CONTRIBUTING](https://github.com/neuromechanist/pyAMICA/blob/main/CONTRIBUTING.md)
-and [Code of Conduct](https://github.com/neuromechanist/pyAMICA/blob/main/CODE_OF_CONDUCT.md)
+full [CONTRIBUTING](https://github.com/sccn/pyAMICA/blob/main/CONTRIBUTING.md)
+and [Code of Conduct](https://github.com/sccn/pyAMICA/blob/main/CODE_OF_CONDUCT.md)
 in the repository root.
 
 ## Development setup
 
 ```bash
-git clone https://github.com/neuromechanist/pyAMICA.git
+git clone https://github.com/sccn/pyAMICA.git
 cd pyAMICA
 uv sync                 # install the project and dependencies
 uv run pytest           # run the test suite
@@ -27,5 +27,5 @@ uv run pytest           # run the test suite
 ## Reporting issues and getting help
 
 Please open an issue on the
-[GitHub issue tracker](https://github.com/neuromechanist/pyAMICA/issues) for bug
+[GitHub issue tracker](https://github.com/sccn/pyAMICA/issues) for bug
 reports, feature requests, and questions.

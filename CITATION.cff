@@ -21,10 +21,10 @@ authors:
     given-names: Scott
     orcid: "https://orcid.org/0000-0002-9048-8438"
     affiliation: "Swartz Center for Computational Neuroscience, University of California San Diego"
-version: 0.1.dev0
+version: 0.1.0
 license: BSD-3-Clause
-repository-code: "https://github.com/neuromechanist/pyAMICA"
-url: "https://github.com/neuromechanist/pyAMICA"
+repository-code: "https://github.com/sccn/pyAMICA"
+url: "https://github.com/sccn/pyAMICA"
 keywords:
   - AMICA
   - independent component analysis

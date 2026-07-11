@@ -9,7 +9,7 @@ standard rather than to "it converges."
 ## Getting help and reporting issues
 
 - **Questions, bugs, and feature requests:** please open an issue on the
-  [GitHub issue tracker](https://github.com/neuromechanist/pyAMICA/issues).
+  [GitHub issue tracker](https://github.com/sccn/pyAMICA/issues).
 - When reporting a bug, include the pyAMICA version, platform, device
   (CPU/CUDA/MPS/MLX), precision (float32/float64), and a minimal example.
 
@@ -19,7 +19,7 @@ pyAMICA uses [UV](https://docs.astral.sh/uv/) for environment and dependency
 management.
 
 ```bash
-git clone https://github.com/neuromechanist/pyAMICA.git
+git clone https://github.com/sccn/pyAMICA.git
 cd pyAMICA
 uv sync                 # install the project and dependencies
 uv run pytest           # run the test suite

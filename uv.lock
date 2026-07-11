@@ -1267,7 +1267,7 @@ wheels = [
 
 [[package]]
 name = "pyamica"
-version = "0.1.dev0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "json5" },
