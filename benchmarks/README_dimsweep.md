@@ -59,7 +59,7 @@ uv run python benchmarks/benchmark_dimsweep.py --data DATA --n-models 2 --share 
 
 # CPU core-count scaling sweep (#86): run the CPU backends at each thread count
 # (GPU backends run once). torch-cpu -> set_num_threads, numpy -> threadpoolctl,
-# native-fortran -> OMP_NUM_THREADS. Best on a many-core host (e.g. hallu, 32 cores).
+# native-fortran -> OMP_NUM_THREADS. Best on a many-core host (e.g. the CUDA workstation, 32 cores).
 uv run python benchmarks/benchmark_dimsweep.py \
   --data benchmarks/data/ds002718_sub-002_eeg70.npy \
   --backends torch-cpu-f64,numpy-cpu-f64,native-fortran-f64 \

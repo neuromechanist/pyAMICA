@@ -33,7 +33,7 @@ to 0.00 s/iter is rejected rather than reported as bogus 0.0.
 
 ## Cross-platform sanity (real ds002718 sub-002, 30000 samples, single-model)
 
-hallu (Linux x86_64, RTX 4090, 32 cores, torch 2.12.1+cu130), 30 iters x 3 repeats,
+the CUDA workstation (Linux x86_64, RTX 4090, 32 cores, torch 2.12.1+cu130), 30 iters x 3 repeats,
 fortran-threads 8:
 
 | backend            | 32ch ms/it | 70ch ms/it | LL (32 / 70)     |

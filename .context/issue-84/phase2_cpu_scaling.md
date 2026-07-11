@@ -10,7 +10,7 @@ Real ds002718 sub-002 EEG, 30000 samples, single-model, matched settings (n_mix=
 do_newton off, block_size 512), 20 iters x 2 repeats (min). ms/iteration, lower is better.
 Channels swept 16/32/48/70; 70ch shown as the headline below (full grid in the result JSONs).
 
-## hallu -- Intel x86_64, 32 cores, RTX 4090, torch 2.12.1+cu130
+## CUDA workstation -- Intel x86_64, 32 cores, RTX 4090, torch 2.12.1+cu130
 
 ms/iter vs cores, 70 channels:
 
@@ -40,7 +40,7 @@ f32 final LL matches f64 to ~4-5 significant digits at every channel count and b
 (e.g. 70ch: torch-cpu-f32 -3.23606 / cuda-f32 -3.23631 vs f64 -3.23622; 16ch identical to
 5 digits). So f32 is numerically correct on both CUDA and Apple (MLX/MPS), not just faster.
 
-f32 also **scales more gracefully than f64 on torch-cpu**: on hallu the f32 path stays ~70 ms
+f32 also **scales more gracefully than f64 on torch-cpu**: on the CUDA workstation the f32 path stays ~70 ms
 across 8-24 cores while f64 collapses (91 -> 213 ms at 8 -> 24 cores). f32's smaller footprint
 and lighter intra-op work avoid the oversubscription cliff. On Mac, torch-cpu (both precisions)
 still regresses past 4 cores. cuda-f32 == cuda-f64 (~36 ms) -- the GPU is overhead-bound, not
@@ -71,7 +71,7 @@ the number.
 
 (70ch headline shown here; the full 16/32/48/70ch grid is in the result JSONs.)
 
-1. **Native Fortran + OpenMP is the only CPU backend that scales with cores, and on 24 of hallu's
+1. **Native Fortran + OpenMP is the only CPU backend that scales with cores, and on 24 of the workstation's
    32 cores it beats the RTX 4090** (70ch: 30 ms @24c vs cuda 38.5 ms). A tight compiled loop has
    no per-iteration launch overhead -- exactly the GPU's bottleneck at this scale.
 2. **The RTX 4090 is flat at ~36-38 ms/it regardless of precision** (overhead-bound). The

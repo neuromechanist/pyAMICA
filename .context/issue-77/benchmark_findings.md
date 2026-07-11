@@ -9,7 +9,7 @@ data prep in `benchmarks/README_dimsweep.md`. Matched settings: n_mix=3,
 pdftype=0, do_newton=False, block_size=512, seed=42, samples=30000 (single-model)
 / 20000 (multi-model), 25 / 20 iters.
 
-Hosts: **Apple Silicon** (this Mac: cpu / mps / mlx) and **hallu** (RTX 4090:
+Hosts: **Apple Silicon** (this Mac: cpu / mps / mlx) and **the CUDA workstation** (RTX 4090:
 cuda; its CPU was load-contended so CPU backends were run on the Mac). MLX and
 CUDA are on *different machines*, so MLX-vs-CUDA is "best Apple-GPU path vs a
 strong NVIDIA GPU", not a same-box comparison.
@@ -88,6 +88,6 @@ differs by intrinsic estimator spread, not a defect.
 - MLX vs CUDA is cross-machine (Apple M-series vs RTX 4090 host), not a controlled
   same-box comparison; read it as "best available Apple-GPU vs a strong NVIDIA
   GPU", not silicon-vs-silicon.
-- **Multi-model CUDA is pending** (the hallu SSH session dropped mid-run); the
+- **Multi-model CUDA is pending** (the remote SSH session dropped mid-run); the
   single-model CUDA data is complete. Re-run `--n-models 2 [--share] --backends
   torch-cuda-f64,torch-cuda-f32` on the CUDA host to fill it in.
