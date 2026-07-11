@@ -44,7 +44,12 @@ scientific workflow.
 
 `pyAMICA` is a Python implementation of AMICA that reproduces the reference
 Fortran results within numerical tolerance while running on the CPU, NVIDIA GPUs
-(CUDA), and Apple GPUs (Apple's MLX array framework [@mlx2023]). It is built on
+(CUDA), and Apple GPUs (Apple's MLX array framework [@mlx2023]). It runs in
+double precision for bit-level agreement with the reference and adds
+single-precision (float32) execution, which the CPU-only reference binary does
+not offer, for 5-19x-faster runs where bit-exact parity is not required; making
+float32 AMICA converge reliably is what unlocks the GPU speedups, and it is
+required on Apple GPUs, which have no float64. It is built on
 PyTorch [@paszke2019pytorch], NumPy [@harris2020array], and SciPy
 [@virtanen2020scipy], exposes a scikit-learn-style estimator, and writes results
 in the exact binary format that EEGLAB's AMICA loader reads. A single-model
@@ -87,30 +92,58 @@ positive-definite Newton step [@palmer2008newton], symmetric
 zero-phase-component-analysis (ZCA) sphering, the five
 source-density families of the reference (generalized Gaussian, Gaussian,
 logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture of
-ICA models, and component sharing across models. On real sample EEG, the
-single-model solution matches the Fortran reference to a log-likelihood of
-approximately -3.40 (reference -3.4018) with a Hungarian-matched component
-correlation of approximately 0.997. The fixed source-density families are
-bit-exact against the literal Fortran score and derivative expressions (to about
-$10^{-15}$). Because a mixture of ICA models is not partition-identifiable, the
-multi-model case is validated by distributional equivalence: the
-implementation-versus-reference cross-correlation distribution is statistically
-indistinguishable from the reference's own run-to-run spread (Mann-Whitney
-$p = 0.97$).
+ICA models, and component sharing across models.
 
-Across hardware, all backends agree on the log-likelihood to at least three
-significant digits on real EEG. On Apple Silicon the MLX backend is the fastest
-option (roughly 15-25 ms per iteration, about seven times faster than a
-multithreaded CPU and faster than an NVIDIA RTX 4090 at EEG channel counts),
-while double-precision CUDA is the bit-reproducible path on NVIDIA hardware and
-runs about 4.5 times faster than a 16-thread CPU. A data-size sweep shows that
-cross-backend component equivalence rises with the number of frames per channel
-and plateaus near 0.98 once the decomposition is well determined. A companion
-validation harness runs both the Python and Fortran implementations on the same
-real EEG and matches components with the Hungarian algorithm. Correctness tests
-use only real sample EEG and the reference binary; synthetic data is never used
-as the basis for a correctness claim, so parity is always measured against the
-reference.
+Correctness is measured against the reference binary on real sample EEG
+(Table 1). For a single model the solution reproduces Fortran's log-likelihood
+and component structure, and the source-density score functions and per-block
+sufficient statistics are bit-exact. A mixture of ICA models is not
+partition-identifiable, so exact partition parity is the wrong bar; the
+multi-model case is validated instead by distributional equivalence, where
+pyAMICA's ensemble of solutions is statistically indistinguishable from Fortran's
+own run-to-run spread. The single-run partition cross-correlation of ~0.64 is
+intrinsic estimator spread, not a shortfall, because Fortran agrees with itself at
+0.63.
+
+| Regime | Metric | Result |
+|---|---|---|
+| Single-model | Log-likelihood (`pyAMICA` vs Fortran) | $-3.40$ vs $-3.4018$ |
+| Single-model | Component correlation (Hungarian-matched) | $0.997$ |
+| Single-model | Score functions and sufficient statistics | bit-exact ($\sim\!10^{-15}$) |
+| Multi-model | Partition cross-corr, single run (`pyAMICA`; Fortran vs itself) | $0.64$; $0.63$ |
+| Multi-model | Solution-ensemble equivalence ($N\!=\!20$ each) | Mann-Whitney $p\!=\!0.97$; TOST equivalent |
+
+  : Parity of `pyAMICA` with the Fortran reference on real sample EEG.
+
+All backends agree on the log-likelihood to at least three significant digits on
+real EEG. On Apple Silicon the MLX backend is the fastest option and stays flat
+with channel count; PyTorch-MPS is not a win (at or worse than the CPU), and
+double-precision CUDA is the bit-reproducible path on NVIDIA hardware (Table 2). A
+data-size sweep further shows cross-backend component equivalence rising with
+frames per channel and plateauing near 0.98 once the decomposition is
+well-determined, where two independent double-precision implementations (native
+Fortran and PyTorch-CUDA) agree at 0.995. Single precision is
+seven-significant-digit rather than bit-exact, so double precision remains the
+default for Fortran-parity runs.
+
+| Backend (device) | Precision | ms / iteration |
+|---|---|---:|
+| MLX (Apple GPU) | float32 | 25 |
+| CUDA (NVIDIA RTX 4090) | float64 | 39 |
+| PyTorch CPU | float64 | 193 |
+| PyTorch MPS (Apple GPU) | float32 | 255 |
+| NumPy (reference) | float64 | 622 |
+
+  : Throughput on real 70-channel EEG (ms per iteration). CPU, MPS, and MLX on
+Apple Silicon; CUDA on an NVIDIA RTX 4090 (a separate host); CUDA float32 is
+comparable (~36 ms).
+
+A companion validation harness runs both implementations on the same real EEG and
+matches components with the Hungarian algorithm; correctness tests use only real
+sample EEG and the reference binary, never synthetic data. The full per-channel
+performance tables, the cross-backend log-likelihood-agreement and data-size
+sweeps, and the multi-model ensemble figure are in the documentation
+(<https://eeglab.org/pyAMICA/guides/validation/>).
 
 # State of the field
 
