@@ -1,11 +1,19 @@
-# [WIP] AMICA: Adaptive Mixture ICA
+# pyAMICA: Adaptive Mixture ICA
 
 [![CI](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/neuromechanist/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/neuromechanist/pyAMICA)
 
-Python implementation of the Adaptive Mixture ICA algorithm, based on the original Fortran implementation. This implementation is designed to be more user-friendly and easier to integrate with other Python libraries.
+Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis
+(AMICA) that reproduces the reference Fortran implementation within numerical
+tolerance, with CPU, NVIDIA GPU (CUDA), and Apple GPU (MLX) support. It targets
+EEG/EMG blind source separation and is a drop-in replacement for EEGLAB's AMICA:
+single-model output is byte-identical to the Fortran reference and loads directly
+in EEGLAB.
 
-NOTE: This is a work in progress and may not be fully functional yet. User should not rely on this implementation for any research or production purposes, as the results may not be accurate or reliable.
+Single-model results match the Fortran reference (log-likelihood ~ -3.40,
+Hungarian-matched component correlation ~ 0.997); see the
+[documentation](https://eeglab.org/pyAMICA/) for validation details and the
+backend-selection guide.
 
 ## Overview
 
@@ -20,14 +28,17 @@ AMICA (Adaptive Mixture ICA) is an advanced blind source separation algorithm th
 
 ## Installation
 
+The canonical environment is [uv](https://docs.astral.sh/uv/):
+
 ```bash
-# Clone the repository
 git clone https://github.com/neuromechanist/pyAMICA.git
 cd pyAMICA
-
-# install the package
-pip install -e .
+uv sync                     # install dependencies into a managed venv
+uv run pytest               # optional: run the tests
 ```
+
+The optional Apple-GPU backend (MLX, Apple Silicon only) installs with the `mlx`
+extra: `uv pip install mlx`.
 
 ## Usage
 

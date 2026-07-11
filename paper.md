@@ -5,7 +5,6 @@ tags:
   - PyTorch
   - independent component analysis
   - blind source separation
-  - electroencephalography
   - EEG
   - neuroscience
 authors:
@@ -27,8 +26,9 @@ electroencephalography (EEG) and electromyography (EMG) recordings into
 maximally independent sources, which isolates brain, muscle, and artifact
 activity for downstream analysis. Adaptive Mixture ICA (AMICA) generalizes single-model
 ICA to a mixture of ICA models with adaptive source densities, and produces the
-most dipolar, physiologically interpretable component decompositions of EEG among
-widely used algorithms [@delorme2012independent]. Its reference implementation,
+most dipolar component decompositions of EEG among widely used algorithms, meaning
+its components are best modeled by a single equivalent current dipole and are
+therefore the most physiologically interpretable [@delorme2012independent]. Its reference implementation,
 however, is a Fortran program parallelized with the Message Passing Interface
 (MPI) and distributed as a compiled binary driven from MATLAB/EEGLAB, which is
 difficult to install, runs only on the CPU, and is not usable from a Python
@@ -39,23 +39,26 @@ Fortran results within numerical tolerance while running on the CPU, NVIDIA GPUs
 (CUDA), and Apple GPUs (Apple's MLX array framework [@mlx2023]). It is built on
 PyTorch [@paszke2019pytorch], NumPy [@harris2020array], and SciPy
 [@virtanen2020scipy], exposes a scikit-learn-style estimator, and writes results
-in the exact binary format that EEGLAB's AMICA loader reads, so a `pyAMICA` run
-is a drop-in replacement for a native AMICA run with no manual re-interpretation.
-Correctness is defined as parity with the Fortran reference and is validated on
-real EEG against the reference binary rather than on synthetic data.
+in the exact binary format that EEGLAB's AMICA loader reads. A single-model
+`pyAMICA` run is byte-identical to a native AMICA run and needs no manual
+re-interpretation; multi-model output round-trips through the same EEGLAB loader
+with a self-consistent layout. Correctness is defined as parity with the Fortran
+reference and is validated on real EEG against the reference binary.
 
 # Statement of need
 
 AMICA yields components that are well suited to equivalent-dipole source
-localization and automated classification, and it separates EEG more effectively
-than most alternatives [@delorme2012independent; @palmer2012amica]. Despite this,
-the only maintained implementation is the original Fortran code: it depends on an
-MPI toolchain and precompiled binaries that are awkward to build across platforms,
-it cannot use a GPU, and it is invoked as an external process from MATLAB rather
-than called from Python. As neuroimaging analysis has moved toward Python (for example
-MNE-Python [@gramfort2013meg]), this leaves no native, GPU-capable AMICA for
-modern pipelines, and no way to study or extend the algorithm in a
-readable, testable codebase.
+localization and to automated classification of independent components
+[@piontonachini2019iclabel], and it separates EEG more effectively than most
+alternatives [@delorme2012independent; @palmer2012amica]. The reference
+implementation is the original Fortran code: it depends on a Message Passing
+Interface (MPI) toolchain and precompiled binaries that are awkward to build
+across platforms, it cannot use a GPU, and it is invoked as an external process
+from MATLAB rather than called from Python. As neuroimaging analysis has moved
+toward Python, for example MNE-Python [@gramfort2013meg], an AMICA that runs
+natively in Python and on a GPU, and that is validated to reproduce the Fortran
+reference numerically, is needed for modern pipelines and for studying the
+algorithm in an open codebase.
 
 General-purpose Python ICA implementations do not fill this gap. `scikit-learn`
 and `MNE-Python` provide FastICA [@hyvarinen2000independent] and Infomax
@@ -70,9 +73,10 @@ implementation to inspect and build on.
 
 # Implementation and validation
 
-`pyAMICA` provides a natural-gradient expectation-maximization backend that ports
-the full AMICA algorithm: exact-EM mixture updates, a positive-definite Newton
-step, symmetric zero-phase-component-analysis (ZCA) sphering, the five
+`pyAMICA` provides a natural-gradient [@amari1998natural] expectation-maximization
+backend that ports the full AMICA algorithm: exact-EM mixture updates, a
+positive-definite Newton step [@palmer2008newton], symmetric
+zero-phase-component-analysis (ZCA) sphering, the five
 source-density families of the reference (generalized Gaussian, Gaussian,
 logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture of
 ICA models, and component sharing across models. On real sample EEG, the
@@ -95,19 +99,23 @@ runs about 4.5 times faster than a 16-thread CPU. A data-size sweep shows that
 cross-backend component equivalence rises with the number of frames per channel
 and plateaus near 0.98 once the decomposition is well determined. A companion
 validation harness runs both the Python and Fortran implementations on the same
-real EEG and matches components with the Hungarian algorithm, and the test suite
-uses only real sample data and the reference binary, never synthetic data, so
-correctness claims are always measured against the reference.
+real EEG and matches components with the Hungarian algorithm. Correctness tests
+use only real sample EEG and the reference binary; synthetic data is never used
+as the basis for a correctness claim, so parity is always measured against the
+reference.
 
 # State of the field
 
 `pyAMICA` complements rather than replaces EEGLAB [@delorme2004eeglab] and its
-Fortran AMICA plugin: it reads and writes the same output format, so results can
-move between the two, while adding GPU support and a Python API. Relative to
-FastICA, Infomax, and Picard, it is the only Python package that reproduces
-AMICA's mixture-of-models decomposition, and relative to the Fortran reference it
-adds installation through standard Python packaging, GPU execution, and an
-open, tested codebase.
+Fortran AMICA plugin: it reads and writes the same output format, so results move
+between the two, while adding GPU support and a Python API. Other Python AMICA
+reimplementations have appeared [@esmaeili2025amica; @herforth2026pyamica], which
+also target MNE-Python pipelines and GPU execution. `pyAMICA` is distinguished by
+defining correctness as quantitative parity with the Fortran reference and
+validating it accordingly (component correlation of about 0.997, source-density
+score functions bit-exact to about $10^{-15}$, and a distributional-equivalence
+test for the non-identifiable multi-model case), by writing byte-identical EEGLAB
+output, and by an MLX backend for Apple GPUs.
 
 # Acknowledgements
 
