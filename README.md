@@ -1,11 +1,19 @@
-# [WIP] AMICA: Adaptive Mixture ICA
+# pyAMICA: Adaptive Mixture ICA
 
 [![CI](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/neuromechanist/pyAMICA/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/neuromechanist/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/neuromechanist/pyAMICA)
 
-Python implementation of the Adaptive Mixture ICA algorithm, based on the original Fortran implementation. This implementation is designed to be more user-friendly and easier to integrate with other Python libraries.
+Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis
+(AMICA) that reproduces the reference Fortran implementation within numerical
+tolerance, with CPU, NVIDIA GPU (CUDA), and Apple GPU (MLX) support. It targets
+EEG/EMG blind source separation and is a drop-in replacement for EEGLAB's AMICA:
+single-model output is byte-identical to the Fortran reference and loads directly
+in EEGLAB.
 
-NOTE: This is a work in progress and may not be fully functional yet. User should not rely on this implementation for any research or production purposes, as the results may not be accurate or reliable.
+Single-model results match the Fortran reference (log-likelihood ~ -3.40,
+Hungarian-matched component correlation ~ 0.997); see the
+[documentation](https://eeglab.org/pyAMICA/) for validation details and the
+backend-selection guide.
 
 ## Overview
 
@@ -20,127 +28,80 @@ AMICA (Adaptive Mixture ICA) is an advanced blind source separation algorithm th
 
 ## Installation
 
+The canonical environment is [uv](https://docs.astral.sh/uv/):
+
 ```bash
-# Clone the repository
 git clone https://github.com/neuromechanist/pyAMICA.git
 cd pyAMICA
-
-# install the package
-pip install -e .
+uv sync                     # install dependencies into a managed venv
+uv run pytest               # optional: run the tests
 ```
+
+The optional Apple-GPU backend (MLX, Apple Silicon only) installs with the `mlx`
+extra: `uv pip install mlx`.
 
 ## Usage
 
-1. Create a parameter file (e.g., params.json):
-```json
-{
-    "files": ["data1.bin", "data2.bin"],
-    "num_samples": [100, 100],
-    "data_dim": 64,
-    "field_dim": [1000, 1000],
-    "num_models": 1,
-    "num_mix": 3,
-    "max_iter": 2000
-}
+pyAMICA exposes a scikit-learn-style estimator backed by the PyTorch
+natural-gradient EM implementation:
+
+```python
+import numpy as np
+from pyAMICA import AMICA
+
+# X is (n_channels, n_samples) of real EEG/EMG; float64 gives Fortran parity
+model = AMICA(n_models=1, n_mix=3).fit(X)
+
+sources = model.transform(X)       # (n_sources, n_samples)
+A = model.get_mixing_matrix()      # sensor-space scalp maps
+order = model.variance_order()     # EEGLAB IC order (IC1 = highest variance)
 ```
 
-2. Run AMICA:
+### Backends and precision
+
+The wrapper auto-selects a device and computes in float64 for Fortran parity.
+
+- CPU and CUDA (float64) are bit-reproducible; use them for parity runs.
+- float32 is 5-19x faster at about 7 significant digits.
+- On Apple Silicon the MLX backend is the fastest option; import it explicitly.
+
+```python
+AMICA(device="cuda").fit(X)               # NVIDIA GPU, float64
+from pyAMICA.mlx_impl import AMICAMLXNG    # Apple GPU (install the mlx extra)
+```
+
+### EEGLAB interoperability
+
+pyAMICA writes results in EEGLAB's AMICA output format, so a run drops into an
+EEGLAB workflow with no manual re-ordering or sign-flipping:
+
+```python
+model.write_amica_output("amicaout")   # gm, W, S, mean, c, alpha, mu, sbeta, rho, ...
+```
+
+```matlab
+mod = loadmodout15('amicaout');   % components in EEGLAB variance order
+```
+
+### Legacy NumPy CLI
+
+The NumPy reference backend keeps a JSON-driven command-line interface:
+
 ```bash
 python -m pyAMICA.numpy_impl.cli params.json --outdir results
 ```
 
-## Parameters
+See the [documentation](https://eeglab.org/pyAMICA/) for the full API, the
+parameter reference, and the backend-selection and validation guides.
 
-### Required Parameters
-- `files`: List of binary data files
-- `num_samples`: Number of samples per file
-- `data_dim`: Number of channels/dimensions
-- `field_dim`: Number of samples per field for each file
+## Citation
 
-### Optional Parameters
+If you use pyAMICA, please cite it (see [CITATION.cff](CITATION.cff)) and the
+original AMICA method:
 
-#### Model Parameters
-- `num_models`: Number of models (default: 1)
-- `num_mix`: Number of mixture components (default: 3)
-- `num_comps`: Number of components (-1 for data_dim * num_models)
-- `pdftype`: PDF type (1: Generalized Gaussian, 2: Logistic, etc.)
-
-#### Optimization Parameters
-- `max_iter`: Maximum iterations (default: 2000)
-- `lrate`: Initial learning rate (default: 0.1)
-- `minlrate`: Minimum learning rate (default: 1e-12)
-- `lratefact`: Learning rate decay factor (default: 0.5)
-
-#### Newton Optimization
-- `do_newton`: Use Newton optimization (default: false)
-- `newt_start`: Iteration to start Newton (default: 20)
-- `newt_ramp`: Newton ramp length (default: 10)
-- `newtrate`: Newton learning rate (default: 0.5)
-
-#### Component Sharing
-- `share_comps`: Enable component sharing (default: false)
-- `comp_thresh`: Component correlation threshold (default: 0.99)
-- `share_start`: Iteration to start sharing (default: 100)
-- `share_int`: Sharing interval (default: 100)
-
-#### Data Preprocessing
-- `do_mean`: Remove mean (default: true)
-- `do_sphere`: Perform sphering (default: true)
-- `do_approx_sphere`: Use approximate sphering (default: true)
-- `pcakeep`: Number of PCA components to keep (optional)
-- `pcadb`: dB threshold for PCA components (optional)
-
-#### Block Processing
-- `do_opt_block`: Optimize block size (default: true)
-- `block_size`: Initial block size (default: 128)
-- `blk_min`: Minimum block size (default: 128)
-- `blk_max`: Maximum block size (default: 1024)
-- `blk_step`: Block size step (default: 128)
-
-#### Outlier Rejection
-- `do_reject`: Enable outlier rejection (default: false)
-- `rejsig`: Rejection threshold in std (default: 3.0)
-- `rejstart`: Iteration to start rejection (default: 2)
-- `rejint`: Rejection interval (default: 3)
-- `maxrej`: Maximum rejections (default: 1)
-
-#### Output Control
-- `do_history`: Save optimization history (default: false)
-- `histstep`: History saving interval (default: 10)
-- `writestep`: Result writing interval (default: 100)
-
-## File Structure
-
-- `amica.py`: Main scikit-learn-style AMICA interface (PyTorch backend)
-- `torch_impl/core.py`: PyTorch natural-gradient EM backend (`AMICATorchNG`)
-- `mlx_impl/core.py`: Optional Apple-GPU MLX backend (`AMICAMLXNG`, single- & multi-model)
-- `numpy_impl/core.py`: Legacy NumPy reference (`AMICA_NumPy`)
-- `numpy_impl/pdf.py`: PDF type implementations
-- `numpy_impl/newton.py`: Newton optimization
-- `numpy_impl/data.py`: Data loading/preprocessing
-- `numpy_impl/cli.py`: Command-line interface
-- `numpy_impl/params.json`: Default/example parameter file
-
-## Output Files
-
-Results are saved in NumPy format:
-- `A.npy`: Mixing matrix
-- `W.npy`: Unmixing matrices
-- `c.npy`: Bias terms
-- `mu.npy`: Component means
-- `alpha.npy`: Mixture weights
-- `beta.npy`: Scale parameters
-- `rho.npy`: Shape parameters
-- `gm.npy`: Model weights
-- `mean.npy`: Data mean
-- `sphere.npy`: Sphering matrix
-- `comp_list.npy`: Component assignments
-- `ll.npy`: Log likelihood history
-- `nd.npy`: Gradient norm history (if use_grad_norm=true)
-
-## References
-
-1. Palmer, J. A., Kreutz-Delgado, K., & Makeig, S. (2012). AMICA: An adaptive mixture of independent component analyzers with shared components.
+> Palmer, J. A., Kreutz-Delgado, K., & Makeig, S. (2012). AMICA: An adaptive
+> mixture of independent component analyzers with shared components. Technical
+> report, Swartz Center for Computational Neuroscience, UC San Diego.
 
 ## License
 

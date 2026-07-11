@@ -11,6 +11,16 @@ authors:
   - family-names: Shirazi
     given-names: Seyed Yahya
     email: shirazi@ieee.org
+    orcid: "https://orcid.org/0000-0001-5557-259X"
+    affiliation: "Swartz Center for Computational Neuroscience, University of California San Diego"
+  - family-names: Delorme
+    given-names: Arnaud
+    orcid: "https://orcid.org/0000-0002-0799-3557"
+    affiliation: "Swartz Center for Computational Neuroscience, University of California San Diego; CNRS, University of Toulouse"
+  - family-names: Makeig
+    given-names: Scott
+    orcid: "https://orcid.org/0000-0002-9048-8438"
+    affiliation: "Swartz Center for Computational Neuroscience, University of California San Diego"
 version: 0.1.dev0
 license: BSD-3-Clause
 repository-code: "https://github.com/neuromechanist/pyAMICA"
