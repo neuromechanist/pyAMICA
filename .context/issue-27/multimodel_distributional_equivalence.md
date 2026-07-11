@@ -43,34 +43,44 @@ formed three distributions of pairwise agreement:
 
 ![Ensemble distributions](multimodel_ensemble_distributions.png)
 
+Values below are from the regenerated ensemble (2026-07-11; `ensemble.npz` now
+persisted so the figure/tests reproduce without re-fitting). Absolute magnitudes
+differ slightly from the first run (Fortran reseeds from entropy each fit); the
+within-vs-between conclusion is unchanged.
+
 | distribution | mean cross-corr | sd | range |
 |---|---:|---:|---|
-| within-Fortran | 0.6339 | 0.042 | [0.567, 0.772] |
-| within-NG | 0.6438 | 0.046 | [0.537, 0.798] |
-| between (NG-Fortran) | 0.6381 | 0.047 | [0.525, 0.938] |
+| within-Fortran | 0.638 | 0.040 | [0.572, 0.797] |
+| within-NG | 0.661 | 0.045 | [0.583, 0.820] |
+| between (NG-Fortran) | 0.649 | 0.045 | [0.582, 0.886] |
 
-- **Mann-Whitney** (one-sided, H1: `between < within-Fortran`): **p = 0.973** —
-  no evidence cross-implementation agreement is *worse* than Fortran's own
-  run-to-run agreement (if anything it is marginally higher).
-- **TOST equivalence** of the mean cross-corrs within ±0.05: **p ≈ 1e-32 →
-  EQUIVALENT** (difference +0.0042).
+- **Run-level permutation test** (H1: `between` worse than `within-Fortran`;
+  20000 permutations of the 40 runs as intact units): **p = 0.96** — no evidence
+  cross-implementation agreement is *worse* than Fortran's own. This replaces the
+  earlier Mann-Whitney/TOST, which were computed over the 190/400 **pairwise**
+  correlations as if independent; they are not (each run is in ~39 pairs), so
+  those p-values were pseudoreplicated and invalid (the TOST p ≈ 1e-32 was the
+  tell). Permuting whole runs respects the shared-run dependence. The
+  between-minus-within-Fortran mean difference is +0.011 (well within a ±0.05
+  margin), so the distributions overlap descriptively as well.
 
 The three distributions lie on top of each other. **The partition behavior of
-`AMICATorchNG` is statistically equivalent to Fortran's.** The ~0.64 single-run
-cross-corr that earlier looked like a shortfall is fully explained: Fortran
-agrees with *itself* at 0.634.
+`AMICATorchNG` is equivalent to Fortran's** at the run level. The ~0.65 single-run
+cross-corr that earlier looked like a shortfall is fully explained: Fortran agrees
+with *itself* at 0.638.
 
 ### One residual: the likelihood distribution (tracked as #51)
 
 | | mean LL (per sample-channel) | sd |
 |---|---:|---:|
-| Fortran | -3.3545 | 0.003 |
-| NG | -3.3738 | 0.040 |
+| Fortran | -3.3539 | 0.003 |
+| NG | -3.3629 | 0.006 |
 
-KS p ≈ 1e-5. NG's LL is ~0.019 lower on average and ~13x more variable (one seed
-converged to ~-3.55, a stuck run, driving most of the variance; Fortran reaches
-nearly the same LL every run despite different partitions — confirming those
-partitions are near-degenerate in likelihood).
+KS p ≈ 6e-5. NG's LL is ~0.009 lower on average; with the #51 best-iterate
+safeguard the variance is now ~2x Fortran's (was ~13x before #51). The residual is
+convergence speed, not a worse optimum: NG reaches Fortran's mean with ~2x more
+iterations, and Fortran reaches nearly the same LL every run despite different
+partitions (confirming those partitions are near-degenerate in likelihood).
 
 This is an **optimizer-quality** signal, not a model-correctness bug: the
 per-block sufficient statistics and one M-step are bit-exact vs Fortran

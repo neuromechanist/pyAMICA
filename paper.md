@@ -107,10 +107,14 @@ are bit-exact against the literal Fortran expressions ($\sim\!10^{-15}$). A mixt
 of ICA models is not partition-identifiable, so exact partition parity is the wrong
 bar; the multi-model case is instead assessed by distributional equivalence. Across
 ensembles of 20 runs each, the `pyAMICA`-versus-Fortran partition-correlation
-distribution overlaps Fortran's own run-to-run distribution (means 0.64, 0.64, and
-0.63, each with standard deviation ~0.05; \autoref{fig:ensemble}), so the ~0.64
-single-run correlation is intrinsic estimator spread rather than a shortfall:
-Fortran agrees with itself at 0.63. Equivalence is claimed for the partition
+distribution overlaps Fortran's own run-to-run distribution (between-implementation,
+within-`pyAMICA`, and within-Fortran means 0.65, 0.66, and 0.64, each with standard
+deviation ~0.05; \autoref{fig:ensemble}). A run-level permutation test, which
+permutes the 40 runs as intact units and so respects the dependence among the
+pairwise correlations, finds no evidence that cross-implementation agreement is
+worse than Fortran's own run-to-run agreement ($p = 0.96$); the ~0.65 single-run
+correlation is therefore intrinsic estimator spread rather than a shortfall, since
+Fortran agrees with itself at 0.64. Equivalence is claimed for the partition
 structure; the multi-model log-likelihood distributions still differ slightly at a
 matched 100-iteration budget (`pyAMICA` reaches Fortran's mean with about twice as
 many iterations), so full-likelihood equivalence is not yet claimed.
@@ -120,8 +124,8 @@ many iterations), so full-likelihood equivalence is not yet claimed.
 | Single-model | Log-likelihood gap to Fortran ($-3.4018$) | within ~0.005 |
 | Single-model | Component correlation (Hungarian-matched) | ~0.997 |
 | Single-model | Score functions and sufficient statistics | bit-exact ($\sim\!10^{-15}$) |
-| Multi-model | Partition correlation, single run (`pyAMICA`; Fortran self) | 0.64; 0.63 (sd ~0.05) |
-| Multi-model | Partition-ensemble means (within-F, within-`pyAMICA`, between) | 0.63, 0.64, 0.64 (within a $\pm0.05$ margin) |
+| Multi-model | Partition correlation, single run (`pyAMICA`-Fortran; Fortran-Fortran) | 0.65; 0.64 (sd ~0.05) |
+| Multi-model | Partition-ensemble equivalence, 20 runs each | means within 0.05; permutation $p=0.96$ |
 
   : Single-model parity and multi-model distributional equivalence of `pyAMICA`
 with the Fortran reference on the bundled sample EEG.
