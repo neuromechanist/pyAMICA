@@ -1,4 +1,4 @@
-cff-version: 1.2.0
+cff-version: 1.3.0
 message: "If you use this software, please cite it using the metadata below."
 title: "pyAMICA: a Python implementation of Adaptive Mixture ICA"
 abstract: >-
@@ -12,19 +12,28 @@ authors:
     given-names: Seyed Yahya
     email: shirazi@ieee.org
     orcid: "https://orcid.org/0000-0001-5557-259X"
-    affiliation: "Swartz Center for Computational Neuroscience, University of California San Diego"
+    affiliation:
+      name: "Swartz Center for Computational Neuroscience"
+      ror: "https://ror.org/01bt2qm76"
   - family-names: Delorme
     given-names: Arnaud
     orcid: "https://orcid.org/0000-0002-0799-3557"
-    affiliation: "Swartz Center for Computational Neuroscience, University of California San Diego; CNRS, University of Toulouse"
+    affiliation:
+      - name: "Swartz Center for Computational Neuroscience"
+        ror: "https://ror.org/01bt2qm76"
+      - name: "Centre de Recherche Cerveau et Cognition (CerCo), CNRS"
+        ror: "https://ror.org/04fhrs205"
   - family-names: Makeig
     given-names: Scott
     orcid: "https://orcid.org/0000-0002-9048-8438"
-    affiliation: "Swartz Center for Computational Neuroscience, University of California San Diego"
+    affiliation:
+      name: "Swartz Center for Computational Neuroscience"
+      ror: "https://ror.org/01bt2qm76"
 version: 0.1.0
+date-released: "2026-07-11"
 license: BSD-3-Clause
 repository-code: "https://github.com/sccn/pyAMICA"
-url: "https://github.com/sccn/pyAMICA"
+url: "https://eeglab.org/pyAMICA/"
 keywords:
   - AMICA
   - independent component analysis
@@ -45,3 +54,5 @@ references:
     year: 2012
     institution:
       name: Swartz Center for Computational Neuroscience, University of California San Diego
+# Concept (all-versions) DOI; always resolves to the latest release.
+doi: "10.5281/zenodo.21312148"

@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sccn/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/sccn/pyAMICA)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21312148.svg)](https://doi.org/10.5281/zenodo.21312148)
+[![Docs](https://img.shields.io/badge/docs-eeglab.org%2FpyAMICA-blue)](https://eeglab.org/pyAMICA/)
 
 Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis
 (AMICA) that reproduces the reference Fortran implementation within numerical
