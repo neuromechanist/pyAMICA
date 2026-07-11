@@ -1838,6 +1838,20 @@ class AMICATorchNG:
         def _np(t):
             return t.detach().cpu().numpy()
 
+        # The exported parameters are the fit()-kept iterate (LL == final_ll_).
+        # Under the keep_best safeguard (#51) that can be an earlier iterate than
+        # the last, so end the written LL trajectory at that iterate rather than
+        # at a later, discarded overshoot -- otherwise LL[-1] would not match the
+        # model just written. Monotone runs keep the full trajectory unchanged.
+        ll = np.asarray(self.ll_history, dtype=np.float64)
+        if (
+            self.final_ll_ is not None
+            and np.isfinite(self.final_ll_)
+            and ll.size
+            and not np.isclose(ll[-1], self.final_ll_)
+        ):
+            ll = ll[: int(np.argmax(ll)) + 1]
+
         write_amicaout(
             outdir,
             gm=_np(self.gm),
@@ -1850,7 +1864,7 @@ class AMICATorchNG:
             sbeta=_np(self.beta),  # Fortran's 'sbeta' is pyAMICA's beta (scale)
             rho=_np(self.rho),
             comp_list=_np(self.comp_list),
-            ll=np.asarray(self.ll_history, dtype=np.float64),
+            ll=ll,
             A=_np(self.A),
         )
 
