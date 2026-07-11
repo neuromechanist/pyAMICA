@@ -508,6 +508,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", help="path to the (70, n_samples) real-EEG .npy")
     ap.add_argument("--channels", default="16,32,48,70")
+    ap.add_argument(
+        "--montage",
+        help="BIDS electrodes.tsv; when given, reduced channel counts use "
+        "spatially-distributed (whole-head) subsets instead of the first N (#91)",
+    )
     ap.add_argument("--samples", type=int, default=30000)
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--repeats", type=int, default=3)
@@ -608,7 +613,21 @@ def main() -> int:
 
     rows = []
     for nc in channels:
-        data = np.ascontiguousarray(full[:nc, : args.samples])
+        # #91: with a montage, time whole-head distributed subsets rather than the
+        # first nc electrodes (a spatial cluster). Channel count is unchanged, so the
+        # timing is unaffected; this only makes the reduced montages physical.
+        if args.montage and nc < full.shape[0]:
+            from channel_selection import (
+                positions_for_channels,
+                select_distributed_channels,
+            )
+
+            sel = select_distributed_channels(
+                positions_for_channels(args.montage, full.shape[0]), nc
+            )
+        else:
+            sel = np.arange(nc)
+        data = np.ascontiguousarray(full[sel][:, : args.samples])
         for b in backends:
             for t in _thread_points(b):
                 tag = f"@{t}t" if t is not None else ""
