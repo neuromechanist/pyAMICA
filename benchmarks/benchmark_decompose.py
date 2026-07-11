@@ -20,9 +20,9 @@ Usage:
     # run one machine's backends to 2000 iters, save per-run npz into a dir
     uv run python benchmarks/benchmark_decompose.py --data DATA.npy \
         --channels 70 --iters 2000 --backends native-fortran-f64,torch-cuda-f64,torch-cuda-f32 \
-        --out results_hallu/
+        --out results_cuda/
     # merge every machine's dir and emit the equivalence figure + tables
-    uv run python benchmarks/benchmark_decompose.py --compare results_hallu/ results_mac/ \
+    uv run python benchmarks/benchmark_decompose.py --compare results_cuda/ results_mac/ \
         --figure equivalence.png
 """
 

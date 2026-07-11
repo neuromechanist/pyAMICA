@@ -11,7 +11,7 @@ should rise toward ~1.0.
 
 ## Run
 `benchmarks/benchmark_decompose.py --frames 73500,147000,294000,490000,747750 --channels 70
---iters 2000` on hallu (Linux x86_64, RTX 4090, 32 cores). Backends: `native-fortran-f64`,
+--iters 2000` on the CUDA workstation (Linux x86_64, RTX 4090, 32 cores). Backends: `native-fortran-f64`,
 `torch-cuda-f64`, `torch-cuda-f32` (the fast, well-behaved backends -- Phase 3 already proved
 every torch/MLX device/precision recovers an identical decomposition, so a 3-backend cross-check
 here is sufficient and the large-frame runs are ~5x longer per backend than the k=30 runs).
@@ -68,7 +68,7 @@ correlations > 0.95) becomes reproducible across independent AMICA implementatio
 more data buys convergence robustness but not more cross-backend agreement -- the ceiling is set
 by float precision and the non-convex local-optimum spread, not by data adequacy.
 
-## Per-config decompose time (2000 iters, 70ch, hallu)
+## Per-config decompose time (2000 iters, 70ch, CUDA workstation)
 
 Time scales ~linearly with frames, as expected; native-fortran-f64 is fastest per config
 (torch-cuda ~1.4-1.5x), and torch-cuda-f32 undercuts f64 (and stops early at k=152).

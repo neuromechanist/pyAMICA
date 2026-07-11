@@ -56,18 +56,18 @@ precision + non-convex local-optimum spread on the weakest components.
 
 | backend | machine | total time |
 |---|---|---|
-| native-fortran-f64 | hallu (Linux, 32 cores) | **~4.4 min** |
+| native-fortran-f64 | the CUDA workstation (Linux, 32 cores) | **~4.4 min** |
 | MLX-f32 | Mac (Apple GPU) | ~5.1 min |
-| torch-cuda-f32 / f64 | hallu (RTX 4090) | ~5.6 / ~6.1 min |
+| torch-cuda-f32 / f64 | the CUDA workstation (RTX 4090) | ~5.6 / ~6.1 min |
 | native-fortran-f64 | Mac (arm64) | ~10.1 min |
 | torch-cpu-f32 / f64 | Mac (14 cores) | ~27 / ~31 min |
-| torch-cpu-f32 / f64 | hallu (32 cores, default threads) | ~29 / **~67 min** |
+| torch-cpu-f32 / f64 | the CUDA workstation (32 cores, default threads) | ~29 / **~67 min** |
 | torch-mps-f32 | Mac | ~35 min |
 
 Native Fortran on the 32-core Linux host is the fastest end-to-end (~4.4 min), ~2x its own Mac
 time; MLX and CUDA follow at ~5-6 min. The GPU finally runs sustained here (a full
 decomposition, not the per-iteration blips of Phase 2). Two cautions confirmed from Phase 2:
-torch-cpu-f64 on hallu at the default (all-32-core) thread count is the worst CPU number
+torch-cpu-f64 on the CUDA workstation at the default (all-32-core) thread count is the worst CPU number
 (~67 min, oversubscription), and torch-MPS is the worst GPU path (~35 min) -- use MLX, never
 MPS, on Apple.
 

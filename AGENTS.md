@@ -80,8 +80,7 @@ is component sharing.
 - Newton and exact-EM updates are implemented in `AMICATorchNG` and the legacy NumPy `numpy_impl/core.py`
   (both Fortran-faithful). Adaptive PDF (#26) is DONE (all five `pdftype` families + ext-Infomax
   switcher); full multi-model matching (#27) is validated by distributional equivalence.
-- See `.context/feature_parity.md`, `.context/migration_plan.md`, and `.context/progress_summary.md`
-  for detailed roadmaps.
+- See `.context/feature_parity.md` and `.context/progress_summary.md` for detailed roadmaps.
 
 ## Known Issues (parity blockers)
 **Single-model parity: DONE (#24).** The natural-gradient A-update transpose fix (plus exact-EM
@@ -186,7 +185,6 @@ the dead `do_choose_pdfs`, #26), so it is behavior-validated (`tests/torch_tests
 - `.context/ideas.md` - PyTorch design decisions and library options
 - `.context/scratch_history.md` - Debugging notes, failed attempts, lessons
 - `.context/feature_parity.md` - Feature comparison and implementation roadmap
-- `.context/migration_plan.md` - NumPy to PyTorch migration record (complete)
 - `.context/progress_summary.md` - Achievements and validation metrics snapshot
 - `.context/decisions/` - Architecture Decision Records (copy `0000-template.md` to start one)
 

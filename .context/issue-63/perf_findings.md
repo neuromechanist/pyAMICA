@@ -43,7 +43,7 @@ to the ~1e-6 shift, so the default change is safe (full suite green).
 
 ## 3. GPU: CUDA float64 is a clean ~4.5x (NVIDIA RTX 4090)
 
-Real device numbers from `hallu` (RTX 4090), full data, 50 iters, **warmed**
+Real device numbers from `the CUDA workstation` (RTX 4090), full data, 50 iters, **warmed**
 (first CUDA call pays context init + kernel compilation, ~2-3x inflation if not
 excluded), min of 4 repeats, `torch.set_num_threads(16)`:
 
