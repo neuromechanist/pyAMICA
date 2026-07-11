@@ -47,11 +47,14 @@ computes in float64 for Fortran parity, which MPS cannot represent, so parity ru
 **Performance (#63, `.context/issue-63/perf_findings.md`, `benchmarks/benchmark_gpu.py`):** the E-step
 pow-dedup (dropping the unused `dpdf`) is ~-35% and bit-identical; `block_size` default is 512 (was
 128, ~-18%). CUDA float64 is ~4.5x over a 16-thread CPU (RTX 4090, warmed) and agrees with the CPU LL
-to 5 sig digits (auto-selected by the wrapper). float32 is 5-19x faster and now converges on
+to 5 sig digits (auto-selected by the wrapper). float32 now converges reliably on
 full-size data across seeds (#75 guarded the one float32-only divide-by-zero: a sample rounding an
 activation to exactly 0 gave `0/0` in the mu denominator; not a summation-precision problem, so it
-needs no float64 and holds on MPS). float32 is ~7-sig-digit, not float64-parity, so use float64 for
-Fortran-parity runs. CPU intra-op threads are workload-limited (~4 was the sweet spot in the measured
+needs no float64 and holds on MPS) and is required on Apple GPUs (no float64). float32 is NOT a
+general speedup: the #63 "5-19x" estimate was superseded by #84's matched cross-platform sweep,
+which found CUDA is overhead-bound so f32==f64 (~36 ms) and the Apple-GPU win is the MLX backend,
+not float32 itself (on CPU f32 is only modestly faster and scales better across cores). float32 is
+~7-sig-digit, not float64-parity, so use float64 for Fortran-parity runs. CPU intra-op threads are workload-limited (~4 was the sweet spot in the measured
 laptop sweep; 8+ regressed).
 
 **Cross-platform benchmark (#77, `.context/issue-77/benchmark_findings.md`, `benchmarks/benchmark_dimsweep.py`,

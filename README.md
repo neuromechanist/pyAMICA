@@ -64,7 +64,9 @@ order = model.variance_order()     # EEGLAB IC order (IC1 = highest variance)
 The wrapper auto-selects a device and computes in float64 for Fortran parity.
 
 - CPU and CUDA (float64) are bit-reproducible; use them for parity runs.
-- float32 is 5-19x faster at about 7 significant digits.
+- float32 (about 7 significant digits, not parity) is required on the Apple GPUs
+  and modestly faster on CPU; it is not a general speedup, since CUDA is
+  overhead-bound (float32 is about as fast as float64).
 - On Apple Silicon the MLX backend is the fastest option; import it explicitly.
 
 ```python
