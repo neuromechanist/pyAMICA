@@ -3,7 +3,7 @@
   "description": "pyAMICA is a Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis (AMICA) that reproduces the reference Fortran implementation within numerical tolerance, with CPU, NVIDIA GPU (CUDA), and Apple GPU (MLX) support. It targets EEG/EMG blind source separation and provides a scikit-learn-style interface and byte-identical EEGLAB (loadmodout15) output.",
   "upload_type": "software",
   "access_right": "open",
-  "license": "BSD-3-Clause",
+  "license": "bsd-3-clause",
   "creators": [
     {
       "name": "Shirazi, Seyed Yahya",
