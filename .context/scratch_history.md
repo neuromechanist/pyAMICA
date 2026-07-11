@@ -45,26 +45,29 @@ python -m pyAMICA.amica_cli pyAMICA/sample_data/sample_params.json --verbose --o
 gfortran -O3 -fopenmp amica17.f90 funmod2.f90 -o amica -llapack -lblas
 ```
 
-## Issue #92 (EEGLAB drop-in output): loadmodout reader quirks (pre-existing, out of writer scope)
-The writer (`write_amicaout` in `numpy_impl/load.py`, used by both backends via
-`torch_impl/core.py:write_amica_output` and `numpy_impl/core.py:_write_results`)
-emits bytes byte-identical to Fortran for a single model, so the REAL MATLAB
-`loadmodout15.m` reads it correctly (it reads column-major -> recovers the true
-unmixing `W_true = self.W.T`, so its `A = pinv(W_true @ S)` and its variance
-ordering match the model's native components; `AMICATorchNG.variance_order` uses
-the same `W_fort = self.W.T` and so matches real EEGLAB).
-- The Python PORT `numpy_impl/load.py:loadmodout` reads the `W` file **C-order**
-  (`W.reshape(nw,nw,m)`), where MATLAB reads column-major. So the port's `mod.W`
-  is the transpose of MATLAB's, and its `A`/`svar`/`origord` use `pinv(self.W_int
-  @ S)` (untransposed) -- a latent transpose vs `loadmodout15.m`. Masked because
-  every parity test matches `W` via transpose-tolerant Hungarian |corr|, and
-  nothing consumes `.A`/`.svar`/`.origord`. Do NOT "fix" by transposing the reader
-  without re-checking #24/#37 locked parity and the numpy write/read round-trip.
-- The port also stores `svar` in fit order (not sorted); `loadmodout15.m` stores
-  it descending. `svar[origord]` is descending. Tests assert on `svar[origord]`.
-- Consequence: `variance_order()` (native/EEGLAB-correct) does NOT equal the
-  port's `origord` (transposed convention). Validate `variance_order` against the
-  real MATLAB `loadmodout15` round-trip, not against the numpy port's `origord`.
+## Issue #92 (EEGLAB drop-in output): the column-major layout fix (KEY)
+Fortran/EEGLAB store arrays **column-major**. The MATLAB round-trip exposed that
+pyAMICA wrote the non-square mixture params (`alpha`/`mu`/`sbeta`/`rho`, shape
+`(num_mix, num_comps)`) and `c`/`comp_list` in **C-order**, so real MATLAB
+`loadmodout15.m` (column-major reads) got scrambled mixture params -- e.g. the
+per-component mixture proportions did NOT sum to 1. FIXED (issue #92): the writer
+`write_amicaout` and BOTH numpy readers (`loadmodout`, `data.py:load_results`) now
+use `order="F"` for those arrays. Diagnostic that nails the layout: read genuine
+`sample_data/amicaout/alpha` -- `reshape(3,32,order='F').sum(0)` is all 1.0
+(correct); C-order is garbage `[0.49..1.31]`.
+- `W` (square) stays C-order in the writer AND is byte-identical to Fortran: the
+  internal-vs-true-unmixing transpose (#24) cancels against Fortran's column-major
+  storage (`self.W` C-order bytes == Fortran column-major `W_true` bytes). `S` is
+  symmetric (order-agnostic); `mean`/`gm`/`LL` are 1-D.
+- Remaining, deliberately-out-of-scope quirk: `loadmodout`/`load_results` still
+  read the **W** file C-order, so the port's `mod.W` is the transpose of MATLAB's
+  and its derived `A`/`svar`/`origord` use `pinv(self.W_int @ S)`. This does NOT
+  corrupt values (unlike the mixture bug, which did) and nothing consumes those
+  fields for correctness; every parity test matches `W` via transpose-tolerant
+  Hungarian |corr|. Do NOT flip the W read without re-checking #24/#37 parity.
+  Consequence: `AMICATorchNG.variance_order()` (uses `W_fort=self.W.T`, matching
+  real MATLAB) is validated against the MATLAB-faithful column-major reader, NOT
+  the numpy port's `origord`.
 
 ## Lessons / check first next time
 - [ ] Positive LL almost always means a wrong PDF normalization constant.

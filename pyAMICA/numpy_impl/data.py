@@ -245,7 +245,9 @@ def load_results(indir: str, compressed: bool = False) -> dict:
             len(A) // num_comps, num_comps
         )  # (data_dim, num_comps)
 
-    # Mixture params are stored (num_mix, num_comps); Fortran names 'sbeta'.
+    # Mixture params are stored (num_mix, num_comps) column-major (Fortran names
+    # 'sbeta'); reshape order="F" matches the write_amicaout writer and Fortran
+    # output (a C-order read would scramble the non-square layout, issue #92).
     for fname, key in (
         ("alpha", "alpha"),
         ("mu", "mu"),
@@ -254,16 +256,16 @@ def load_results(indir: str, compressed: bool = False) -> dict:
     ):
         arr = _read(fname)
         if arr is not None:
-            results[key] = arr.reshape(-1, num_comps)
+            results[key] = arr.reshape(-1, num_comps, order="F")
 
     comp_list = _read("comp_list", dtype=np.int32)
     if comp_list is not None:
         # Stored 1-based (Fortran convention); restore AMICA's 0-based indices.
-        results["comp_list"] = comp_list.reshape(nw, num_models) - 1
+        results["comp_list"] = comp_list.reshape(nw, num_models, order="F") - 1
 
     c = _read("c")
     if c is not None:
-        results["c"] = c.reshape(nw, num_models)
+        results["c"] = c.reshape(nw, num_models, order="F")
 
     mean = _read("mean")
     if mean is not None:
