@@ -10,6 +10,7 @@ unchanged.
 """
 
 from pathlib import Path
+from typing import Any, Dict
 
 import numpy as np
 import pytest
@@ -90,6 +91,7 @@ def test_default_multimodel_leaves_comps_unshared(real_data):
         n_channels=NW, n_models=2, n_mix=3, device="cpu", block_size=1024, seed=1
     )
     ng.fit(real_data[:, :4096], max_iter=10)
+    assert ng.A is not None
     assert int(ng.comp_used.sum()) == ng.n_comps
     assert torch.isfinite(ng.A).all()
 
@@ -108,6 +110,7 @@ def test_identify_merges_one_collinear_pair():
         :, 2
     ]  # model-1 source 1 (col 5) collinear with model-0 source 2 (col 2)
     ng = _controlled_ng(A, n_channels=n, n_models=2)
+    assert ng.comp_list is not None
     assert int(ng.comp_used.sum()) == 2 * n
     ng._identify_shared_comps()
     assert int(ng.comp_used.sum()) == 2 * n - 1
@@ -123,6 +126,7 @@ def test_guard_prevents_within_model_collapse():
     v = torch.tensor([1.0, 2.0], dtype=torch.float64)
     A = torch.stack([v] * (2 * n), dim=1)
     ng = _controlled_ng(A, n_channels=n, n_models=2)
+    assert ng.comp_list is not None
     ng._identify_shared_comps()
     assert int(ng.comp_used.sum()) == 2
     assert ng.comp_list[0, 0] != ng.comp_list[1, 0]
@@ -141,6 +145,7 @@ def test_three_model_guard_and_merge():
     A[:, 2] = shared  # model1 source0 (col 2)
     A[:, 4] = shared  # model2 source0 (col 4)
     ng = _controlled_ng(A, n_channels=n, n_models=3)
+    assert ng.comp_list is not None
     ng._identify_shared_comps()
     # source-0 column shared by all 3 models -> one comp; three distinct source-1s.
     assert int(ng.comp_list[0, 0]) == int(ng.comp_list[0, 1]) == int(ng.comp_list[0, 2])
@@ -159,6 +164,7 @@ def test_comp_thresh_one_merges_only_exact_duplicates():
     A = A / A.norm(dim=0, keepdim=True)
     A[:, 3] = A[:, 0]  # exact duplicate across models
     ng = _controlled_ng(A, n_channels=n, n_models=2)
+    assert ng.comp_list is not None
     ng.comp_thresh = 1.0
     ng._identify_shared_comps()
     assert int(ng.comp_list[0, 1]) == int(ng.comp_list[0, 0])  # duplicate merged
@@ -266,6 +272,7 @@ def test_two_model_share_fit_survives_merge(real_data):
         comp_thresh=0.9,
     )
     ng.fit(real_data[:, :4096], max_iter=40)
+    assert ng.A is not None and ng.final_ll_ is not None
     assert torch.isfinite(ng.A).all()
     assert np.isfinite(ng.final_ll_)
     assert int(ng.comp_used.sum()) < ng.n_comps  # at least one merge survived
@@ -275,7 +282,7 @@ def test_sharing_reduces_unique_count_without_degrading_ll(real_data):
     """Enabling sharing on matched config strictly reduces the unique-component
     count and does not materially degrade the log-likelihood."""
     x = real_data[:, :4096]
-    common = dict(
+    common: Dict[str, Any] = dict(
         n_channels=NW,
         n_models=2,
         n_mix=3,
@@ -292,6 +299,7 @@ def test_sharing_reduces_unique_count_without_degrading_ll(real_data):
     shared.fit(x, max_iter=40)
     assert int(base.comp_used.sum()) == base.n_comps
     assert int(shared.comp_used.sum()) < base.n_comps
+    assert shared.final_ll_ is not None and base.final_ll_ is not None
     assert np.isfinite(shared.final_ll_)
     assert shared.final_ll_ > base.final_ll_ - 0.3  # no material degradation
 
@@ -310,10 +318,13 @@ def test_share_config_and_comp_list_roundtrip(real_data, tmp_path):
         share_iter=10,
         comp_thresh=0.9,
     )
+    assert model.model_ is not None
     assert int(model.model_.comp_used.sum()) < model.model_.n_comps  # a merge happened
     path = str(tmp_path / "shared.pt")
     model.save(path)
     loaded = AMICA.load(path, device="cpu")
+    assert loaded.model_ is not None
     assert loaded.model_.share_comps is True
     assert loaded.model_.share_start == 8 and loaded.model_.share_iter == 10
+    assert loaded.model_.comp_list is not None and model.model_.comp_list is not None
     assert torch.equal(loaded.model_.comp_list, model.model_.comp_list)
