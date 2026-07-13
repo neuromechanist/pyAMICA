@@ -77,7 +77,7 @@ import logging
 import json
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 from tqdm import tqdm
 from .utils import (
     gammaln,
@@ -87,7 +87,7 @@ from .utils import (
 )
 
 
-def load_default_params(params_file: Optional[str] = None) -> Dict:
+def load_default_params(params_file: Optional[Union[str, Path]] = None) -> Dict:
     """
     Load default parameters from JSON file.
 
@@ -244,23 +244,26 @@ class AMICA:
         self.rng = np.random.RandomState(params.get("seed"))
 
         # Initialize model parameters
-        self.A = None  # Mixing matrix
-        self.W = None  # Unmixing matrix
-        self.c = None  # Bias terms
-        self.mu = None  # Means of mixture components
-        self.alpha = None  # Mixture weights
-        self.beta = None  # Scale parameters
-        self.rho = None  # Shape parameters
-        self.gm = None  # Model weights
+        self.A: Optional[np.ndarray] = None  # Mixing matrix
+        self.W: Optional[np.ndarray] = None  # Unmixing matrix
+        self.c: Optional[np.ndarray] = None  # Bias terms
+        self.mu: Optional[np.ndarray] = None  # Means of mixture components
+        self.alpha: Optional[np.ndarray] = None  # Mixture weights
+        self.beta: Optional[np.ndarray] = None  # Scale parameters
+        self.rho: Optional[np.ndarray] = None  # Shape parameters
+        self.gm: Optional[np.ndarray] = None  # Model weights
 
         # Initialize data parameters
-        self.data_dim = None
-        self.num_samples = None
-        self.mean = None
-        self.sphere = None
+        self.data_dim: Optional[int] = None
+        self.num_samples: Optional[int] = None
+        self.mean: Optional[np.ndarray] = None
+        self.sphere: Optional[np.ndarray] = None
         self.sldet = 0.0
-        self.comp_list = None
-        self.comp_used = None
+        self.comp_list: Optional[np.ndarray] = None
+        self.comp_used: Optional[np.ndarray] = None
+        # Outlier-rejection mask (do_reject); not yet consumed by the E-step
+        # to actually restrict the fit data, see issue #123.
+        self.data_mask: Optional[np.ndarray] = None
 
         # Initialize optimization state
         self.iter = 0
@@ -268,10 +271,9 @@ class AMICA:
         self.nd = []  # Gradient norm history
 
         # Initialize Newton optimization parameters
-        if self.do_newton:
-            self.sigma2 = None
-            self.lambda_ = None
-            self.kappa = None
+        self.sigma2: Optional[np.ndarray] = None
+        self.lambda_: Optional[np.ndarray] = None
+        self.kappa: Optional[np.ndarray] = None
 
         # Setup logging
         self._setup_logging()
@@ -448,6 +450,7 @@ class AMICA:
 
     def _preprocess_data(self, data: np.ndarray):
         """Preprocess the data by removing mean and sphering."""
+        assert self.data_dim is not None
         # Remove mean if requested
         if self.do_mean:
             self.mean = np.mean(data, axis=1, keepdims=True)
@@ -508,6 +511,7 @@ class AMICA:
 
     def _initialize_parameters(self):
         """Initialize all model parameters."""
+        assert self.data_dim is not None
         # Initialize mixing/unmixing matrices
         if self.A is None:
             self.A = np.zeros((self.data_dim, self.num_comps))
@@ -526,6 +530,11 @@ class AMICA:
         self.comp_used = np.ones(self.num_comps, dtype=bool)
         for h in range(self.num_models):
             self.comp_list[:, h] = np.arange(h * self.data_dim, (h + 1) * self.data_dim)
+
+        # Outlier-rejection mask (issue #123: not yet consumed by the E-step).
+        if self.data_mask is None:
+            assert self.num_samples is not None
+            self.data_mask = np.ones(self.num_samples, dtype=bool)
 
         # Initialize mixture parameters
         if self.mu is None:
@@ -643,6 +652,7 @@ class AMICA:
         updates : dict
             Dictionary containing parameter updates and likelihood
         """
+        assert self.data_dim is not None
         # Initialize update accumulators
         updates = {
             "dgm": np.zeros(self.num_models),
@@ -694,6 +704,17 @@ class AMICA:
         updates : dict
             Parameter updates for this block
         """
+        assert (
+            self.data_dim is not None
+            and self.c is not None
+            and self.W is not None
+            and self.comp_list is not None
+            and self.beta is not None
+            and self.mu is not None
+            and self.rho is not None
+            and self.alpha is not None
+            and self.gm is not None
+        )
         batch_size = X.shape[1]
         tiny = np.finfo(np.float64).tiny
         updates = {
@@ -878,6 +899,16 @@ class AMICA:
         updates : dict
             Dictionary containing parameter updates
         """
+        assert (
+            self.data_dim is not None
+            and self.num_samples is not None
+            and self.c is not None
+            and self.mu is not None
+            and self.beta is not None
+            and self.rho is not None
+            and self.comp_list is not None
+            and self.A is not None
+        )
         # Update model weights
         if self.do_reject:
             self.gm = updates["dgm"] / self.num_good_samples
@@ -971,6 +1002,11 @@ class AMICA:
             dA[np.diag_indices_from(dA)] += 1
 
             if newton_active:
+                assert (
+                    self.lambda_ is not None
+                    and self.sigma2 is not None
+                    and self.kappa is not None
+                )
                 H = np.zeros_like(dA)
                 posdef = True
                 for i in range(self.data_dim):
@@ -1336,6 +1372,7 @@ class AMICA:
         """Reject outlier data points based on likelihood."""
         if not self.do_reject:
             return
+        assert self.data_mask is not None
 
         # Compute likelihood statistics
         ll_mean = np.mean(self.ll[-1])
@@ -1395,6 +1432,19 @@ class AMICA:
         if not self.do_history:
             return
 
+        assert (
+            self.A is not None
+            and self.W is not None
+            and self.c is not None
+            and self.mu is not None
+            and self.alpha is not None
+            and self.beta is not None
+            and self.rho is not None
+            and self.gm is not None
+            and self.mean is not None
+            and self.sphere is not None
+            and self.comp_list is not None
+        )
         hist_dir = self.outdir / "history" / f"{self.iter:06d}"
         if not hist_dir.exists():
             hist_dir.mkdir(parents=True)
@@ -1429,7 +1479,7 @@ class AMICA:
         S : ndarray of shape (n_components, n_samples, n_models)
             The unmixed sources for each model
         """
-        if self.W is None:
+        if self.W is None or self.comp_list is None or self.c is None:
             raise RuntimeError("Model has not been fitted yet; call fit() first.")
 
         if self.mean is not None:
