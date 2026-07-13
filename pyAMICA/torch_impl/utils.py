@@ -251,7 +251,7 @@ def load_eeglab_data(
         Number of channels
     field_dim : int
         Number of time points
-    dtype : np.dtype, default=np.float32
+    dtype : DTypeLike, default=np.float32
         Data type
 
     Returns
