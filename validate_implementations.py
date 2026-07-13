@@ -319,6 +319,21 @@ def run_pytorch_amica(
     }
 
 
+def amari_distance(Wa: np.ndarray, Wb: np.ndarray) -> float:
+    """Amari distance between two square unmixing matrices (Amari et al. 1996).
+
+    Permutation- and scale-invariant by construction, so unlike the
+    Hungarian-matched correlation above it needs no assignment step: 0 for a
+    perfect match up to row permutation/scaling, increasing with disagreement.
+    """
+    gain = Wa @ np.linalg.pinv(Wb)
+    n = gain.shape[0]
+    abs_gain = np.abs(gain)
+    row_term = (abs_gain.sum(axis=1) / abs_gain.max(axis=1) - 1).sum()
+    col_term = (abs_gain.sum(axis=0) / abs_gain.max(axis=0) - 1).sum()
+    return float((row_term + col_term) / (2 * n * (n - 1)))
+
+
 def compare_results(fortran_results: Optional[Dict], pytorch_results: Dict) -> Dict:
     """Compare results from both implementations."""
     comparison = {}

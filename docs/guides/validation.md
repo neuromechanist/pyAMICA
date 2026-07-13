@@ -1,15 +1,16 @@
 # Validation & Parity
 
 **Correctness in pyAMICA is defined as parity with the reference Fortran binary,
-not merely as convergence.** A run is correct when it reproduces the Fortran
-output within numerical tolerance.
+not merely as convergence.** A run is correct when it reproduces the Fortran output within numerical tolerance.
 
 ## The validation harness
 
 `validate_implementations.py` runs the implementations on real sample EEG,
-matches components across implementations with the Hungarian algorithm, and
-reports log-likelihood and per-component correlation. It always uses real sample
-data and the Fortran binary, never synthetic data.
+matches components across implementations with the Hungarian algorithm,
+and reports log-likelihood and per-component correlation. It always uses real sample data and the Fortran binary, never synthetic data.
+Conformity with Fortran is measured with two metrics used throughout this page: Hungarian-matched component correlation,
+and the Amari distance (`amari_distance` in `validate_implementations.py`),
+a standard unmixing-matrix comparison metric (Amari, Cichocki & Yang, 1996) that is permutation- and scale-invariant by construction and so needs no assignment step.
 
 ## Single-model parity
 
@@ -17,20 +18,16 @@ On real sample EEG the natural-gradient backend reaches Fortran's solution:
 
 - Log-likelihood ~ -3.40 (Fortran ~ -3.4018).
 - Hungarian-matched component correlation ~0.997, clearing the >0.95 gate.
+- Amari distance ~0.008.
 
-The fixed source-density families are bit-exact against the literal Fortran
-score/derivative expressions (~1e-15), and the backend converges to the binary's
-solution within ~0.005 log-likelihood.
+The fixed source-density families are bit-exact against the literal Fortran score/derivative expressions (~1e-15),
+and the backend converges to the binary's solution within ~0.005 log-likelihood.
 
 ## Multi-model equivalence
 
-Multi-model AMICA is not partition-identifiable, so exact partition parity with
-Fortran is the wrong acceptance bar. The right test is whether the two
-implementations sample the same distribution over solutions. Running an ensemble
-of `N = 20` fits per implementation on the real sample EEG (`n_models = 2`, 3
-mixture components, 100 iterations, matched schedule), the pyAMICA-vs-Fortran
-partition cross-correlation distribution overlaps Fortran's own run-to-run
-distribution:
+Multi-model AMICA is not partition-identifiable, so exact partition parity with Fortran is the wrong acceptance bar.
+The right test is whether the two implementations sample the same distribution over solutions. Running an ensemble of `N = 20` fits per implementation on the real sample EEG (`n_models = 2`, 3 mixture components, 100 iterations, matched schedule),
+the pyAMICA-vs-Fortran partition cross-correlation distribution overlaps Fortran's own run-to-run distribution:
 
 | Distribution (pairwise Hungarian-matched \|corr\|) | Mean | SD | Range |
 |---|---:|---:|---|
@@ -40,55 +37,109 @@ distribution:
 
 ![Multi-model solution-ensemble cross-correlation distributions for pyAMICA and Fortran.](../assets/figures/multimodel-ensemble.png){ width=640 }
 /// caption
-Pairwise Hungarian-matched component correlation for 20 pyAMICA and 20 Fortran
-multi-model fits of the sample EEG. The within-Fortran, within-pyAMICA, and
-between-implementation distributions overlap: the estimators sample the same
-solution space.
+Pairwise Hungarian-matched component correlation for 20 pyAMICA and 20 Fortran multi-model fits of the sample EEG.
+The within-Fortran, within-pyAMICA, and between-implementation distributions overlap: the estimators sample the same solution space.
 ///
 
-The three distribution means lie within 0.011 of each other (between 0.649,
-within-Fortran 0.638), well inside a $\pm 0.05$ margin. To test this at the
-correct unit of analysis, we use a **run-level permutation test**: the 190/400
-pairwise correlations are *not* independent (each of the 40 runs appears in ~39
-pairs), so a Mann-Whitney or TOST applied to the pairwise values is
-pseudoreplicated and its p-value is invalid. Permuting the 40 runs as intact
-units instead (20000 permutations, statistic = within-Fortran minus
-between-implementation mean correlation) respects that dependence and finds **no
-evidence that cross-implementation agreement is worse than Fortran's own
-run-to-run agreement ($p = 0.96$)**.
+The three distribution means lie within 0.011 of each other (between 0.649, within-Fortran 0.638), well inside a $\pm 0.05$ margin. To test this at the correct unit of analysis, we use a **run-level permutation test**:
+the 190/400 pairwise correlations are *not* independent (each of the 40 runs appears in ~39 pairs),
+so a Mann-Whitney or TOST applied to the pairwise values is pseudoreplicated and its p-value is invalid.
+Permuting the 40 runs as intact units instead (20000 permutations, statistic = within-Fortran minus between-implementation mean correlation) respects that dependence and finds **no evidence that cross-implementation agreement is worse than Fortran's own run-to-run agreement ($p = 0.96$)**.
 
-The single-run cross-correlation of ~0.65 is therefore intrinsic estimator
-spread, not a shortfall: Fortran agrees with *itself* at 0.64. The per-block
-sufficient statistics and one M-step are bit-exact against Fortran (~$10^{-15}$),
-so the update equations are correct; a small residual in the log-likelihood
-*distribution* (pyAMICA $-3.363 \pm 0.006$ vs Fortran $-3.354 \pm 0.003$;
+The single-run cross-correlation of ~0.65 is therefore intrinsic estimator spread, not a shortfall: Fortran agrees with *itself* at 0.64.
+The per-block sufficient statistics and one M-step are bit-exact against Fortran (~$10^{-15}$),
+so the update equations are correct;
+a small residual in the log-likelihood *distribution* (pyAMICA $-3.363 \pm 0.006$ vs Fortran $-3.354 \pm 0.003$;
 Kolmogorov-Smirnov $p \approx 6\times10^{-5}$) is an optimizer-quality effect,
-not a model-correctness defect (pyAMICA reaches Fortran's mean with about twice
-as many iterations).
+not a model-correctness defect (pyAMICA reaches Fortran's mean with about twice as many iterations).
+
+### Amari distance: a second, assignment-free metric
+
+The correlation above needs a Hungarian assignment step to resolve component permutation before it can be computed.
+The Amari distance does not: it is permutation- and scale-invariant by construction,
+so it is a genuinely independent check on the same 20-run ensembles (`.context/issue-27/ensemble.npz`;
+recomputed by `.context/issue-27/amari_distance.py` with no re-fitting, since the raw unmixing matrices from the original 40 fits are already saved).
+Each stacked 2-model matrix is split into its per-model 32x32 blocks;
+since which Fortran model corresponds to which pyAMICA model is not identified, both label pairings are tried and the lower-distance pairing is kept, per run pair.
+
+| Distribution (Amari distance, lower is better) | Mean | SD |
+|---|---:|---:|
+| within-Fortran (Fortran vs Fortran) | 0.174 | 0.023 |
+| within-pyAMICA (pyAMICA vs pyAMICA) | 0.155 | 0.020 |
+| between (pyAMICA vs Fortran) | 0.161 | 0.023 |
+
+The same run-level permutation test (20000 permutations, intact 40-run units) finds no evidence that between-implementation agreement is worse than Fortran's own run-to-run agreement ($p = 0.998$), agreeing with the correlation-based conclusion above.
+
+#### Per-run detail
+
+Table 1 in the paper and the group summaries above report distribution means;
+the table below gives each of the 40 runs' own mean agreement to its own group's other 19 runs (`within`) and to all 20 opposite-implementation runs (`between`), for both metrics.
+Regenerate with `uv run python .context/issue-27/amari_distance.py`, which writes `.context/issue-27/per_run_detail.csv`.
+
+| implementation | run | corr within | corr between | Amari within | Amari between |
+|---|---:|---:|---:|---:|---:|
+| Fortran | 0 | 0.6164 | 0.6274 | 0.1870 | 0.1764 |
+| Fortran | 1 | 0.6292 | 0.6568 | 0.1791 | 0.1621 |
+| Fortran | 2 | 0.6465 | 0.6396 | 0.1697 | 0.1680 |
+| Fortran | 3 | 0.6593 | 0.6740 | 0.1642 | 0.1548 |
+| Fortran | 4 | 0.6323 | 0.6522 | 0.1783 | 0.1637 |
+| Fortran | 5 | 0.6692 | 0.6773 | 0.1589 | 0.1502 |
+| Fortran | 6 | 0.6660 | 0.6808 | 0.1640 | 0.1530 |
+| Fortran | 7 | 0.6341 | 0.6400 | 0.1779 | 0.1690 |
+| Fortran | 8 | 0.6285 | 0.6491 | 0.1775 | 0.1672 |
+| Fortran | 9 | 0.6212 | 0.6341 | 0.1832 | 0.1719 |
+| Fortran | 10 | 0.6308 | 0.6414 | 0.1786 | 0.1691 |
+| Fortran | 11 | 0.6297 | 0.6444 | 0.1733 | 0.1631 |
+| Fortran | 12 | 0.6334 | 0.6416 | 0.1783 | 0.1709 |
+| Fortran | 13 | 0.6513 | 0.6630 | 0.1698 | 0.1610 |
+| Fortran | 14 | 0.6666 | 0.6689 | 0.1583 | 0.1555 |
+| Fortran | 15 | 0.6231 | 0.6254 | 0.1841 | 0.1790 |
+| Fortran | 16 | 0.6147 | 0.6258 | 0.1904 | 0.1775 |
+| Fortran | 17 | 0.6280 | 0.6483 | 0.1739 | 0.1645 |
+| Fortran | 18 | 0.6441 | 0.6371 | 0.1698 | 0.1693 |
+| Fortran | 19 | 0.6389 | 0.6505 | 0.1726 | 0.1655 |
+| pyAMICA | 0 | 0.6317 | 0.6149 | 0.1736 | 0.1823 |
+| pyAMICA | 1 | 0.6935 | 0.6777 | 0.1452 | 0.1525 |
+| pyAMICA | 2 | 0.6624 | 0.6583 | 0.1577 | 0.1601 |
+| pyAMICA | 3 | 0.6406 | 0.6459 | 0.1452 | 0.1476 |
+| pyAMICA | 4 | 0.6493 | 0.6384 | 0.1416 | 0.1478 |
+| pyAMICA | 5 | 0.6755 | 0.6591 | 0.1566 | 0.1631 |
+| pyAMICA | 6 | 0.6339 | 0.6236 | 0.1698 | 0.1799 |
+| pyAMICA | 7 | 0.6809 | 0.6788 | 0.1426 | 0.1471 |
+| pyAMICA | 8 | 0.6780 | 0.6552 | 0.1527 | 0.1618 |
+| pyAMICA | 9 | 0.6270 | 0.6206 | 0.1741 | 0.1834 |
+| pyAMICA | 10 | 0.6855 | 0.6665 | 0.1511 | 0.1626 |
+| pyAMICA | 11 | 0.6739 | 0.6556 | 0.1506 | 0.1588 |
+| pyAMICA | 12 | 0.6321 | 0.6190 | 0.1634 | 0.1751 |
+| pyAMICA | 13 | 0.6639 | 0.6610 | 0.1541 | 0.1591 |
+| pyAMICA | 14 | 0.6866 | 0.6849 | 0.1480 | 0.1501 |
+| pyAMICA | 15 | 0.6944 | 0.6672 | 0.1427 | 0.1540 |
+| pyAMICA | 16 | 0.6576 | 0.6533 | 0.1561 | 0.1619 |
+| pyAMICA | 17 | 0.6435 | 0.6249 | 0.1635 | 0.1754 |
+| pyAMICA | 18 | 0.6753 | 0.6547 | 0.1384 | 0.1472 |
+| pyAMICA | 19 | 0.6302 | 0.6180 | 0.1446 | 0.1531 |
 
 ## Data adequacy and cross-backend equivalence
 
-Whether backends recover the *same* components depends on how well-determined the
-decomposition is, captured by the data-adequacy factor:
+Whether backends recover the *same* components depends on how well-determined the decomposition is, captured by the data-adequacy factor:
 
 $$k = \frac{\text{frames}}{\text{channels}^2}$$
 
-As `k` grows, cross-backend component equivalence rises toward 1.0; at the
-rule-of-thumb minimum (`k` around 20-30) only the strongest components are
-backend-reproducible, while the rest are under-determined and settle into
-different but equally valid local optima (AMICA is non-convex).
+As `k` grows, cross-backend component equivalence rises toward 1.0;
+at the rule-of-thumb minimum (`k` around 20-30) only the strongest components are backend-reproducible,
+while the rest are under-determined and settle into different but equally valid local optima (AMICA is non-convex).
 
 ### Data-size sweep: equivalence versus k
 
 Holding channels fixed at 70 and increasing the number of frames (so `k` rises),
-on real EEG (ds002718 sub-002), cross-backend IC equivalence climbs sharply and
-then saturates once the decomposition is well-determined:
+on real EEG (ds002718 sub-002),
+cross-backend IC equivalence climbs sharply and then saturates once the decomposition is well-determined:
 
 ![Cross-backend IC equivalence versus the data-adequacy factor k at 70 channels.](../assets/figures/kfactor-equivalence.png){ width=640 }
 /// caption
-Mean Hungarian-matched cross-backend |correlation| versus $k = \text{frames} /
-\text{channels}^2$ (70 channels, 2000 iterations, native-Fortran and PyTorch-CUDA
-float64/float32 backends). Equivalence saturates at ~0.98 once $k \geq 60$.
+Mean Hungarian-matched cross-backend |correlation| versus $k = \text{frames} / \text{channels}^2$ (70 channels, 2000 iterations,
+native-Fortran and PyTorch-CUDA float64/float32 backends).
+Equivalence saturates at ~0.98 once $k \geq 60$.
 ///
 
 | frames | k | mean \|corr\| | components >0.95 |
@@ -109,9 +160,8 @@ float64/float32 backends). Equivalence saturates at ~0.98 once $k \geq 60$.
 
 ### Why the plateau sits at ~0.98, not 1.0
 
-At the largest data size (k=152) the residual below 1.0 splits cleanly by
-precision. The two double-precision implementations, an independent native
-Fortran binary and the PyTorch-CUDA backend, agree at 0.995:
+At the largest data size (k=152) the residual below 1.0 splits cleanly by precision.
+The two double-precision implementations, an independent native Fortran binary and the PyTorch-CUDA backend, agree at 0.995:
 
 | Pair (at k=152) | \|corr\| |
 |---|---:|
@@ -119,17 +169,13 @@ Fortran binary and the PyTorch-CUDA backend, agree at 0.995:
 | native-Fortran f64 vs PyTorch-CUDA f32 | 0.971 |
 | PyTorch-CUDA f64 vs PyTorch-CUDA f32 | 0.979 |
 
-This is cross-*implementation* agreement, not just cross-device. The residual gap
-is dominated by the float32 path (rounding accumulated over 2000 iterations, plus
-an early stop when the natural-gradient learning rate hit its floor), which is a
-convergence/precision effect rather than a backend defect.
+This is cross-*implementation* agreement, not just cross-device. The residual gap is dominated by the float32 path (rounding accumulated over 2000 iterations, plus an early stop when the natural-gradient learning rate hit its floor), which is a convergence/precision effect rather than a backend defect.
 
 ## Performance across backends
 
-Throughput on real EEG (OpenNeuro ds002718 sub-002; `n_mix=3`, `pdftype=0`,
-`block_size=512`, warmed, min-of-repeats). CPU, MPS, and MLX were measured on
-Apple Silicon; CUDA on a separate NVIDIA RTX 4090 host, so MLX-versus-CUDA reads
-as "best Apple-GPU path versus a strong NVIDIA GPU", not a same-box comparison.
+Throughput on real EEG (OpenNeuro ds002718 sub-002; `n_mix=3`, `pdftype=0`, `block_size=512`, warmed, min-of-repeats).
+CPU, MPS, and MLX were measured on Apple Silicon; CUDA on a separate NVIDIA RTX 4090 host,
+so MLX-versus-CUDA reads as "best Apple-GPU path versus a strong NVIDIA GPU", not a same-box comparison.
 
 ### Single-model, ms/iteration
 
@@ -140,11 +186,45 @@ as "best Apple-GPU path versus a strong NVIDIA GPU", not a same-box comparison.
 | 48 | 19.5 | 36.0 | 35.9 | 151 | 168 | 168 | 426 |
 | 70 | 25.2 | 35.6 | 38.6 | 173 | 193 | 255 | 622 |
 
-MLX is the fastest option on Apple Silicon and stays roughly flat with channel
-count (~7x over torch-CPU). PyTorch-MPS is *not* a win (at or worse than CPU), so
-use MLX rather than `device="mps"` on Apple hardware. CUDA float32 and float64 are
-near-identical here (launch-bound at this size). NumPy is the reference
-implementation, not a production path.
+MLX is the fastest option on Apple Silicon and stays roughly flat with channel count (~7x over torch-CPU).
+PyTorch-MPS is *not* a win (at or worse than CPU), so use MLX rather than `device="mps"` on Apple hardware.
+CUDA float32 and float64 are near-identical here (launch-bound at this size). NumPy is the reference implementation, not a production path.
+
+### CPU core-scaling and native Fortran
+
+The table above uses each platform's default thread count and has no Fortran row.
+A separate core-count sweep (`--threads`, real ds002718 sub-002 EEG, 70 channels, `n_mix=3`,
+`pdftype=0`, `do_newton` off, `block_size=512`) adds native Fortran (via `OMP_NUM_THREADS`) alongside torch-CPU (`set_num_threads`) and NumPy (`threadpoolctl`) on the same two machines as above, GPU backends run once since they are thread-independent:
+
+| backend (Intel Xeon / RTX 4090 workstation, 32 cores) | 4c | 8c | 12c | 16c | 24c |
+|---|---:|---:|---:|---:|---:|
+| native-fortran f64 | 69.5 | 43.2 | 49.0 | 40.0 | **30.0** |
+| torch-CPU f64 | 105.9 | 91.0 | 92.6 | 142.5 | 212.8 |
+| torch-CPU f32 | 84.6 | 69.5 | 71.8 | 70.9 | 73.0 |
+| NumPy f64 | 794.6 | 810.3 | 871.7 | 855.5 | 866.1 |
+
+GPU (thread-independent, run once): CUDA f64 = 38.5, CUDA f32 = 36.2.
+
+| backend (Apple Silicon, 14 cores: 10P + 4E) | 4c | 8c |
+|---|---:|---:|
+| native-fortran f64 | 100.0 | **70.0** |
+| torch-CPU f64 | 131.4 | 169.9 |
+| torch-CPU f32 | 111.7 | 144.4 |
+| NumPy f64 | 627.0 | 627.4 |
+
+GPU (thread-independent, run once): MLX f32 = 33.4, MPS f32 = 217.7.
+
+Native Fortran with OpenMP is the only CPU backend that scales with cores:
+on 24 of the workstation's 32 cores it beats the RTX 4090 (30 vs 38.5 ms/iteration),
+and on 8 of the Mac's 14 cores it is faster than either torch-CPU precision.
+torch-CPU f64 peaks around 8 cores then regresses from oversubscription (91 to 213 ms/iteration going from 8 to 24 cores on the workstation);
+torch-CPU f32 is faster and scale-stable but never catches the GPU.
+NumPy is thread-flat (BLAS/Python-bound) and slowest everywhere.
+MLX remains the efficiency winner overall: ~33 ms/iteration, flat, no tuning, beating a 450 W RTX 4090 and a 32-core workstation running 24 cores,
+at a fraction of the power and cost;
+native-Fortran@24c is marginally faster in raw ms/iteration only by pinning most cores of a much larger, hotter machine.
+Native-Fortran timing at ≤32 channels is at or below the binary's ~10 ms stamp resolution, so trust the 48/70-channel scaling curve;
+the full 16/32/48/70-channel grid is in the result JSONs alongside `.context/issue-84/phase2_cpu_scaling.md`.
 
 ### Multi-model (n_models=2), ms/iteration
 
@@ -153,17 +233,16 @@ implementation, not a production path.
 | 32 | 38 | 187 | 291 | 869 |
 | 70 | 45 | 224 | 270 | 928 |
 
-The Apple-GPU win extends to multi-model: MLX ~38-45 ms/iteration, ~5x over
-torch-CPU, with MPS still losing.
+The Apple-GPU win extends to multi-model: MLX ~38-45 ms/iteration, ~5x over torch-CPU, with MPS still losing.
 
 ### Cross-backend log-likelihood agreement (single-model)
 
-Every backend converges to the same log-likelihood to ~3 significant digits on
-real EEG, across device and precision, confirming the whole backend family
-end-to-end:
+Every backend converges to the same log-likelihood to ~3 significant digits on real EEG,
+across device and precision, confirming the whole backend family end-to-end:
 
 | channels | MLX f32 | CUDA f64 | torch-CPU f64 | torch-MPS f32 | NumPy f64 |
 |---:|---:|---:|---:|---:|---:|
 | 32 | -3.28634 | -3.28635 | -3.28636 | -3.28635 | -3.28620 |
 | 48 | -3.20951 | -3.20952 | -3.20953 | -3.20951 | -3.21019 |
 | 70 | -3.21579 | -3.21562 | -3.21560 | -3.21570 | -3.21315 |
+
