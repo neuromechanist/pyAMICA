@@ -1000,7 +1000,7 @@ def test_end_to_end_correlation_vs_fortran():
     exact-EM mixture updates, the digamma rho update, and the symmetric-ZCA
     sphere) makes the backend ascend to Fortran's solution (LL ~ -3.40) with
     Newton positive-definite and firing (``m.n_newton_fallbacks == 0``), reaching
-    component correlation ~0.997.
+    component correlation ~0.997 and Amari distance ~0.006 (issue #116).
     """
     import sys
 
@@ -1010,6 +1010,7 @@ def test_end_to_end_correlation_vs_fortran():
         load_sample_data,
         run_fortran_amica,
         compare_results,
+        amari_distance,
     )
 
     data, params = load_sample_data()
@@ -1018,6 +1019,7 @@ def test_end_to_end_correlation_vs_fortran():
     out = root / "pyAMICA" / "tests" / "torch_tests" / "_ng_e2e_tmp"
     out.mkdir(parents=True, exist_ok=True)
     fortran = run_fortran_amica(data, params, out, SEED)
+    assert fortran is not None, "Fortran binary run failed"
 
     m = _fresh_ng(
         block_size=512,
@@ -1037,6 +1039,7 @@ def test_end_to_end_correlation_vs_fortran():
     }
     cmp = compare_results(fortran, ng_results)
     assert cmp["mean_correlation"] > 0.95
+    assert amari_distance(fortran["W"], ng_results["W"]) < 0.05
     # The docstring's headline claim: Newton is positive-definite and actually
     # firing, not silently falling back to natural gradient every iteration.
     assert m.n_newton_fallbacks == 0

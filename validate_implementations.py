@@ -319,6 +319,34 @@ def run_pytorch_amica(
     }
 
 
+def _amari_index(gain: np.ndarray) -> float:
+    n = gain.shape[0]
+    if n < 2:
+        raise ValueError("amari_distance: matrices must be at least 2x2")
+    abs_gain = np.abs(gain)
+    row_max = abs_gain.max(axis=1)
+    col_max = abs_gain.max(axis=0)
+    if np.any(row_max == 0) or np.any(col_max == 0):
+        raise ValueError("amari_distance: a row or column is all-zero")
+    row_term = (abs_gain.sum(axis=1) / row_max - 1).sum()
+    col_term = (abs_gain.sum(axis=0) / col_max - 1).sum()
+    return (row_term + col_term) / (2 * n * (n - 1))
+
+
+def amari_distance(Wa: np.ndarray, Wb: np.ndarray) -> float:
+    """Amari distance between two square unmixing matrices (Amari et al. 1996).
+
+    Permutation- and scale-invariant by construction, so unlike the
+    Hungarian-matched correlation above it needs no assignment step: 0 for a
+    perfect match up to row permutation/scaling, increasing with disagreement.
+    The raw index is not symmetric under a Wa/Wb swap, so this averages both
+    directions to give an actual (symmetric) distance.
+    """
+    forward = _amari_index(Wa @ np.linalg.pinv(Wb))
+    backward = _amari_index(Wb @ np.linalg.pinv(Wa))
+    return float((forward + backward) / 2)
+
+
 def compare_results(fortran_results: Optional[Dict], pytorch_results: Dict) -> Dict:
     """Compare results from both implementations."""
     comparison = {}
