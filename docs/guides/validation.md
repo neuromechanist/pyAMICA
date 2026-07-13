@@ -18,7 +18,7 @@ On real sample EEG the natural-gradient backend reaches Fortran's solution:
 
 - Log-likelihood ~ -3.40 (Fortran ~ -3.4018).
 - Hungarian-matched component correlation ~0.997, clearing the >0.95 gate.
-- Amari distance ~0.008.
+- Amari distance ~0.006.
 
 The fixed source-density families are bit-exact against the literal Fortran score/derivative expressions (~1e-15),
 and the backend converges to the binary's solution within ~0.005 log-likelihood.
@@ -61,14 +61,15 @@ so it is a genuinely independent check on the same 20-run ensembles (`.context/i
 recomputed by `.context/issue-27/amari_distance.py` with no re-fitting, since the raw unmixing matrices from the original 40 fits are already saved).
 Each stacked 2-model matrix is split into its per-model 32x32 blocks;
 since which Fortran model corresponds to which pyAMICA model is not identified, both label pairings are tried and the lower-distance pairing is kept, per run pair.
+This pairing correction is not free: on this ensemble it lowers the reported distance by ~0.02-0.03 versus always keeping the naive (unswapped) pairing, a similar order of magnitude to the within-Fortran/within-pyAMICA gap below, so part of that gap plausibly reflects how often each group happens to need the swap, not just genuine agreement differences.
 
 | Distribution (Amari distance, lower is better) | Mean | SD |
 |---|---:|---:|
 | within-Fortran (Fortran vs Fortran) | 0.174 | 0.023 |
-| within-pyAMICA (pyAMICA vs pyAMICA) | 0.155 | 0.020 |
-| between (pyAMICA vs Fortran) | 0.161 | 0.023 |
+| within-pyAMICA (pyAMICA vs pyAMICA) | 0.154 | 0.019 |
+| between (pyAMICA vs Fortran) | 0.163 | 0.022 |
 
-The same run-level permutation test (20000 permutations, intact 40-run units) finds no evidence that between-implementation agreement is worse than Fortran's own run-to-run agreement ($p = 0.998$), agreeing with the correlation-based conclusion above.
+The same run-level permutation test (20000 permutations, intact 40-run units) finds no evidence that between-implementation agreement is worse than Fortran's own run-to-run agreement ($p > 0.999$), agreeing with the correlation-based conclusion above.
 
 #### Per-run detail
 
@@ -78,46 +79,46 @@ Regenerate with `uv run python .context/issue-27/amari_distance.py`, which write
 
 | implementation | run | corr within | corr between | Amari within | Amari between |
 |---|---:|---:|---:|---:|---:|
-| Fortran | 0 | 0.6164 | 0.6274 | 0.1870 | 0.1764 |
-| Fortran | 1 | 0.6292 | 0.6568 | 0.1791 | 0.1621 |
-| Fortran | 2 | 0.6465 | 0.6396 | 0.1697 | 0.1680 |
-| Fortran | 3 | 0.6593 | 0.6740 | 0.1642 | 0.1548 |
-| Fortran | 4 | 0.6323 | 0.6522 | 0.1783 | 0.1637 |
-| Fortran | 5 | 0.6692 | 0.6773 | 0.1589 | 0.1502 |
-| Fortran | 6 | 0.6660 | 0.6808 | 0.1640 | 0.1530 |
-| Fortran | 7 | 0.6341 | 0.6400 | 0.1779 | 0.1690 |
-| Fortran | 8 | 0.6285 | 0.6491 | 0.1775 | 0.1672 |
-| Fortran | 9 | 0.6212 | 0.6341 | 0.1832 | 0.1719 |
-| Fortran | 10 | 0.6308 | 0.6414 | 0.1786 | 0.1691 |
-| Fortran | 11 | 0.6297 | 0.6444 | 0.1733 | 0.1631 |
-| Fortran | 12 | 0.6334 | 0.6416 | 0.1783 | 0.1709 |
-| Fortran | 13 | 0.6513 | 0.6630 | 0.1698 | 0.1610 |
-| Fortran | 14 | 0.6666 | 0.6689 | 0.1583 | 0.1555 |
-| Fortran | 15 | 0.6231 | 0.6254 | 0.1841 | 0.1790 |
-| Fortran | 16 | 0.6147 | 0.6258 | 0.1904 | 0.1775 |
-| Fortran | 17 | 0.6280 | 0.6483 | 0.1739 | 0.1645 |
-| Fortran | 18 | 0.6441 | 0.6371 | 0.1698 | 0.1693 |
-| Fortran | 19 | 0.6389 | 0.6505 | 0.1726 | 0.1655 |
-| pyAMICA | 0 | 0.6317 | 0.6149 | 0.1736 | 0.1823 |
-| pyAMICA | 1 | 0.6935 | 0.6777 | 0.1452 | 0.1525 |
-| pyAMICA | 2 | 0.6624 | 0.6583 | 0.1577 | 0.1601 |
-| pyAMICA | 3 | 0.6406 | 0.6459 | 0.1452 | 0.1476 |
-| pyAMICA | 4 | 0.6493 | 0.6384 | 0.1416 | 0.1478 |
-| pyAMICA | 5 | 0.6755 | 0.6591 | 0.1566 | 0.1631 |
-| pyAMICA | 6 | 0.6339 | 0.6236 | 0.1698 | 0.1799 |
-| pyAMICA | 7 | 0.6809 | 0.6788 | 0.1426 | 0.1471 |
-| pyAMICA | 8 | 0.6780 | 0.6552 | 0.1527 | 0.1618 |
-| pyAMICA | 9 | 0.6270 | 0.6206 | 0.1741 | 0.1834 |
-| pyAMICA | 10 | 0.6855 | 0.6665 | 0.1511 | 0.1626 |
-| pyAMICA | 11 | 0.6739 | 0.6556 | 0.1506 | 0.1588 |
-| pyAMICA | 12 | 0.6321 | 0.6190 | 0.1634 | 0.1751 |
-| pyAMICA | 13 | 0.6639 | 0.6610 | 0.1541 | 0.1591 |
-| pyAMICA | 14 | 0.6866 | 0.6849 | 0.1480 | 0.1501 |
-| pyAMICA | 15 | 0.6944 | 0.6672 | 0.1427 | 0.1540 |
-| pyAMICA | 16 | 0.6576 | 0.6533 | 0.1561 | 0.1619 |
-| pyAMICA | 17 | 0.6435 | 0.6249 | 0.1635 | 0.1754 |
-| pyAMICA | 18 | 0.6753 | 0.6547 | 0.1384 | 0.1472 |
-| pyAMICA | 19 | 0.6302 | 0.6180 | 0.1446 | 0.1531 |
+| Fortran | 0 | 0.6164 | 0.6274 | 0.1880 | 0.1745 |
+| Fortran | 1 | 0.6292 | 0.6568 | 0.1784 | 0.1592 |
+| Fortran | 2 | 0.6465 | 0.6396 | 0.1694 | 0.1654 |
+| Fortran | 3 | 0.6593 | 0.6740 | 0.1627 | 0.1508 |
+| Fortran | 4 | 0.6323 | 0.6522 | 0.1797 | 0.1629 |
+| Fortran | 5 | 0.6692 | 0.6773 | 0.1590 | 0.1488 |
+| Fortran | 6 | 0.6660 | 0.6808 | 0.1628 | 0.1502 |
+| Fortran | 7 | 0.6341 | 0.6400 | 0.1786 | 0.1678 |
+| Fortran | 8 | 0.6285 | 0.6491 | 0.1779 | 0.1663 |
+| Fortran | 9 | 0.6212 | 0.6341 | 0.1835 | 0.1702 |
+| Fortran | 10 | 0.6308 | 0.6414 | 0.1794 | 0.1663 |
+| Fortran | 11 | 0.6297 | 0.6444 | 0.1736 | 0.1614 |
+| Fortran | 12 | 0.6334 | 0.6416 | 0.1782 | 0.1690 |
+| Fortran | 13 | 0.6513 | 0.6630 | 0.1693 | 0.1574 |
+| Fortran | 14 | 0.6666 | 0.6689 | 0.1584 | 0.1540 |
+| Fortran | 15 | 0.6231 | 0.6254 | 0.1827 | 0.1750 |
+| Fortran | 16 | 0.6147 | 0.6258 | 0.1903 | 0.1755 |
+| Fortran | 17 | 0.6280 | 0.6483 | 0.1749 | 0.1632 |
+| Fortran | 18 | 0.6441 | 0.6371 | 0.1691 | 0.1665 |
+| Fortran | 19 | 0.6389 | 0.6505 | 0.1733 | 0.1637 |
+| pyAMICA | 0 | 0.6317 | 0.6149 | 0.1690 | 0.1806 |
+| pyAMICA | 1 | 0.6935 | 0.6777 | 0.1440 | 0.1529 |
+| pyAMICA | 2 | 0.6624 | 0.6583 | 0.1545 | 0.1606 |
+| pyAMICA | 3 | 0.6406 | 0.6459 | 0.1527 | 0.1561 |
+| pyAMICA | 4 | 0.6493 | 0.6384 | 0.1506 | 0.1569 |
+| pyAMICA | 5 | 0.6755 | 0.6591 | 0.1548 | 0.1622 |
+| pyAMICA | 6 | 0.6339 | 0.6236 | 0.1677 | 0.1807 |
+| pyAMICA | 7 | 0.6809 | 0.6788 | 0.1417 | 0.1479 |
+| pyAMICA | 8 | 0.6780 | 0.6552 | 0.1508 | 0.1631 |
+| pyAMICA | 9 | 0.6270 | 0.6206 | 0.1703 | 0.1823 |
+| pyAMICA | 10 | 0.6855 | 0.6665 | 0.1474 | 0.1612 |
+| pyAMICA | 11 | 0.6739 | 0.6556 | 0.1506 | 0.1612 |
+| pyAMICA | 12 | 0.6321 | 0.6190 | 0.1617 | 0.1753 |
+| pyAMICA | 13 | 0.6639 | 0.6610 | 0.1519 | 0.1597 |
+| pyAMICA | 14 | 0.6866 | 0.6849 | 0.1460 | 0.1520 |
+| pyAMICA | 15 | 0.6944 | 0.6672 | 0.1417 | 0.1559 |
+| pyAMICA | 16 | 0.6576 | 0.6533 | 0.1551 | 0.1633 |
+| pyAMICA | 17 | 0.6435 | 0.6249 | 0.1615 | 0.1756 |
+| pyAMICA | 18 | 0.6753 | 0.6547 | 0.1442 | 0.1549 |
+| pyAMICA | 19 | 0.6302 | 0.6180 | 0.1562 | 0.1655 |
 
 ## Data adequacy and cross-backend equivalence
 

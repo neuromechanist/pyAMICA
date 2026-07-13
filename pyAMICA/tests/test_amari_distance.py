@@ -59,3 +59,32 @@ def test_amari_distance_nonnegative():
         W1 = rng.standard_normal((32, 32))
         W2 = rng.standard_normal((32, 32))
         assert vi.amari_distance(W1, W2) >= 0.0
+
+
+def test_amari_distance_symmetric():
+    rng = _rng()
+    W1 = rng.standard_normal((32, 32))
+    W2 = rng.standard_normal((32, 32))
+    assert np.allclose(vi.amari_distance(W1, W2), vi.amari_distance(W2, W1), atol=1e-12)
+
+
+def test_amari_distance_rejects_degenerate_input():
+    W = _rng().standard_normal((32, 32))
+    W_zero_row = W.copy()
+    W_zero_row[0] = 0.0
+    try:
+        vi.amari_distance(W_zero_row, W)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for an all-zero row")
+
+
+def test_amari_distance_rejects_scalar_input():
+    W = np.array([[1.0]])
+    try:
+        vi.amari_distance(W, W)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for a 1x1 matrix")

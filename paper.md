@@ -74,14 +74,14 @@ logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture o
 Hungarian-matched component correlation (matching that resolves permutation, sign, and scale) and the Amari distance [@amari1996new],
 a standard unmixing-matrix comparison metric that is permutation- and scale-invariant by construction and so needs no assignment step.
 For a single model, on the bundled recording (32 channels,
-~30,000 samples), the converged solution reproduces Fortran's log-likelihood (Fortran $-3.4018$) to within ~0.005 with a component correlation of ~0.997 and an Amari distance of ~0.008,
+~30,000 samples), the converged solution reproduces Fortran's log-likelihood (Fortran $-3.4018$) to within ~0.005 with a component correlation of ~0.997 and an Amari distance of ~0.006,
 and the source-density score functions and per-block sufficient statistics are bit-exact against the literal Fortran expressions ($\sim\!10^{-15}$).
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar;
 the multi-model case is instead assessed by distributional equivalence, with the same two metrics. Across ensembles of 20 runs each,
 both agree on the same conclusion: the `pyAMICA`-versus-Fortran distribution overlaps Fortran's own run-to-run distribution (partition correlation,
-between/within-`pyAMICA`/within-Fortran means 0.65/0.66/0.64, sd ~0.05; Amari distance, 0.161/0.155/0.174, sd ~0.02;
+between/within-`pyAMICA`/within-Fortran means 0.65/0.66/0.64, sd ~0.05; Amari distance, 0.163/0.154/0.174, sd ~0.02;
 \autoref{fig:ensemble}). Run-level permutation tests, which permute the 40 runs as intact units and so respect the dependence among the pairwise values,
-find no evidence that cross-implementation agreement is worse than Fortran's own run-to-run agreement on either metric (correlation $p = 0.96$; Amari distance $p = 0.998$);
+find no evidence that cross-implementation agreement is worse than Fortran's own run-to-run agreement on either metric (correlation $p = 0.96$; Amari distance $p > 0.999$);
 the single-run values are therefore intrinsic estimator spread rather than a shortfall,
 since Fortran agrees with itself at 0.64/0.174.
 Equivalence is claimed for the partition structure;
@@ -95,7 +95,7 @@ so full-likelihood equivalence is not yet claimed. Per-run detail for both metri
 | Single-model | Score functions and sufficient statistics | bit-exact ($\sim\!10^{-15}$) |
 | Multi-model | Partition correlation, single run (`pyAMICA`-Fortran; Fortran-Fortran) | 0.65; 0.64 (sd ~0.05) |
 | Multi-model | Partition-ensemble equivalence, 20 runs each | means within 0.05; permutation $p=0.96$ |
-| Multi-model | Amari distance, single run (`pyAMICA`-Fortran; Fortran-Fortran) | 0.161; 0.174 (sd ~0.02) |
+| Multi-model | Amari distance, single run (`pyAMICA`-Fortran; Fortran-Fortran) | 0.163; 0.174 (sd ~0.02) |
 
 : Single-model parity and multi-model distributional equivalence of `pyAMICA`
 with the Fortran reference on the bundled sample EEG.
