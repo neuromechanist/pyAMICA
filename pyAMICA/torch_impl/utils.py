@@ -4,6 +4,7 @@ Utility functions for PyTorch AMICA.
 
 import torch
 import numpy as np
+import numpy.typing as npt
 from typing import Optional, Dict, Any, Tuple
 import logging
 
@@ -237,7 +238,7 @@ def compare_with_fortran(
 
 
 def load_eeglab_data(
-    filepath: str, data_dim: int, field_dim: int, dtype: np.dtype = np.float32
+    filepath: str, data_dim: int, field_dim: int, dtype: npt.DTypeLike = np.float32
 ) -> np.ndarray:
     """
     Load EEGLAB .fdt binary data file.

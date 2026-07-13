@@ -8,6 +8,7 @@ from the same initialization and random seed.
 
 import numpy as np
 import json
+import os
 import subprocess
 import torch
 import inspect
@@ -103,7 +104,7 @@ def create_fortran_params(params: Dict, output_dir: Path, seed: int) -> Path:
 
 def run_fortran_amica(
     data: np.ndarray, params: Dict, output_dir: Path, seed: int
-) -> Dict:
+) -> Optional[Dict]:
     """Run Fortran AMICA binary and collect results."""
     # Use the macOS binary in sample_data directory
     binary_path = Path("pyAMICA/sample_data/amica15mac")
@@ -153,11 +154,9 @@ def run_fortran_amica(
 
     # Run Fortran binary
     print("Running Fortran AMICA...")
+    original_dir = os.getcwd()
     try:
         # Change to working directory to run
-        import os
-
-        original_dir = os.getcwd()
         os.chdir(fortran_dir)
 
         result = subprocess.run(
