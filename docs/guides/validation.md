@@ -385,3 +385,12 @@ The multi-model ensemble and Amari detail regenerate from saved fits (no re-fitt
 `uv run python .context/issue-27/amari_distance.py`. The cross-platform benchmark and equivalence
 figures are produced by `benchmarks/benchmark_decompose.py` (and the sweep scripts alongside it);
 the underlying findings are in `.context/issue-84/` and `.context/issue-90/`.
+
+### Parameter files
+
+`sample_data/sample_params.json` is the JSON parameter file used above (loaded via
+`AMICA.from_params_file`); its keys mostly reuse Fortran's `.param` names (`lrate`, `do_newton`,
+`rho0`, `block_size`, `max_iter`, `num_models`, ...), but not all of them match one-to-one
+(for example `num_mix` here vs `num_mix_comps` in Fortran's `input.param`), and pyAMICA does not
+yet parse the literal Fortran `.param` text format. A native `.param` reader, so the same file
+drives both implementations, is tracked as a future issue.

@@ -161,10 +161,16 @@ def perm_test_not_worse(Fs, Gs, n_perm=20000, seed=0):
 
 
 def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
+    # Sized to its ACTUAL print footprint, not a big on-screen canvas: paper.md
+    # embeds this at width=100% of a ~5.36in single-column page (measured from the
+    # compiled paper.pdf), so figsize is set to that width directly -- LaTeX then
+    # displays it near 1:1 instead of shrinking a much larger canvas down to fit,
+    # which previously collapsed every font to an unreadable ~3pt in the printed
+    # PDF even though it looked fine on screen (figure-qa print-scale finding).
     plt.rcParams.update(
-        {"font.size": 11, "axes.spines.top": False, "axes.spines.right": False}
+        {"font.size": 7, "axes.spines.top": False, "axes.spines.right": False}
     )
-    fig, (axA, axB) = plt.subplots(1, 2, figsize=(11, 4.3))
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(5.36, 2.85))
     bins = np.linspace(0.5, 1.0, 26)
     for arr, col, lab in [
         (within_F, C_FORT, "within-Fortran"),
@@ -176,21 +182,33 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
             arr, bins=bins, density=True, histtype="step", color=col, lw=2, label=lab
         )
         axA.axvline(arr.mean(), color=col, ls="--", lw=1.2)
-    axA.set_xlabel("stacked 2x32 Hungarian cross-correlation")
+    axA.set_xlabel("Hungarian-matched cross-correlation\n(stacked 2x32 components)")
     axA.set_ylabel("density")
-    axA.set_title("A  Partition-agreement distributions", loc="left", fontweight="bold")
-    axA.legend(frameon=False, fontsize=9, loc="upper right")
+    axA.set_title(
+        "A  Partition-agreement distributions",
+        loc="left",
+        fontweight="bold",
+        fontsize=8,
+    )
+    # Legend pinned to the top-right corner and the stats box well below it, with a
+    # wide vertical gap between them -- a prior layout anchored both near the top
+    # and they collided, each rendering illegibly on top of the other (reported
+    # after publication).
+    axA.legend(frameon=False, fontsize=6, loc="upper right")
     axA.text(
-        0.02,
         0.97,
-        f"means: within-F {within_F.mean():.3f} | within-pyA {within_G.mean():.3f} | "
-        f"between {between.mean():.3f}\n"
-        f"means differ by {abs(diff):.3f} (within a 0.05 margin)\n"
-        f"run-level permutation (between not worse): p={p_perm:.2f}",
+        0.55,
+        f"mean corr. (190 run pairs each)\n"
+        f"within-Fortran: {within_F.mean():.3f}\n"
+        f"within-pyAMICA: {within_G.mean():.3f}\n"
+        f"between: {between.mean():.3f}\n"
+        f"between - within-Fortran: {diff:+.3f}\n"
+        f"(equivalence margin +/-0.05; perm. p={p_perm:.2f})",
         transform=axA.transAxes,
         va="top",
-        fontsize=8.5,
-        bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.9),
+        ha="right",
+        fontsize=5.5,
+        bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.95),
     )
     bins_ll = np.linspace(
         min(F_ll.min(), G_ll.min()) - 0.005, max(F_ll.max(), G_ll.max()) + 0.005, 24
@@ -201,56 +219,80 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
             arr, bins=bins_ll, density=True, histtype="step", color=col, lw=2, label=lab
         )
         axB.axvline(arr.mean(), color=col, ls="--", lw=1.2)
-    axB.set_xlabel("final log-likelihood (per sample-channel)")
+    axB.set_xlabel("final log-likelihood\n(mean per sample-channel)")
     axB.set_ylabel("density")
-    axB.set_title("B  Likelihood distributions", loc="left", fontweight="bold")
-    axB.legend(frameon=False, fontsize=9, loc="upper left")
+    axB.set_title(
+        "B  Likelihood distributions", loc="left", fontweight="bold", fontsize=8
+    )
+    axB.legend(frameon=False, fontsize=6, loc="upper left")
+    # Lower-right, not upper-right: the tallest Fortran bars sit at the top-right of
+    # this panel, and an earlier upper-right placement sat directly on top of them
+    # (figure-qa finding). The lower-right corner is clear at every LL value observed.
     axB.text(
         0.98,
-        0.97,
-        f"Fortran {F_ll.mean():.4f} (sd {F_ll.std():.3f})\n"
-        f"pyAMICA {G_ll.mean():.4f} (sd {G_ll.std():.3f})\nKS p={ks:.0e}",
+        0.30,
+        f"mean final LL\n"
+        f"Fortran: {F_ll.mean():.4f} (sd {F_ll.std():.3f})\n"
+        f"pyAMICA: {G_ll.mean():.4f} (sd {G_ll.std():.3f})\n"
+        f"gap: {abs(F_ll.mean() - G_ll.mean()):.3f} at this matched\n"
+        f"100-iter budget (KS p={ks:.0e})",
         transform=axB.transAxes,
         va="top",
         ha="right",
-        fontsize=8.5,
+        fontsize=5.5,
         bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.9),
+    )
+    fig.text(
+        0.5,
+        0.985,
+        "Dashed vertical lines mark each distribution's mean.",
+        ha="center",
+        fontsize=6.5,
+        style="italic",
     )
     fig.suptitle(
         "Multi-model AMICA (n_models=2): pyAMICA vs Fortran ensembles, real sample EEG",
         fontweight="bold",
-        y=1.02,
+        fontsize=8.5,
+        y=1.08,
     )
-    fig.tight_layout()
+    fig.tight_layout(w_pad=2.0)
     fig.savefig(
-        out / "multimodel_ensemble_distributions.png", bbox_inches="tight", dpi=200
+        out / "multimodel_ensemble_distributions.png", bbox_inches="tight", dpi=300
     )
     fig.savefig(out / "multimodel_ensemble_distributions.pdf", bbox_inches="tight")
 
 
 def main():
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 20
-    data = load_data()
-    work = Path(tempfile.mkdtemp(prefix="amica_ensemble_"))
-    print(f"scratch: {work}")
-    Fs, F_ll, Gs, G_ll = [], [], [], []
-    for k in range(n):
-        print(f"Fortran {k + 1}/{n}", flush=True)
-        W, ll = run_fortran(work, str(k))
-        Fs.append(W)
-        F_ll.append(ll)
-    for k in range(n):
-        print(f"NG {k + 1}/{n}", flush=True)
-        W, ll = run_ng(data, seed=k)
-        Gs.append(W)
-        G_ll.append(ll)
-    Fs, Gs = np.array(Fs), np.array(Gs)
-    F_ll, G_ll = np.array(F_ll), np.array(G_ll)
+    if "--from-cache" in sys.argv:
+        # Reuse the persisted ensemble (e.g. to regenerate the figure after a
+        # labeling/legend change) instead of re-running 40 real fits.
+        d = np.load(HERE / "ensemble.npz")
+        Fs, Gs, F_ll, G_ll = d["Fs"], d["Gs"], d["F_ll"], d["G_ll"]
+    else:
+        n = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+        data = load_data()
+        work = Path(tempfile.mkdtemp(prefix="amica_ensemble_"))
+        print(f"scratch: {work}")
+        Fs, F_ll, Gs, G_ll = [], [], [], []
+        for k in range(n):
+            print(f"Fortran {k + 1}/{n}", flush=True)
+            W, ll = run_fortran(work, str(k))
+            Fs.append(W)
+            F_ll.append(ll)
+        for k in range(n):
+            print(f"NG {k + 1}/{n}", flush=True)
+            W, ll = run_ng(data, seed=k)
+            Gs.append(W)
+            G_ll.append(ll)
+        Fs, Gs = np.array(Fs), np.array(Gs)
+        F_ll, G_ll = np.array(F_ll), np.array(G_ll)
 
-    # Persist the raw ensemble so the figure/tests can be regenerated without
-    # re-running the 40 fits (the earlier run's data was lost, forcing this rerun).
-    np.savez(HERE / "ensemble.npz", Fs=Fs, Gs=Gs, F_ll=F_ll, G_ll=G_ll)
+        # Persist the raw ensemble so the figure/tests can be regenerated without
+        # re-running the 40 fits (the earlier run's data was lost, forcing this rerun).
+        np.savez(HERE / "ensemble.npz", Fs=Fs, Gs=Gs, F_ll=F_ll, G_ll=G_ll)
 
+    n = len(Fs)
     within_F = pairwise(Fs, Fs, True)
     within_G = pairwise(Gs, Gs, True)
     between = pairwise(Gs, Fs, False)
