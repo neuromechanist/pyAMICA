@@ -3,6 +3,44 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pyAMICA/releases).
 
+## 0.1.2
+
+Outlier-rejection parity in the NumPy backend, repo-wide type-checking, and the
+full validation-evidence documentation.
+
+- NumPy backend outlier rejection: the Fortran `do_reject` outlier-rejection path
+  is ported to `AMICA_NumPy` via the same `good_idx` mechanism as the PyTorch
+  backend, so the NumPy reference now drops per-sample outliers on the
+  `rejstart`/`rejint`/`maxrej` schedule (#123).
+- Rejection robustness: a non-finite log-likelihood is now distinguished from an
+  over-aggressive `rejsig`, so an over-tight rejection threshold fails with a
+  clear message instead of a silent non-finite result (#127).
+- Type checking enforced: repo-wide `ty` diagnostics fixed (496 to 0) and `ty`
+  added to CI alongside a pre-commit config (ruff + ty) (#124, #125).
+- Documentation: the validation guide is expanded into a full evidence page,
+  source-density bit-exactness, cross-platform device/precision invariance
+  (cross-backend equivalence matrix and IC topomaps), the EEGLAB drop-in
+  round-trip, and the other validated behaviors (#108).
+
+## 0.1.1
+
+Validation-methodology and correctness fixes since 0.1.0.
+
+- Amari distance: a second, permutation- and scale-invariant unmixing-matrix
+  comparison metric (Amari, Cichocki & Yang 1996) alongside Hungarian-matched
+  correlation, used throughout the Fortran-parity validation (#120).
+- Multi-model equivalence test: switched to a valid run-level permutation test
+  that respects the dependence among the 40 runs' pairwise correlations, instead
+  of a pseudoreplicated Mann-Whitney/TOST (#115).
+- Parity and performance tables added to the paper, with the full results,
+  native-Fortran CPU core-scaling rows, and per-run detail in the docs (#112).
+- Type-safety fixes in `validate_implementations.py` (`run_fortran_amica`
+  return type, `load_eeglab_data` dtype annotation) (#118).
+- JOSS draft-PDF build workflow, `.zenodo.json` with ROR-based citation
+  metadata, and an MLX backend API reference page (#110, #105, #107).
+- Corrected a stale float32-speedup claim and added a funding acknowledgement
+  (#114).
+
 ## 0.1.0
 
 First public release.
