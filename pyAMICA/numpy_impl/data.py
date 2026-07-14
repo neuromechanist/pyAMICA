@@ -20,12 +20,13 @@ The preprocessing steps are crucial for AMICA's performance:
 """
 
 import numpy as np
+import numpy.typing as npt
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 
 def load_data_file(
-    filepath: str, data_dim: int, field_dim: int, dtype: np.dtype = np.float64
+    filepath: str, data_dim: int, field_dim: int, dtype: npt.DTypeLike = np.float64
 ) -> np.ndarray:
     """
     Load data from binary file in Fortran format.
@@ -38,7 +39,7 @@ def load_data_file(
         Number of channels/dimensions
     field_dim : int
         Number of samples per field/channel
-    dtype : np.dtype
+    dtype : DTypeLike
         Data type (default: float64)
 
     Returns
@@ -64,7 +65,7 @@ def load_multiple_files(
     filepaths: List[str],
     data_dim: int,
     field_dims: List[int],
-    dtype: np.dtype = np.float32,
+    dtype: npt.DTypeLike = np.float32,
 ) -> np.ndarray:
     """
     Load and concatenate data from multiple binary files.
@@ -77,7 +78,7 @@ def load_multiple_files(
         Number of channels/dimensions
     field_dims : list of int
         Number of samples per field for each file
-    dtype : np.dtype
+    dtype : DTypeLike
         Data type (default: float64)
 
     Returns
@@ -89,7 +90,7 @@ def load_multiple_files(
     total_samples = sum(field_dims)
 
     # Allocate output array
-    data = np.zeros((data_dim, total_samples), dtype=dtype)
+    data = np.zeros((data_dim, total_samples), dtype=np.dtype(dtype))
 
     # Load each file
     idx = 0
@@ -196,7 +197,7 @@ def preprocess_data(
     return data, mean, sphere
 
 
-def load_results(indir: str, compressed: bool = False) -> dict:
+def load_results(indir: Union[str, Path], compressed: bool = False) -> dict:
     """
     Load saved AMICA results from disk.
 
@@ -207,7 +208,7 @@ def load_results(indir: str, compressed: bool = False) -> dict:
 
     Parameters
     ----------
-    indir : str
+    indir : str or Path
         Input directory containing saved results.
     compressed : bool, default=False
         Accepted for call-site compatibility and ignored: the on-disk format is
