@@ -11,6 +11,8 @@ backend-vs-backend acceptance).
 
 from pathlib import Path
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -56,7 +58,11 @@ def test_rejects_unsupported_config():
     silently. Multi-model IS supported (issue #81), so it is not rejected."""
     from pyAMICA.mlx_impl import AMICAMLXNG
 
-    for kw in ({"do_newton": True}, {"pdftype": 2, "n_mix": NMIX}):
+    kwarg_sets: list[dict[str, Any]] = [
+        {"do_newton": True},
+        {"pdftype": 2, "n_mix": NMIX},
+    ]
+    for kw in kwarg_sets:
         with pytest.raises(NotImplementedError):
             AMICAMLXNG(n_channels=NW, n_mix=kw.pop("n_mix", 1), **kw)
 
@@ -115,6 +121,7 @@ def test_backend_stable_on_full_data():
 
     hist = np.asarray(m.ll_history, dtype=float)
     assert np.all(np.isfinite(hist))
+    assert m.final_ll_ is not None
     assert np.isfinite(m.final_ll_)
     assert np.all(np.isfinite(np.array(m.A)))
     assert m.stop_reason not in AMICAMLXNG._DEGENERATE_STOP_REASONS
@@ -150,6 +157,7 @@ def test_converged_ll_matches_torch_float32():
     )
     torch_m.fit(data, max_iter=100, verbose=False)
 
+    assert mlx_m.final_ll_ is not None and torch_m.final_ll_ is not None
     assert np.isfinite(mlx_m.final_ll_)
     assert abs(mlx_m.final_ll_ - torch_m.final_ll_) < 1e-2
 
@@ -232,6 +240,7 @@ def test_multimodel_matches_torch_float32():
         keep_best=False,
     )
     ng_c.fit(data, max_iter=60, verbose=False)
+    assert mlx_c.final_ll_ is not None and ng_c.final_ll_ is not None
     assert np.isfinite(mlx_c.final_ll_)
     assert mlx_c.stop_reason not in AMICAMLXNG._DEGENERATE_STOP_REASONS
     assert abs(mlx_c.final_ll_ - ng_c.final_ll_) < 1e-2
@@ -249,6 +258,7 @@ def test_degenerate_fit_stops_and_reports_nan():
     m = AMICAMLXNG(n_channels=NW, n_mix=NMIX, seed=SEED, do_sphere=False, do_mean=False)
     m.fit(data, max_iter=5, verbose=False)
     assert m.stop_reason in AMICAMLXNG._DEGENERATE_STOP_REASONS
+    assert m.final_ll_ is not None
     assert np.isnan(m.final_ll_)
 
 
