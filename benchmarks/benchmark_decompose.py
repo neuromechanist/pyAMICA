@@ -35,6 +35,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 import numpy as np
 
@@ -49,6 +50,7 @@ def _load_dimsweep():
     """Reuse the Fortran .fdt writer / param renderer / out.txt parser (#85)."""
     path = _REPO / "benchmarks" / "benchmark_dimsweep.py"
     spec = importlib.util.spec_from_file_location("benchmark_dimsweep", path)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -92,6 +94,7 @@ def _fit_torch(data, device, dtype_str, iters, threads=None):
     finally:
         if device == "cpu":
             torch.set_num_threads(prev)
+    assert m.final_ll_ is not None
     return {
         "time": elapsed,
         "final_ll": float(m.final_ll_),
@@ -121,6 +124,7 @@ def _fit_mlx(data, iters):
     idx = np.array(m.comp_list)[:, 0].astype(int)
     W = W_np[0].T  # (comps x channels), matching torch get_unmixing convention
     A = A_np[:, idx].T
+    assert m.final_ll_ is not None
     return {"time": elapsed, "final_ll": float(m.final_ll_), "W": W, "A": A}
 
 
@@ -310,7 +314,7 @@ def _plot_ksweep(rows, channels, path):
 
 def _compare(dirs, figure=None, montage=None, topo_figure=None, n_topo=6, data=None):
     full = np.load(data).astype(np.float64) if data else None
-    runs = []
+    runs: list[dict[str, Any]] = []
     for d in dirs:
         for f in sorted(Path(d).glob("*.npz")):
             z = np.load(f, allow_pickle=True)
