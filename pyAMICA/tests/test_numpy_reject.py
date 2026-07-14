@@ -138,12 +138,15 @@ def test_multimodel_rejection_keeps_gm_and_c_finite():
     np.testing.assert_allclose(model.gm.sum(), 1.0, atol=1e-8)
 
 
-def test_rejection_degenerate_ll_raises_clear_error():
-    """A degenerate per-sample LL (e.g. all NaN from a diverged fit) makes
-    rejection raise a clear ValueError rather than silently emptying the good
-    set and crashing downstream on a zero-length normalization."""
+def test_rejection_nonfinite_ll_raises_instability_error():
+    """A non-finite per-sample LL (numerical instability upstream) makes
+    rejection raise a clear error naming the real cause, not blaming rejsig
+    (issue #127). Even a single NaN poisons mean/std and would drop every
+    sample, so the guard fires and the message must be accurate."""
     model = AMICA(do_reject=True, rejsig=3.0)
     model.good_idx = np.arange(16)
-    model._last_ll_samples = np.full(16, np.nan)
-    with pytest.raises(ValueError, match="removed all"):
+    ll = np.arange(16, dtype=np.float64)
+    ll[7] = np.nan  # one non-finite entry poisons the whole reject decision
+    model._last_ll_samples = ll
+    with pytest.raises(ValueError, match="non-finite"):
         model._reject_outliers()
