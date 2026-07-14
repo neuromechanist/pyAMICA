@@ -6,12 +6,13 @@ This page collects the full verification evidence: bit-exact score functions, si
 multi-model distributional equivalence, cross-platform device and precision invariance,
 the EEGLAB drop-in round-trip, and the remaining validated behaviors.
 Every result uses the bundled real sample EEG and the reference Fortran binary; none uses synthetic data.
+Throughout, IC abbreviates independent component and LL log-likelihood.
 
 ## Validation at a glance
 
 | What was checked | How | Result |
 |---|---|---|
-| Source-density score and log-density | vs the literal `amica15.f90` expressions | bit-exact, all fixed families ($<10^{-12}$) |
+| Source-density score and log-density (non-GG families) | vs the literal `amica15.f90` expressions | bit-exact ($<10^{-12}$) |
 | Per-block sufficient statistics and one M-step | vs Fortran | bit-exact ($\sim\!10^{-15}$) |
 | Single-model solution | log-likelihood, component correlation, Amari distance vs Fortran | LL within ~0.005 of $-3.4018$; correlation 0.997; Amari 0.006 |
 | Multi-model solution | distributional equivalence over 20-run ensembles | indistinguishable from Fortran's own run-to-run spread ($p = 0.96$) |
@@ -19,8 +20,6 @@ Every result uses the bundled real sample EEG and the reference Fortran binary; 
 | Cross-backend log-likelihood | converged LL across every backend | agree to ~3 significant digits (max pairwise ~0.003) |
 | EEGLAB output | `write_amica_output` round-trip through `loadmodout15` | single-model bytes are an exact serialization; loads with correct layout |
 | Degenerate fits | NaN or singular log-likelihood | refused, never returned as NaN sources |
-
-Independent component is abbreviated IC, log-likelihood LL, and expectation-maximization EM throughout.
 
 ## The validation harness
 
@@ -45,9 +44,12 @@ and the backend converges to the binary's solution within ~0.005 log-likelihood.
 ### Source-density families are bit-exact
 
 AMICA models each source with one of the reference's five `pdftype` density families.
-For every fixed family the vectorized log-density and score reproduce the literal `amica15.f90` expressions
-to float64 precision (test bound $<10^{-12}$, observed $\sim\!10^{-15}$),
-so the source model is not an approximation of the Fortran one, it is the same function:
+For every family other than the default generalized Gaussian, the vectorized log-density and score reproduce the literal `amica15.f90` expressions
+to float64 precision (test bound $<10^{-12}$, observed $\sim\!10^{-15}$):
+the source model is not an approximation of the Fortran one, it is the same function.
+The generalized Gaussian has no closed-form literal to compare against, since its score depends on the adaptive shape $\rho$,
+so the default family is validated by the single-model parity above instead.
+The oracle column below records which check applies to each family:
 
 | `pdftype` | Density family | Score $f_p(y)$ | Bit-exact oracle |
 |---|---|---|---|
@@ -62,7 +64,7 @@ The `pdftype=1` extended-Infomax switcher flips each source between the super-Ga
 sub-Gaussian (code 4) densities on a kurtosis schedule; its dynamic switch has no bit-exact oracle
 (the reference's `do_choose_pdfs` accumulator is dead code in the binary), so it is validated by real-data
 log-likelihood instead. Each fixed family converges within ~0.005 LL of the binary at a matched Newton budget.
-See `tests/torch_tests/test_ng_pdf_families.py` and ADR 0002.
+See `pyAMICA/tests/torch_tests/test_ng_pdf_families.py` and ADR 0002.
 
 ## Multi-model equivalence
 
@@ -233,6 +235,9 @@ Equivalence saturates at ~0.98 once $k \geq 60$.
 | 490,000 | 100 | 0.983 | 94.8% |
 | 747,750 | 152 | 0.982 | 92.4% |
 
+The `k` = 30 row here (0.929) sits above the 0.898 at `k` = 30 in the channel-sweep table because the two average different backend sets:
+the channel sweep reports only the hardest MLX-versus-native-Fortran pair, while this frame sweep averages over the native-Fortran and PyTorch-CUDA float64/float32 cluster.
+
 !!! note "The threshold is data-specific"
     For this recording the equivalence knee falls **between k=30 and k=60**; below
     it the backends settle into different (equally valid) local optima, above it
@@ -264,7 +269,7 @@ files (`gm`, `W`, `S`, `mean`, `c`, `alpha`, `mu`, `sbeta`, `rho`, `comp_list`, 
 The round-trip is verified two ways:
 
 - **Byte-level:** for a single model the written files are an exact float64 serialization of the fitted
-  parameters. `W` and the symmetric-ZCA sphere are byte-identical in C order; the non-square mixture
+  parameters. `W` and the symmetric zero-phase component analysis (ZCA) sphere are byte-identical in C order; the non-square mixture
   parameters and `c`/`comp_list` are column-major (Fortran layout), matching the reference `amicaout` files.
 - **Reader-level:** the directory loads through `loadmodout15.m` (and its NumPy port `loadmodout`) with the
   expected shapes and the correct column-major layout. The MATLAB round-trip during development is what caught,
@@ -273,7 +278,7 @@ The round-trip is verified two ways:
 `variance_order()` reproduces EEGLAB's IC ordering (IC1 = highest back-projected variance) in Python without a
 disk round-trip. For `n_models > 1` the layout is self-consistent and round-trips through both readers, but is
 not byte-identical to a native multi-model run (see the multi-model discussion above).
-Full usage is in the [EEGLAB interoperability guide](eeglab.md); tests are in `tests/torch_tests/test_amica_ng_wrapper.py`.
+Full usage is in the [EEGLAB interoperability guide](eeglab.md); tests are in `pyAMICA/tests/torch_tests/test_amica_ng_wrapper.py`.
 
 ## Performance across backends
 
@@ -365,7 +370,7 @@ guarded to a no-op so the parity results above stay byte-for-byte unchanged.
 | Outlier rejection (`do_reject`, #123) | off by default | `good_idx` mechanism in both backends; NumPy port validated vs the PyTorch backend |
 | Degenerate-fit contract (#50) | always | a NaN or singular fit is refused (`converged_` / `stop_reason_`); `transform`/`get_*`/`save`/`write_amica_output` raise instead of returning NaN sources |
 
-Tests: `test_ng_backend.py`, `test_ng_sharing.py`, `test_numpy_reject.py`, `test_amica_ng_wrapper.py`.
+Tests live under `pyAMICA/tests/`: `torch_tests/test_ng_backend.py`, `torch_tests/test_ng_sharing.py`, `torch_tests/test_amica_ng_wrapper.py`, and `test_numpy_reject.py`.
 
 ## Reproducing these results
 
