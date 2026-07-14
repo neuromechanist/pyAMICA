@@ -865,14 +865,16 @@ def test_multimodel_dead_model_keeps_prior_c():
 
 
 def test_rejection_degenerate_ll_raises_clear_error():
-    """If the per-sample log-likelihood is degenerate (e.g. all NaN from a
-    diverged fit), rejection raises a clear ValueError rather than silently
-    emptying the good set and crashing downstream on ``None`` accumulators."""
+    """If the per-sample log-likelihood is non-finite (numerical instability
+    upstream, e.g. a diverged fit), rejection raises a clear error naming the
+    real cause instead of blaming rejsig (issue #127) -- a single NaN poisons
+    mean/std and would otherwise silently empty the good set."""
     m = _fresh_ng(do_reject=True)
     m.good_idx = torch.arange(16)
     m.numrej = 0
-    ll = torch.full((16,), float("nan"), dtype=torch.float64)
-    with pytest.raises(ValueError, match="removed all"):
+    ll = torch.arange(16, dtype=torch.float64)
+    ll[7] = float("nan")  # one non-finite entry poisons the reject decision
+    with pytest.raises(ValueError, match="non-finite"):
         m._reject_outliers(ll)
 
 
