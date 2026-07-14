@@ -93,3 +93,10 @@ exclude_lines = [
     "raise NotImplementedError",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.ty.src]
+# .context/ holds point-in-time investigation/debugging artifacts (per
+# AGENTS.md), including frozen historical reproduction scripts for closed
+# issues explicitly marked "do not ship as-is" -- not maintained production
+# code, so it is out of scope for type checking (issue #122).
+exclude = [".context/**"]
