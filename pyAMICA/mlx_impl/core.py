@@ -159,11 +159,24 @@ class AMICAMLXNG:
         self.stop_reason: Optional[str] = None
 
         # Populated by fit()/_initialize_parameters().
-        self.A = self.W = self.mu = self.alpha = self.beta = self.rho = None
-        self.gm = self.c = self.comp_list = self.mean = self.sphere = None
+        self.A: Optional[mx.array] = None
+        self.W: Optional[mx.array] = None
+        self.mu: Optional[mx.array] = None
+        self.alpha: Optional[mx.array] = None
+        self.beta: Optional[mx.array] = None
+        self.rho: Optional[mx.array] = None
+        self.gm: Optional[mx.array] = None
+        self.c: Optional[mx.array] = None
+        self.comp_list: Optional[mx.array] = None
+        self.mean: Optional[mx.array] = None
+        self.sphere: Optional[mx.array] = None
         self.sldet = 0.0
-        self._lgamma_table = None  # mx.array (n_mix, n_comps): lgamma(1+1/rho)
-        self._logdet_W = None  # mx.array scalar: log|det W|, refreshed per iter
+        self._lgamma_table: Optional[mx.array] = (
+            None  # (n_mix, n_comps): lgamma(1+1/rho)
+        )
+        self._logdet_W: Optional[mx.array] = (
+            None  # scalar: log|det W|, refreshed per iter
+        )
 
     _DEGENERATE_STOP_REASONS = ("nan_ll", "singular_ll", "nan_params")
 
@@ -271,6 +284,7 @@ class AMICAMLXNG:
         but where the graph is materialized (the ``mx.eval`` in ``fit``), so a
         LinAlg traceback rooted in ``fit`` actually originates in this method.
         """
+        assert self.A is not None and self.comp_list is not None
         ws, logdets = [], []
         for h in range(self.n_models):
             wh = mx.linalg.inv(self.A[:, self.comp_list[:, h]], stream=_CPU)
@@ -288,6 +302,18 @@ class AMICAMLXNG:
         ``(batch, n_models)`` and per-model lists ``(b, z, y, az_rho)``. For
         n_models=1 (c=0, gm=1, comp_list=identity) this is numerically identical
         to the single-model path."""
+        assert (
+            self.comp_list is not None
+            and self.c is not None
+            and self.W is not None
+            and self.mu is not None
+            and self.beta is not None
+            and self.rho is not None
+            and self.alpha is not None
+            and self._lgamma_table is not None
+            and self.gm is not None
+            and self._logdet_W is not None
+        )
         b_list, z_list, y_list, azrho_list, logv_cols = [], [], [], [], []
         for h in range(self.n_models):
             idx = self.comp_list[:, h]
@@ -332,6 +358,11 @@ class AMICAMLXNG:
         dbeta_n, dbeta_d, drho_n = zeros(), zeros(), zeros()
         dgm_cols, dwtmp_mods, dc_cols = [], [], []
 
+        assert (
+            self.comp_list is not None
+            and self.beta is not None
+            and self.rho is not None
+        )
         for h in range(self.n_models):
             idx = self.comp_list[:, h]
             b, zr, y, az_rho = b_list[h], z_list[h], y_list[h], azrho_list[h]
@@ -387,6 +418,7 @@ class AMICAMLXNG:
             else:
                 for key in acc:
                     acc[key] = acc[key] + block_acc[key]
+        assert acc is not None
         return acc
 
     # ------------------------------------------------------------------
@@ -456,6 +488,7 @@ class AMICAMLXNG:
         self.lrate = min(
             self.lrate_cap, self.lrate + min(1.0 / self.newt_ramp, self.lrate)
         )
+        assert self.A is not None and self.comp_list is not None and self.gm is not None
         dAk = mx.zeros_like(self.A)
         zeta = mx.zeros((self.n_comps,), dtype=mx.float32)
         for h in range(self.n_models):
