@@ -35,7 +35,7 @@ class TestAMICA(unittest.TestCase):
     def test_data_loading(self):
         """Test data loading matches Fortran."""
         data = load_data_file(
-            self.test_dir / "test.bin",
+            str(self.test_dir / "test.bin"),
             self.data_dim,
             self.num_samples,
             dtype=np.float32,

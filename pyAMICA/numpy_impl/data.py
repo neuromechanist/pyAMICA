@@ -26,14 +26,17 @@ from typing import List, Tuple, Optional, Union
 
 
 def load_data_file(
-    filepath: str, data_dim: int, field_dim: int, dtype: npt.DTypeLike = np.float64
+    filepath: Union[str, Path],
+    data_dim: int,
+    field_dim: int,
+    dtype: npt.DTypeLike = np.float64,
 ) -> np.ndarray:
     """
     Load data from binary file in Fortran format.
 
     Parameters
     ----------
-    filepath : str
+    filepath : str or Path
         Path to binary data file
     data_dim : int
         Number of channels/dimensions
