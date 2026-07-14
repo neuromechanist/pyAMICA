@@ -173,15 +173,21 @@ class AMICA:
         self.rejint = params.get("rejint", 3)
         self.maxrej = params.get("maxrej", 1)
         if self.do_reject:
-            # Validate up front, matching AMICATorchNG: rejint=0 would be a
-            # ZeroDivisionError in the reject schedule, rejsig<=0 would drop
-            # every sample; catch both here rather than deep in the EM loop.
+            # Validate up front, matching AMICATorchNG, rather than letting a bad
+            # value produce a nonsensical run deep in the EM loop: rejint<1 would
+            # be a ZeroDivisionError in the reject schedule; rejsig<=0 breaks the
+            # reject-below-the-mean semantics (at 0 the threshold is the mean, so
+            # ~half the samples drop every pass, and negative values invert it);
+            # maxrej<0 is a sanity guard (it would just make rejection inert via
+            # the maxrej>0 schedule gate); rejstart<0 is nonsensical.
             if self.rejint < 1:
                 raise ValueError(f"rejint must be >= 1, got {self.rejint}")
             if self.rejsig <= 0:
                 raise ValueError(f"rejsig must be > 0, got {self.rejsig}")
             if self.maxrej < 0:
                 raise ValueError(f"maxrej must be >= 0, got {self.maxrej}")
+            if self.rejstart < 0:
+                raise ValueError(f"rejstart must be >= 0, got {self.rejstart}")
         self.num_comps = params.get("num_comps", -1)
         self.lrate = params.get("lrate", 0.1)
         self.lrate0 = self.lrate
@@ -273,12 +279,17 @@ class AMICA:
         self.comp_used: Optional[np.ndarray] = None
         # Outlier rejection (do_reject), mirroring AMICATorchNG's good_idx: an
         # index array of the currently-kept samples that only ever shrinks, plus
-        # its count for the gm/LL normalization. Both None/full until fit() sets
-        # them up. _last_ll_samples holds the pre-update per-sample LL that
-        # _reject_outliers thresholds (captured in the E-step, applied after the
-        # parameter update, matching the torch ordering).
+        # its count (num_good_samples), which normalizes gm (the model weights).
+        # self.ll stays a raw sum over the good set, not divided by the count
+        # (this backend's existing convention for both modes; unlike Fortran/
+        # torch it is un-normalized). Both None/full until fit() sets them up.
+        # numrej counts rejection passes (the maxrej budget). _last_ll_samples
+        # holds the pre-update per-sample LL that _reject_outliers thresholds
+        # (captured in the E-step, applied after the parameter update, matching
+        # the torch ordering).
         self.good_idx: Optional[np.ndarray] = None
         self.num_good_samples: Optional[int] = None
+        self.numrej = 0
         self._last_ll_samples: Optional[np.ndarray] = None
 
         # Initialize optimization state
@@ -604,8 +615,18 @@ class AMICA:
         """
         # Only A is nulled; _initialize_parameters redraws it (and unconditionally
         # rebuilds comp_list and W) while leaving the still-finite mixture params.
+        # Preserve the outlier-rejection state across a restart: Fortran's
+        # startover redraws A but never reverts already-applied rejections
+        # (amica17.f90:1121-1148), so snapshot good_idx/num_good_samples around
+        # the reinit (which would otherwise reset them to the full set) and
+        # restore them; numrej is an instance attribute and already survives.
+        saved_good_idx = self.good_idx
+        saved_num_good = self.num_good_samples
         self.A = None
         self._initialize_parameters()
+        if self.do_reject:
+            self.good_idx = saved_good_idx
+            self.num_good_samples = saved_num_good
         self.lrate = self.lrate0
         self.ll = []
         self.nd = []
@@ -1137,13 +1158,15 @@ class AMICA:
         # Initialize optimization variables
         numdecs = 0
         numincs = 0
-        numrej = 0
         start_time = time.time()
         convergence_reason = None
         final_iter = 0
-        # Per-fit restart counter (reset here so a refit on the same instance
-        # gets a fresh restart budget).
+        # Per-fit counters (reset here so a refit on the same instance gets a
+        # fresh budget). numrej is an instance attribute so the reject schedule
+        # and tests can read the pass count; it survives a restart (which
+        # preserves prior rejections) but not a fresh fit().
         self.numrestarts = 0
+        self.numrej = 0
 
         # Determine whether to use tqdm or per-line printing
         use_tqdm_progress = self.use_tqdm and not self.verbose
@@ -1247,20 +1270,23 @@ class AMICA:
                 if self.do_newton and iter == self.newt_start:
                     numdecs = 0
 
-                # Reject outliers if requested
+                # Reject outliers if requested (Fortran amica17.f90:1142). The
+                # max(1, ...) clamp matches Fortran and AMICATorchNG: without it,
+                # Python's non-negative modulo makes (iter - rejstart) % rejint
+                # hit 0 for iter < rejstart, firing rejection before rejstart.
                 if (
                     self.do_reject
                     and self.maxrej > 0
                     and (
                         (iter == self.rejstart)
                         or (
-                            ((iter - self.rejstart) % self.rejint == 0)
-                            and (numrej < self.maxrej)
+                            (max(1, iter - self.rejstart) % self.rejint == 0)
+                            and (self.numrej < self.maxrej)
                         )
                     )
                 ):
                     self._reject_outliers()
-                    numrej += 1
+                    self.numrej += 1
 
                 # Share components if requested
                 if (
@@ -1418,7 +1444,10 @@ class AMICA:
         ``reject_data``, amica17.f90:2380-2464): drop any currently-good sample
         with ``loglik < mean - rejsig*std`` (population std). Rejection is
         one-directional -- ``good_idx`` only shrinks -- and ``num_good_samples``
-        drives the ``gm``/LL normalization thereafter.
+        normalizes ``gm`` thereafter. (``self.ll`` stays a raw sum over the good
+        set; dropping the most-negative samples raises the sum, so the reject
+        iteration is an LL increase and does not spuriously trip the convergence
+        checks.)
 
         ``self._last_ll_samples`` is this iteration's per-sample LL over the
         current good set (captured pre-update in ``_get_updates_and_likelihood``,
