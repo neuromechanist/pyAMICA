@@ -170,7 +170,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     plt.rcParams.update(
         {"font.size": 7, "axes.spines.top": False, "axes.spines.right": False}
     )
-    fig, (axA, axB) = plt.subplots(1, 2, figsize=(5.36, 4.6))
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(5.36, 4.2))
     bins = np.linspace(0.5, 1.0, 26)
     for arr, col, lab in [
         (within_F, C_FORT, "within-Fortran"),
@@ -216,18 +216,18 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     # axes' true horizontal center after the layout below is fixed, so this keeps
     # each panel's legend/text under its own histogram, not bleeding into the
     # other panel.
-    fig.subplots_adjust(top=0.82, bottom=0.48, left=0.11, right=0.97, wspace=0.45)
+    fig.subplots_adjust(top=0.80, bottom=0.42, left=0.11, right=0.97, wspace=0.45)
     cx_a = sum(axA.get_position().intervalx) / 2
     cx_b = sum(axB.get_position().intervalx) / 2
 
     handles_a, labels_a = axA.get_legend_handles_labels()
     fig.legend(
         handles_a, labels_a, frameon=False, fontsize=6,
-        loc="upper center", bbox_to_anchor=(cx_a, 0.35),
+        loc="upper center", bbox_to_anchor=(cx_a, 0.31),
     )  # fmt: skip
     fig.text(
         cx_a,
-        0.16,
+        0.20,
         f"mean corr. (190 run pairs)\n"
         f"within-Fortran: {within_F.mean():.3f}\n"
         f"within-pyAMICA: {within_G.mean():.3f}\n"
@@ -243,11 +243,11 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     handles_b, labels_b = axB.get_legend_handles_labels()
     fig.legend(
         handles_b, labels_b, frameon=False, fontsize=6,
-        loc="upper center", bbox_to_anchor=(cx_b, 0.35),
+        loc="upper center", bbox_to_anchor=(cx_b, 0.31),
     )  # fmt: skip
     fig.text(
         cx_b,
-        0.16,
+        0.23,
         f"mean final LL\n"
         f"Fortran: {F_ll.mean():.4f} (sd {F_ll.std():.3f})\n"
         f"pyAMICA: {G_ll.mean():.4f} (sd {G_ll.std():.3f})\n"
