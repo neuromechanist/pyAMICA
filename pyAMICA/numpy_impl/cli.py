@@ -29,7 +29,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from .core import AMICA
 from .data import load_multiple_files
@@ -67,7 +67,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_params(paramfile: str, default_paramfile: str = None) -> Dict[str, Any]:
+def load_params(
+    paramfile: str, default_paramfile: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Load and validate AMICA parameters from JSON configuration file.
 

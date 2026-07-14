@@ -59,6 +59,7 @@ def _time_fit(data, device, dtype, max_iter, seed) -> tuple[float, float]:
     model.fit(data, max_iter=max_iter, verbose=False)
     if device == "cuda":
         torch.cuda.synchronize()
+    assert model.final_ll_ is not None
     return perf_counter() - t0, float(model.final_ll_)
 
 
