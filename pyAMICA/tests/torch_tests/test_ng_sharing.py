@@ -10,7 +10,7 @@ unchanged.
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import pytest
@@ -282,7 +282,7 @@ def test_sharing_reduces_unique_count_without_degrading_ll(real_data):
     """Enabling sharing on matched config strictly reduces the unique-component
     count and does not materially degrade the log-likelihood."""
     x = real_data[:, :4096]
-    common: Dict[str, Any] = dict(
+    common: dict[str, Any] = dict(
         n_channels=NW,
         n_models=2,
         n_mix=3,

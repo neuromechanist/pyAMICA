@@ -96,7 +96,9 @@ exclude_lines = [
 
 [tool.ty.src]
 # .context/ holds point-in-time investigation/debugging artifacts (per
-# AGENTS.md), including frozen historical reproduction scripts for closed
-# issues explicitly marked "do not ship as-is" -- not maintained production
-# code, so it is out of scope for type checking (issue #122).
+# AGENTS.md): frozen reproduction/prototype scripts for closed issues (e.g.
+# issue-21/corrected_mstep_prototype.py, marked "do not ship as-is"), not
+# maintained production code, so it is out of scope for type checking. Live
+# analysis scripts that ARE tested (loaded via importlib from the test suite)
+# were fixed on their own merits rather than excluded. (issue #122)
 exclude = [".context/**"]

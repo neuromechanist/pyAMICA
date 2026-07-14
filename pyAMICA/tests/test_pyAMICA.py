@@ -52,6 +52,16 @@ def test_amica_initialization():
         AMICA(max_iter=-1)
 
 
+def test_do_reject_refused_on_numpy_backend():
+    """do_reject is non-functional on the NumPy backend (issue #123): fit()
+    must refuse it loudly with NotImplementedError rather than crash mid-EM-loop
+    with a bare AttributeError. The guard fires before any data handling, so no
+    data is needed to exercise it."""
+    model = AMICA(do_reject=True)
+    with pytest.raises(NotImplementedError, match="do_reject"):
+        model.fit()
+
+
 def test_data_preprocessing(random_data):
     """Test data preprocessing functionality."""
     # Test mean removal

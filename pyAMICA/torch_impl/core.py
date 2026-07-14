@@ -1907,6 +1907,11 @@ class AMICATorchNG:
         outdir : str or path-like
             Destination directory (created if absent).
         """
+        if self.A is None:
+            raise RuntimeError(
+                "write_amica_output requires a fitted model; call fit() first."
+            )
+
         from ..numpy_impl.load import write_amicaout
 
         def _np(t):

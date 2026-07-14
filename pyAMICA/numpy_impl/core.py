@@ -261,8 +261,10 @@ class AMICA:
         self.sldet = 0.0
         self.comp_list: Optional[np.ndarray] = None
         self.comp_used: Optional[np.ndarray] = None
-        # Outlier-rejection mask (do_reject); not yet consumed by the E-step
-        # to actually restrict the fit data, see issue #123.
+        # Outlier-rejection mask, scaffolding for the do_reject port (issue
+        # #123). do_reject is non-functional on this backend and fit() refuses
+        # it, so this stays None in practice; declared here as an attribute for
+        # the (dormant) _reject_outliers path.
         self.data_mask: Optional[np.ndarray] = None
 
         # Initialize optimization state
@@ -367,6 +369,23 @@ class AMICA:
         self : AMICA
             The fitted model.
         """
+        # Outlier rejection is not functional on the NumPy backend: the M-step
+        # divides by ``self.num_good_samples`` every iteration once ``do_reject``
+        # is set, but that attribute is only assigned inside ``_reject_outliers``
+        # (which fires later, on the reject schedule), so the first iteration
+        # raises ``AttributeError`` deep in the EM loop; even if that were fixed,
+        # the computed mask is never applied to restrict the fit data. Rather
+        # than crash cryptically or silently no-op, refuse the request loudly
+        # here. The PyTorch backend (AMICATorchNG) implements do_reject via
+        # ``good_idx``; use it, or track the NumPy port in issue #123.
+        if self.do_reject:
+            raise NotImplementedError(
+                "do_reject (outlier rejection) is not implemented on the NumPy "
+                "backend; it is non-functional and would crash mid-fit (see "
+                "issue #123). Use the PyTorch backend (AMICATorchNG) for outlier "
+                "rejection, or set do_reject=False."
+            )
+
         if data is None:
             if not self._config_files:
                 raise ValueError(
@@ -530,11 +549,6 @@ class AMICA:
         self.comp_used = np.ones(self.num_comps, dtype=bool)
         for h in range(self.num_models):
             self.comp_list[:, h] = np.arange(h * self.data_dim, (h + 1) * self.data_dim)
-
-        # Outlier-rejection mask (issue #123: not yet consumed by the E-step).
-        if self.data_mask is None:
-            assert self.num_samples is not None
-            self.data_mask = np.ones(self.num_samples, dtype=bool)
 
         # Initialize mixture parameters
         if self.mu is None:
@@ -1369,10 +1383,17 @@ class AMICA:
         return False, None, numdecs, numincs
 
     def _reject_outliers(self):
-        """Reject outlier data points based on likelihood."""
+        """Reject outlier data points based on likelihood.
+
+        Dormant: fit() refuses do_reject on this backend (non-functional, see
+        issue #123), so this is never reached. Kept self-contained (lazy mask
+        init) as scaffolding for the NumPy port tracked there.
+        """
         if not self.do_reject:
             return
-        assert self.data_mask is not None
+        if self.data_mask is None:
+            assert self.num_samples is not None
+            self.data_mask = np.ones(self.num_samples, dtype=bool)
 
         # Compute likelihood statistics
         ll_mean = np.mean(self.ll[-1])
