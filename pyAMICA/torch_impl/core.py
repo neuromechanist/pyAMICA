@@ -1780,14 +1780,18 @@ class AMICATorchNG:
             # always kept; the only way every sample is dropped is a non-finite
             # per-sample LL (one NaN poisons mean/std, making every comparison
             # False). Report that accurately instead of blaming rejsig (issue
-            # #127), which a user cannot fix by tuning rejsig.
+            # #127), which a user cannot fix by tuning rejsig. In a normal fit()
+            # the earlier aggregate non-finite-LL guard (the sum is non-finite
+            # iff a term is) stops the loop first, so this mainly serves direct
+            # callers of _reject_outliers and is defense in depth.
             n_bad = int((~torch.isfinite(ll_vec)).sum())
             if n_bad:
                 raise ValueError(
                     f"{n_bad} of {ll_vec.numel()} samples have a non-finite "
                     "log-likelihood; this indicates numerical instability "
-                    "(singular W / overflow) upstream, not a rejsig "
-                    "miscalibration."
+                    "upstream (singular W / overflow), not a rejsig "
+                    "miscalibration. Check for rank-deficient or "
+                    "average-referenced data, or reduce the learning rate."
                 )
             raise ValueError(  # defensive: unreachable for finite LL, rejsig>0
                 f"Outlier rejection removed all {good.numel()} samples "
