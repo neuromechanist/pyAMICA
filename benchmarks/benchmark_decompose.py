@@ -427,7 +427,9 @@ def _load_info(montage_tsv, channel_indices):
     shares the montage), only the absolute nose-up orientation of the maps."""
     import csv
 
-    import mne
+    # mne is the optional 'viz' extra, not in the base env; ty can't resolve it
+    # there. Lazy-imported so the benchmark's core paths don't require it.
+    import mne  # ty: ignore[unresolved-import]
 
     pos = {}
     with open(montage_tsv) as f:
@@ -463,7 +465,9 @@ def _plot_topomaps(group, montage_tsv, channel_indices, path, n_comps, data=None
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import mne
+
+    # mne: optional 'viz' extra, absent from the base env (see above).
+    import mne  # ty: ignore[unresolved-import]
     from scipy.optimize import linear_sum_assignment
 
     info, located = _load_info(montage_tsv, channel_indices)
