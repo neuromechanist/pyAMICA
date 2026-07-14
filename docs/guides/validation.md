@@ -6,6 +6,10 @@ This page collects the full verification evidence: bit-exact score functions, si
 multi-model distributional equivalence, cross-platform device and precision invariance,
 the EEGLAB drop-in round-trip, and the remaining validated behaviors.
 Every result uses the bundled real sample EEG and the reference Fortran binary; none uses synthetic data.
+This is currently an exemplar validation on one real recording (the EEGLAB tutorial dataset:
+32 channels, 30504 samples at 128 Hz, ~238 s) plus one external benchmark subject
+(OpenNeuro ds002718 sub-002); extending to a multi-subject, multi-dataset validation is planned
+future work, not yet done.
 Throughout, IC abbreviates independent component and LL log-likelihood.
 
 ## Validation at a glance

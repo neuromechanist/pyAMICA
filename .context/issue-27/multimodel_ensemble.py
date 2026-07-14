@@ -170,7 +170,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     plt.rcParams.update(
         {"font.size": 7, "axes.spines.top": False, "axes.spines.right": False}
     )
-    fig, (axA, axB) = plt.subplots(1, 2, figsize=(5.36, 2.85))
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(5.36, 4.6))
     bins = np.linspace(0.5, 1.0, 26)
     for arr, col, lab in [
         (within_F, C_FORT, "within-Fortran"),
@@ -190,26 +190,6 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
         fontweight="bold",
         fontsize=8,
     )
-    # Legend pinned to the top-right corner and the stats box well below it, with a
-    # wide vertical gap between them -- a prior layout anchored both near the top
-    # and they collided, each rendering illegibly on top of the other (reported
-    # after publication).
-    axA.legend(frameon=False, fontsize=6, loc="upper right")
-    axA.text(
-        0.97,
-        0.55,
-        f"mean corr. (190 run pairs each)\n"
-        f"within-Fortran: {within_F.mean():.3f}\n"
-        f"within-pyAMICA: {within_G.mean():.3f}\n"
-        f"between: {between.mean():.3f}\n"
-        f"between - within-Fortran: {diff:+.3f}\n"
-        f"(equivalence margin +/-0.05; perm. p={p_perm:.2f})",
-        transform=axA.transAxes,
-        va="top",
-        ha="right",
-        fontsize=5.5,
-        bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.95),
-    )
     bins_ll = np.linspace(
         min(F_ll.min(), G_ll.min()) - 0.005, max(F_ll.max(), G_ll.max()) + 0.005, 24
     )
@@ -224,27 +204,64 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     axB.set_title(
         "B  Likelihood distributions", loc="left", fontweight="bold", fontsize=8
     )
-    axB.legend(frameon=False, fontsize=6, loc="upper left")
-    # Lower-right, not upper-right: the tallest Fortran bars sit at the top-right of
-    # this panel, and an earlier upper-right placement sat directly on top of them
-    # (figure-qa finding). The lower-right corner is clear at every LL value observed.
-    axB.text(
-        0.98,
-        0.30,
+
+    # Both the legend and the stats box previously sat inside the axes and ended up
+    # overlapping the histogram bars (and each other) no matter where they were
+    # anchored -- with 3 distributions filling most of the plotted range, there was
+    # no empty pocket big enough to hold either. Reserve a fixed bottom margin for
+    # both instead and place them with figure-fraction (not axes-fraction)
+    # coordinates: axes-fraction anchors turned out to depend on the final axes
+    # height that tight_layout picks, which isn't known in advance and caused the
+    # legend/text to collide with the xlabel above it. get_position() gives each
+    # axes' true horizontal center after the layout below is fixed, so this keeps
+    # each panel's legend/text under its own histogram, not bleeding into the
+    # other panel.
+    fig.subplots_adjust(top=0.82, bottom=0.48, left=0.11, right=0.97, wspace=0.45)
+    cx_a = sum(axA.get_position().intervalx) / 2
+    cx_b = sum(axB.get_position().intervalx) / 2
+
+    handles_a, labels_a = axA.get_legend_handles_labels()
+    fig.legend(
+        handles_a, labels_a, frameon=False, fontsize=6,
+        loc="upper center", bbox_to_anchor=(cx_a, 0.35),
+    )  # fmt: skip
+    fig.text(
+        cx_a,
+        0.16,
+        f"mean corr. (190 run pairs)\n"
+        f"within-Fortran: {within_F.mean():.3f}\n"
+        f"within-pyAMICA: {within_G.mean():.3f}\n"
+        f"between: {between.mean():.3f}\n"
+        f"diff: {diff:+.3f} (margin +/-0.05)\n"
+        f"perm. p={p_perm:.2f}",
+        ha="center",
+        va="top",
+        fontsize=5.5,
+        bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.95),
+    )
+
+    handles_b, labels_b = axB.get_legend_handles_labels()
+    fig.legend(
+        handles_b, labels_b, frameon=False, fontsize=6,
+        loc="upper center", bbox_to_anchor=(cx_b, 0.35),
+    )  # fmt: skip
+    fig.text(
+        cx_b,
+        0.16,
         f"mean final LL\n"
         f"Fortran: {F_ll.mean():.4f} (sd {F_ll.std():.3f})\n"
         f"pyAMICA: {G_ll.mean():.4f} (sd {G_ll.std():.3f})\n"
-        f"gap: {abs(F_ll.mean() - G_ll.mean()):.3f} at this matched\n"
-        f"100-iter budget (KS p={ks:.0e})",
-        transform=axB.transAxes,
+        f"gap: {abs(F_ll.mean() - G_ll.mean()):.3f} (100-iter budget)\n"
+        f"KS p={ks:.0e}",
+        ha="center",
         va="top",
-        ha="right",
         fontsize=5.5,
         bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.9),
     )
+
     fig.text(
         0.5,
-        0.985,
+        0.90,
         "Dashed vertical lines mark each distribution's mean.",
         ha="center",
         fontsize=6.5,
@@ -254,9 +271,8 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
         "Multi-model AMICA (n_models=2): pyAMICA vs Fortran ensembles, real sample EEG",
         fontweight="bold",
         fontsize=8.5,
-        y=1.08,
+        y=0.97,
     )
-    fig.tight_layout(w_pad=2.0)
     fig.savefig(
         out / "multimodel_ensemble_distributions.png", bbox_inches="tight", dpi=300
     )

@@ -72,7 +72,8 @@ exact-EM mixture updates, a positive-definite Newton step [@palmer2008newton],
 symmetric zero-phase-component-analysis (ZCA) sphering, the five source-density families of the reference (generalized Gaussian, Gaussian,
 logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture of ICA models, and component sharing across models.
 
-`pyAMICA`'s conformity with the reference binary is measured on real sample EEG (the bundled EEGLAB tutorial dataset: 32 channels, 30504 samples at 128 Hz, ~238 s; Table 1),
+`pyAMICA`'s conformity with the reference binary is measured on one exemplar real EEG recording (the bundled EEGLAB tutorial dataset: 32 channels, 30504 samples at 128 Hz, ~238 s; Table 1)
+-- a multi-subject, multi-dataset validation is planned future work --
 running both implementations for AMICA's usual 2000 iterations with otherwise-default parameters, with two complementary metrics:
 Hungarian-matched component correlation, and the Amari distance [@amari1996new], a standard unmixing-matrix comparison metric that needs no assignment step since it is permutation- and scale-invariant by construction.
 Both agree closely for the single model (mean values; Table 1), and the source-density score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions.
