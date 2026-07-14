@@ -46,9 +46,27 @@ jobs:
       - name: ruff format --check
         run: uv run ruff format --check .
 
+  typecheck:
+    name: Type check (ty)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # ty is in the dev dependency group and version-locked via uv.lock, so
+      # `uv sync` installs the same version used locally and by the pre-commit
+      # hook. Optional-extra imports absent from the base env (mlx, mne) carry
+      # scoped `# ty: ignore` comments, so this runs on the plain base env like
+      # the other jobs (issue #119).
+      - run: uv sync
+      - name: ty check
+        run: uv run ty check .
+
   test:
     name: Test (Python 3.12)
-    needs: lint
+    needs: [lint, typecheck]
     runs-on: ubuntu-latest
     env:
       PYTORCH_ENABLE_MPS_FALLBACK: "1"
@@ -87,7 +105,7 @@ jobs:
 
   build:
     name: Build + import (Python ${{ matrix.python-version }})
-    needs: lint
+    needs: [lint, typecheck]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -64,10 +64,12 @@ package-data = {"pyAMICA" = ["data/*"], "pyAMICA.numpy_impl" = ["params.json"]}
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4.0",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.6.1",
     "ruff>=0.15.0",
+    "ty>=0.0.57",
 ]
 
 [tool.coverage.run]
