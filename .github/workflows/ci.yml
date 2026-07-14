@@ -55,10 +55,11 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      # ty is pinned in the dev dependency group, so `uv sync` installs the same
-      # version used locally and by the pre-commit hook. Optional-extra imports
-      # absent from the base env (mlx, mne) carry scoped `# ty: ignore` comments,
-      # so this runs on the plain base env like the other jobs (issue #119).
+      # ty is in the dev dependency group and version-locked via uv.lock, so
+      # `uv sync` installs the same version used locally and by the pre-commit
+      # hook. Optional-extra imports absent from the base env (mlx, mne) carry
+      # scoped `# ty: ignore` comments, so this runs on the plain base env like
+      # the other jobs (issue #119).
       - run: uv sync
       - name: ty check
         run: uv run ty check .

@@ -1,7 +1,8 @@
 # Pre-commit hooks: ruff (lint + format) and ty (type check), run through the
-# project's uv-managed environment so the versions match CI and pyproject's dev
-# group exactly -- no drift between a pinned pre-commit mirror and the pinned
-# dev dependency. Install once:  uv run pre-commit install
+# project's uv-managed environment so the versions match CI exactly (both come
+# from the uv.lock-locked dev group) -- no drift between a separately-pinned
+# pre-commit mirror and the dev dependency. Install once (after `uv sync`):
+#   uv run pre-commit install
 #
 # ruff hooks act on the staged Python files only (they modify files, so scoping
 # matters). ty is deliberately whole-project (`pass_filenames: false`): type
