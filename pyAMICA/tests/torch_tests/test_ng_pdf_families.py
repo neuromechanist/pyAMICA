@@ -11,6 +11,7 @@ against the binary itself.
 import math
 import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -159,8 +160,9 @@ def test_kurt_schedule_validation():
     """The adaptive-switch schedule params are validated at construction so a
     bad value fails loudly instead of crashing deep in fit()."""
     for bad in dict(kurt_int=0, kurt_start=0, num_kurt=-1).items():
+        kwargs: dict[str, Any] = dict([bad])
         with pytest.raises(ValueError):
-            AMICATorchNG(n_channels=NW, n_mix=1, pdftype=1, device="cpu", **dict([bad]))
+            AMICATorchNG(n_channels=NW, n_mix=1, pdftype=1, device="cpu", **kwargs)
     # The same params are inert (unvalidated) for non-adaptive pdftype.
     AMICATorchNG(n_channels=NW, n_mix=3, pdftype=0, device="cpu", kurt_int=0)
 
@@ -197,13 +199,16 @@ def test_family_fit_finite_and_monotone(pdftype: int, n_mix: int):
     starting value (natural-gradient AMICA can dip mid-run, so this checks net
     non-decrease, last >= first, not strict monotonicity)."""
     data = _load_real_data()
-    kw = dict(num_kurt=0) if pdftype == 1 else {}  # fixed super-G, no switching
+    kw: dict[str, Any] = (
+        dict(num_kurt=0) if pdftype == 1 else {}
+    )  # fixed super-G, no switching
     m = AMICATorchNG(
         n_channels=NW, n_mix=n_mix, pdftype=pdftype, device="cpu", seed=0, **kw
     )
     m.fit(data, max_iter=15, verbose=False)
     ll = np.asarray(m.ll_history)
     assert np.all(np.isfinite(ll))
+    assert m.W is not None
     assert np.all(np.isfinite(m.W.cpu().numpy()))
     assert ll[-1] >= ll[0] - 1e-6
 
@@ -226,6 +231,7 @@ def test_auto_switcher_runs_and_is_stable():
     )
     m.fit(data, max_iter=20, verbose=False)
     assert m.n_kurt_done == 5
+    assert m.pdtype is not None
     pdt = m.pdtype.cpu().numpy()
     assert set(np.unique(pdt)).issubset({1, 4})
     ll = np.asarray(m.ll_history)
@@ -243,6 +249,7 @@ def test_auto_switch_noop_when_num_kurt_zero():
     )
     fixed.fit(data, max_iter=10, verbose=False)
     assert fixed.n_kurt_done == 0
+    assert fixed.pdtype is not None
     assert np.all(fixed.pdtype.cpu().numpy() == 1)
 
 
@@ -258,6 +265,7 @@ def test_state_dict_roundtrips_pdftype_state():
     m.fit(data, max_iter=8, verbose=False)
     loaded = AMICATorchNG.from_state_dict(m.state_dict(), device="cpu")
     assert loaded.pdftype == 3 and loaded.dorho is False
+    assert loaded.pdtype is not None and m.pdtype is not None
     assert torch.equal(loaded.pdtype, m.pdtype)
     assert np.allclose(loaded.transform(data), m.transform(data))
 
@@ -276,6 +284,7 @@ def test_state_dict_roundtrips_pdftype_state():
     ad_loaded = AMICATorchNG.from_state_dict(ad.state_dict(), device="cpu")
     assert ad_loaded.pdftype == 1 and ad_loaded.do_choose_pdfs is True
     assert ad_loaded.n_kurt_done == ad.n_kurt_done == 5
+    assert ad_loaded.pdtype is not None and ad.pdtype is not None
     assert torch.equal(ad_loaded.pdtype, ad.pdtype)
 
 
@@ -322,6 +331,7 @@ def test_adaptive_switch_with_rejection():
     )
     m.fit(data, max_iter=12, verbose=False)
     assert np.all(np.isfinite(m.ll_history))
+    assert m.pdtype is not None
     assert set(np.unique(m.pdtype.cpu().numpy())).issubset({1, 4})
 
 
@@ -336,6 +346,7 @@ def test_multimodel_fixed_family():
     m.fit(data, max_iter=10, verbose=False)
     ll = np.asarray(m.ll_history)
     assert np.all(np.isfinite(ll))
+    assert m.pdtype is not None
     assert m.pdtype.shape == (NW, 2)
 
 
@@ -363,7 +374,7 @@ def test_family_converged_ll_matches_fortran(pdftype: int, n_mix: int):
     fres = run_fortran_amica(data, fp, run_dir, seed=0)
     assert fres is not None and "final_ll" in fres
 
-    kw = dict(num_kurt=0) if pdftype == 1 else {}
+    kw: dict[str, Any] = dict(num_kurt=0) if pdftype == 1 else {}
     m = AMICATorchNG(
         n_channels=NW,
         n_mix=n_mix,
