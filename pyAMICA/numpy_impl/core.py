@@ -172,6 +172,22 @@ class AMICA:
         self.rejstart = params.get("rejstart", 2)
         self.rejint = params.get("rejint", 3)
         self.maxrej = params.get("maxrej", 1)
+        if self.do_reject:
+            # Validate up front, matching AMICATorchNG, rather than letting a bad
+            # value produce a nonsensical run deep in the EM loop: rejint<1 would
+            # be a ZeroDivisionError in the reject schedule; rejsig<=0 breaks the
+            # reject-below-the-mean semantics (at 0 the threshold is the mean, so
+            # ~half the samples drop every pass, and negative values invert it);
+            # maxrej<0 is a sanity guard (it would just make rejection inert via
+            # the maxrej>0 schedule gate); rejstart<0 is nonsensical.
+            if self.rejint < 1:
+                raise ValueError(f"rejint must be >= 1, got {self.rejint}")
+            if self.rejsig <= 0:
+                raise ValueError(f"rejsig must be > 0, got {self.rejsig}")
+            if self.maxrej < 0:
+                raise ValueError(f"maxrej must be >= 0, got {self.maxrej}")
+            if self.rejstart < 0:
+                raise ValueError(f"rejstart must be >= 0, got {self.rejstart}")
         self.num_comps = params.get("num_comps", -1)
         self.lrate = params.get("lrate", 0.1)
         self.lrate0 = self.lrate
@@ -261,11 +277,20 @@ class AMICA:
         self.sldet = 0.0
         self.comp_list: Optional[np.ndarray] = None
         self.comp_used: Optional[np.ndarray] = None
-        # Outlier-rejection mask, scaffolding for the do_reject port (issue
-        # #123). do_reject is non-functional on this backend and fit() refuses
-        # it, so this stays None in practice; declared here as an attribute for
-        # the (dormant) _reject_outliers path.
-        self.data_mask: Optional[np.ndarray] = None
+        # Outlier rejection (do_reject), mirroring AMICATorchNG's good_idx: an
+        # index array of the currently-kept samples that only ever shrinks, plus
+        # its count (num_good_samples), which normalizes gm (the model weights).
+        # self.ll stays a raw sum over the good set, not divided by the count
+        # (this backend's existing convention for both modes; unlike Fortran/
+        # torch it is un-normalized). Both None/full until fit() sets them up.
+        # numrej counts rejection passes (the maxrej budget). _last_ll_samples
+        # holds the pre-update per-sample LL that _reject_outliers thresholds
+        # (captured in the E-step, applied after the parameter update, matching
+        # the torch ordering).
+        self.good_idx: Optional[np.ndarray] = None
+        self.num_good_samples: Optional[int] = None
+        self.numrej = 0
+        self._last_ll_samples: Optional[np.ndarray] = None
 
         # Initialize optimization state
         self.iter = 0
@@ -369,23 +394,6 @@ class AMICA:
         self : AMICA
             The fitted model.
         """
-        # Outlier rejection is not functional on the NumPy backend: the M-step
-        # divides by ``self.num_good_samples`` every iteration once ``do_reject``
-        # is set, but that attribute is only assigned inside ``_reject_outliers``
-        # (which fires later, on the reject schedule), so the first iteration
-        # raises ``AttributeError`` deep in the EM loop; even if that were fixed,
-        # the computed mask is never applied to restrict the fit data. Rather
-        # than crash cryptically or silently no-op, refuse the request loudly
-        # here. The PyTorch backend (AMICATorchNG) implements do_reject via
-        # ``good_idx``; use it, or track the NumPy port in issue #123.
-        if self.do_reject:
-            raise NotImplementedError(
-                "do_reject (outlier rejection) is not implemented on the NumPy "
-                "backend; it is non-functional and would crash mid-fit (see "
-                "issue #123). Use the PyTorch backend (AMICATorchNG) for outlier "
-                "rejection, or set do_reject=False."
-            )
-
         if data is None:
             if not self._config_files:
                 raise ValueError(
@@ -550,6 +558,15 @@ class AMICA:
         for h in range(self.num_models):
             self.comp_list[:, h] = np.arange(h * self.data_dim, (h + 1) * self.data_dim)
 
+        # Outlier-rejection state (do_reject): start with every sample good
+        # (good_idx = all indices), mirroring AMICATorchNG. num_good_samples
+        # drives the gm/LL normalization and equals num_samples until the first
+        # rejection shrinks good_idx.
+        assert self.num_samples is not None
+        if self.do_reject:
+            self.good_idx = np.arange(self.num_samples)
+        self.num_good_samples = self.num_samples
+
         # Initialize mixture parameters
         if self.mu is None:
             self.mu = np.zeros((self.num_mix, self.num_comps))
@@ -598,8 +615,18 @@ class AMICA:
         """
         # Only A is nulled; _initialize_parameters redraws it (and unconditionally
         # rebuilds comp_list and W) while leaving the still-finite mixture params.
+        # Preserve the outlier-rejection state across a restart: Fortran's
+        # startover redraws A but never reverts already-applied rejections
+        # (amica17.f90:1121-1148), so snapshot good_idx/num_good_samples around
+        # the reinit (which would otherwise reset them to the full set) and
+        # restore them; numrej is an instance attribute and already survives.
+        saved_good_idx = self.good_idx
+        saved_num_good = self.num_good_samples
         self.A = None
         self._initialize_parameters()
+        if self.do_reject:
+            self.good_idx = saved_good_idx
+            self.num_good_samples = saved_num_good
         self.lrate = self.lrate0
         self.ll = []
         self.nd = []
@@ -690,17 +717,34 @@ class AMICA:
                 }
             )
 
+        # Restrict the E-step to the currently-good samples under do_reject
+        # (mirrors AMICATorchNG's ``X_use = X_t[:, good_idx]``); the default path
+        # uses the full array with no copy, so it stays bit-identical.
+        data_use = self.data[:, self.good_idx] if self.do_reject else self.data
+
+        # Per-sample log-likelihood of the good set, collected in good_idx order
+        # so _reject_outliers' keep-mask maps back onto good_idx. Only gathered
+        # under do_reject, so the default path carries no extra work.
+        ll_parts = []
+
         # Process data in blocks
-        for start in range(0, self.data.shape[1], self.block_size):
-            end = min(start + self.block_size, self.data.shape[1])
-            X = self.data[:, start:end]
+        for start in range(0, data_use.shape[1], self.block_size):
+            end = min(start + self.block_size, data_use.shape[1])
+            X = data_use[:, start:end]
 
             # Get block updates
             block_updates = self._get_block_updates(X)
 
-            # Accumulate updates
+            # Accumulate updates (block_updates may carry an extra "ll_samples"
+            # under do_reject, which is gathered below rather than summed here).
             for key in updates:
                 updates[key] += block_updates[key]
+
+            if self.do_reject:
+                ll_parts.append(block_updates["ll_samples"])
+
+        if self.do_reject:
+            self._last_ll_samples = np.concatenate(ll_parts)
 
         return updates
 
@@ -816,7 +860,12 @@ class AMICA:
 
         # Block log-likelihood = sum_t logsumexp_h logV (Fortran :1372).
         Vmax = np.max(logV, axis=1, keepdims=True)
-        updates["ll"] = np.sum(Vmax[:, 0] + np.log(np.sum(np.exp(logV - Vmax), axis=1)))
+        ll_samples = Vmax[:, 0] + np.log(np.sum(np.exp(logV - Vmax), axis=1))
+        updates["ll"] = np.sum(ll_samples)
+        # Expose the per-sample vector for outlier rejection (issue #123); only
+        # under do_reject, so the default path is unchanged.
+        if self.do_reject:
+            updates["ll_samples"] = ll_samples
 
         # Model responsibilities v = softmax(logV); mixture responsibilities z.
         v = np.exp(logV - Vmax)
@@ -923,8 +972,10 @@ class AMICA:
             and self.comp_list is not None
             and self.A is not None
         )
-        # Update model weights
+        # Update model weights, normalizing by the number of samples the E-step
+        # actually summed over: the good set under do_reject, else all samples.
         if self.do_reject:
+            assert self.num_good_samples is not None
             self.gm = updates["dgm"] / self.num_good_samples
         else:
             self.gm = updates["dgm"] / self.num_samples
@@ -1107,13 +1158,15 @@ class AMICA:
         # Initialize optimization variables
         numdecs = 0
         numincs = 0
-        numrej = 0
         start_time = time.time()
         convergence_reason = None
         final_iter = 0
-        # Per-fit restart counter (reset here so a refit on the same instance
-        # gets a fresh restart budget).
+        # Per-fit counters (reset here so a refit on the same instance gets a
+        # fresh budget). numrej is an instance attribute so the reject schedule
+        # and tests can read the pass count; it survives a restart (which
+        # preserves prior rejections) but not a fresh fit().
         self.numrestarts = 0
+        self.numrej = 0
 
         # Determine whether to use tqdm or per-line printing
         use_tqdm_progress = self.use_tqdm and not self.verbose
@@ -1217,20 +1270,23 @@ class AMICA:
                 if self.do_newton and iter == self.newt_start:
                     numdecs = 0
 
-                # Reject outliers if requested
+                # Reject outliers if requested (Fortran amica17.f90:1142). The
+                # max(1, ...) clamp matches Fortran and AMICATorchNG: without it,
+                # Python's non-negative modulo makes (iter - rejstart) % rejint
+                # hit 0 for iter < rejstart, firing rejection before rejstart.
                 if (
                     self.do_reject
                     and self.maxrej > 0
                     and (
                         (iter == self.rejstart)
                         or (
-                            ((iter - self.rejstart) % self.rejint == 0)
-                            and (numrej < self.maxrej)
+                            (max(1, iter - self.rejstart) % self.rejint == 0)
+                            and (self.numrej < self.maxrej)
                         )
                     )
                 ):
                     self._reject_outliers()
-                    numrej += 1
+                    self.numrej += 1
 
                 # Share components if requested
                 if (
@@ -1383,30 +1439,45 @@ class AMICA:
         return False, None, numdecs, numincs
 
     def _reject_outliers(self):
-        """Reject outlier data points based on likelihood.
+        """Permanently drop samples whose (pre-update) per-sample log-likelihood
+        is a low outlier, mirroring ``AMICATorchNG._reject_outliers`` (Fortran
+        ``reject_data``, amica17.f90:2380-2464): drop any currently-good sample
+        with ``loglik < mean - rejsig*std`` (population std). Rejection is
+        one-directional -- ``good_idx`` only shrinks -- and ``num_good_samples``
+        normalizes ``gm`` thereafter. (``self.ll`` stays a raw sum over the good
+        set; dropping the most-negative samples raises the sum, so the reject
+        iteration is an LL increase and does not spuriously trip the convergence
+        checks.)
 
-        Dormant: fit() refuses do_reject on this backend (non-functional, see
-        issue #123), so this is never reached. Kept self-contained (lazy mask
-        init) as scaffolding for the NumPy port tracked there.
+        ``self._last_ll_samples`` is this iteration's per-sample LL over the
+        current good set (captured pre-update in ``_get_updates_and_likelihood``,
+        in ``good_idx`` order), so the keep-mask indexes straight into
+        ``good_idx``.
         """
         if not self.do_reject:
             return
-        if self.data_mask is None:
-            assert self.num_samples is not None
-            self.data_mask = np.ones(self.num_samples, dtype=bool)
+        assert self.good_idx is not None and self._last_ll_samples is not None
 
-        # Compute likelihood statistics
-        ll_mean = np.mean(self.ll[-1])
-        ll_std = np.std(self.ll[-1])
+        ll_vec = self._last_ll_samples
+        mean = ll_vec.mean()
+        # Population std (ddof=0), matching np.std's default and the torch path.
+        std = np.sqrt(max(float(np.mean(ll_vec**2) - mean**2), 0.0))
+        keep = ll_vec >= (mean - self.rejsig * std)
 
-        # Identify outliers
-        outliers = self.ll[-1] < (ll_mean - self.rejsig * ll_std)
+        if not bool(keep.any()):
+            raise ValueError(
+                f"Outlier rejection removed all {self.good_idx.size} samples "
+                f"(rejsig={self.rejsig} too aggressive for this data)."
+            )
 
-        # Update data mask
-        self.data_mask[outliers] = False
-        self.num_good_samples = np.sum(~outliers)
-
-        self.logger.info(f"Rejected {np.sum(outliers)} samples")
+        n_before = self.good_idx.size
+        self.good_idx = self.good_idx[keep]
+        self.num_good_samples = int(self.good_idx.size)
+        self.logger.info(
+            "Rejected %d samples (%d good remaining).",
+            n_before - self.num_good_samples,
+            self.num_good_samples,
+        )
 
     def _write_results(self):
         """Write current results to disk in the Fortran AMICA binary format.
