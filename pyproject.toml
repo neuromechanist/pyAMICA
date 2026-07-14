@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyAMICA"
-version = "0.1.1"
+version = "0.1.2"
 description = "pyAMICA: Python implementation of the Adaptive Mixture ICA algorithm"
 readme = "README.md"
 authors = [
