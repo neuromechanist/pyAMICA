@@ -28,6 +28,7 @@ def _load_bench():
     """Load benchmarks/benchmark_dimsweep.py (not an installed package)."""
     path = _REPO / "benchmarks" / "benchmark_dimsweep.py"
     spec = importlib.util.spec_from_file_location("benchmark_dimsweep", path)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

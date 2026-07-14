@@ -19,6 +19,7 @@ _FIXTURE = (
 def _load_channel_selection():
     path = _REPO / "benchmarks" / "channel_selection.py"
     spec = importlib.util.spec_from_file_location("channel_selection", path)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

@@ -601,15 +601,22 @@ class AMICATorchNG:
         self.n_newton_fallbacks = 0
 
         # Populated by fit()/_initialize_parameters().
-        self.A = self.W = self.c = None
-        self.mu = self.alpha = self.beta = self.rho = None
+        self.A: Optional[torch.Tensor] = None
+        self.W: Optional[torch.Tensor] = None
+        self.c: Optional[torch.Tensor] = None
+        self.mu: Optional[torch.Tensor] = None
+        self.alpha: Optional[torch.Tensor] = None
+        self.beta: Optional[torch.Tensor] = None
+        self.rho: Optional[torch.Tensor] = None
         # Per-source density-family codes (n_channels, n_models); set in
         # _initialize_parameters and mutated by the adaptive switcher.
-        self.pdtype = None
+        self.pdtype: Optional[torch.Tensor] = None
         # Number of adaptive-switch passes already performed (Fortran numchpdf).
         self.n_kurt_done = 0
-        self.gm = self.comp_list = None
-        self.mean = self.sphere = None
+        self.gm: Optional[torch.Tensor] = None
+        self.comp_list: Optional[torch.Tensor] = None
+        self.mean: Optional[torch.Tensor] = None
+        self.sphere: Optional[torch.Tensor] = None
         self.sldet = 0.0
 
     # ------------------------------------------------------------------
@@ -744,6 +751,7 @@ class AMICATorchNG:
 
     def _update_unmixing_matrices(self):
         """Recompute W from A via direct (batched) inversion -- never pinv."""
+        assert self.A is not None and self.comp_list is not None
         A_stack = torch.stack(
             [self.A[:, self.comp_list[:, h]] for h in range(self.n_models)], dim=0
         )
@@ -758,6 +766,7 @@ class AMICATorchNG:
         """
         if self.pdftype == 0:
             return None
+        assert self.pdtype is not None
         return self.pdtype[:, h].view(1, -1, 1)
 
     # ------------------------------------------------------------------
@@ -781,6 +790,16 @@ class AMICATorchNG:
             per-model tensors (``b``: (batch, n_channels); ``z``/``y``/``azrho``:
             (batch, n_channels, n_mix)).
         """
+        assert (
+            self.comp_list is not None
+            and self.c is not None
+            and self.W is not None
+            and self.mu is not None
+            and self.beta is not None
+            and self.rho is not None
+            and self.alpha is not None
+            and self.gm is not None
+        )
         batch_size = X.shape[1]
         num_models = self.n_models
         b_list, z_list, y_list, azrho_list = [], [], [], []
@@ -863,6 +882,11 @@ class AMICATorchNG:
             ``ll`` (scalar), and -- when ``do_newton`` -- ``dsigma2_numer``,
             ``dkappa_numer``, ``dlambda_numer`` (see ``_finalize_newton_stats``).
         """
+        assert (
+            self.comp_list is not None
+            and self.beta is not None
+            and self.rho is not None
+        )
         num_mix, num_models = self.n_mix, self.n_models
         dev, dt = self.device, self.dtype
 
@@ -882,7 +906,8 @@ class AMICATorchNG:
         drho_n = zeros(num_mix, self.n_comps)
         dWtmp = zeros(self.n_channels, self.n_channels, num_models)
         dc_numer = zeros(self.n_channels, num_models)
-        if self.do_newton:
+        do_newton = self.do_newton
+        if do_newton:
             dsigma2_numer = zeros(self.n_channels, num_models)
             dkappa_numer = zeros(num_mix, self.n_channels, num_models)
             dlambda_numer = zeros(num_mix, self.n_channels, num_models)
@@ -945,7 +970,7 @@ class AMICATorchNG:
             # update is the data-space responsibility-weighted mean (issue #27).
             dc_numer[:, h] = X @ v_h
 
-            if self.do_newton:
+            if do_newton:
                 # Newton curvature accumulators (Fortran amica17.f90:1419,
                 # 1500-1514), in terms of the score fp (not dpdf).
                 dsigma2_numer[:, h] = (v_h.unsqueeze(-1) * b.pow(2)).sum(0)  # (:1419)
@@ -966,7 +991,7 @@ class AMICATorchNG:
             "dc_numer": dc_numer,
             "ll": block_ll,
         }
-        if self.do_newton:
+        if do_newton:
             updates["dsigma2_numer"] = dsigma2_numer
             updates["dkappa_numer"] = dkappa_numer
             updates["dlambda_numer"] = dlambda_numer
@@ -988,6 +1013,7 @@ class AMICATorchNG:
             else:
                 for key in acc:
                     acc[key] = acc[key] + block_acc[key]
+        assert acc is not None
         return acc
 
     # ------------------------------------------------------------------
@@ -1008,6 +1034,7 @@ class AMICATorchNG:
 
         Returns (sigma2, lambda_, kappa), each (n_channels, n_models).
         """
+        assert self.mu is not None and self.comp_list is not None
         dgm = acc["dgm"].unsqueeze(0)  # (1, n_models)
         sigma2 = acc["dsigma2_numer"] / dgm
         kappa = acc["dkappa_numer"].sum(dim=0) / dgm
@@ -1066,6 +1093,15 @@ class AMICATorchNG:
         bit-exact (issue #24). For ``n_models>1`` the per-model ``v`` is
         non-uniform and ``c`` moves each iteration (issue #27).
         """
+        assert (
+            self.c is not None
+            and self.alpha is not None
+            and self.mu is not None
+            and self.beta is not None
+            and self.rho is not None
+            and self.A is not None
+            and self.comp_list is not None
+        )
         self.gm = acc["dgm"] / n_samples
 
         # Per-model data-space bias (Fortran's `update_c` flag, amica17.f90:1423-
@@ -1247,6 +1283,7 @@ class AMICATorchNG:
             self.A = self.A - self.lrate * dAk
 
         if self.doscaling and (self.iteration % self.scalestep == 0):
+            assert self.A is not None and self.mu is not None and self.beta is not None
             scale = torch.sqrt((self.A**2).sum(dim=0))  # (n_comps,)
             nonzero = scale > 0
             self.A[:, nonzero] = self.A[:, nonzero] / scale[nonzero]
@@ -1315,12 +1352,14 @@ class AMICATorchNG:
         """
         if self.n_models < 2:
             return
+        assert self.A is not None and self.comp_list is not None
         if self._spinv is None:
             # The de-sphering metric needs a full-rank, invertible sphere.
             # Average-referenced EEG (covariance rank n_channels-1) or naturally
             # rank-deficient data makes the sphere singular; surface it loudly
             # rather than merging on garbage (the degenerate-fit philosophy,
             # amica.py). (pcakeep/pcadb reduction is already rejected in __init__.)
+            assert self.sphere is not None
             try:
                 spinv = torch.linalg.inv(self.sphere)
             except RuntimeError as exc:
@@ -1384,6 +1423,7 @@ class AMICATorchNG:
         :meth:`_identify_shared_comps`; unused columns receive no gradient and
         are never read by the E-step. Derived from ``comp_list`` (not stored).
         """
+        assert self.comp_list is not None
         used = torch.zeros(self.n_comps, dtype=torch.bool, device=self.comp_list.device)
         used[self.comp_list.reshape(-1)] = True
         return used
@@ -1438,6 +1478,7 @@ class AMICATorchNG:
         (including the sub-Gaussian branch, which real EEG rarely triggers) is
         unit-testable on a constructed ``kurt`` tensor.
         """
+        assert self.pdtype is not None
         ones = torch.ones_like(self.pdtype)
         new_pdtype = torch.where(kurt > 0.0, ones, ones * 4)
         valid = torch.isfinite(kurt) & (nsub.unsqueeze(0) > 0.0)
@@ -1592,7 +1633,11 @@ class AMICATorchNG:
                     )
                 )
             )
-            reject_ll = self._sample_ll(self.good_idx, X_t) if will_reject else None
+            if will_reject:
+                assert self.good_idx is not None
+                reject_ll = self._sample_ll(self.good_idx, X_t)
+            else:
+                reject_ll = None
 
             self._update_parameters(acc, n_use)
 
@@ -1661,6 +1706,7 @@ class AMICATorchNG:
             # amica17.f90:1141-1146) but using the pre-update per-sample LL
             # captured above.
             if will_reject:
+                assert reject_ll is not None
                 self._reject_outliers(reject_ll)
 
             iterator.set_postfix({"LL": f"{ll:.4f}", "lrate": f"{self.lrate:.4g}"})
@@ -1722,6 +1768,7 @@ class AMICATorchNG:
         count drives the ``gm``/LL normalization thereafter. ``ll_vec`` is the
         per-sample log-likelihood over the current good set, in ``good_idx`` order.
         """
+        assert self.good_idx is not None
         good = self.good_idx
         mean = ll_vec.mean()
         std = torch.sqrt((ll_vec.pow(2).mean() - mean.pow(2)).clamp_min(0.0))
@@ -1753,6 +1800,10 @@ class AMICATorchNG:
         transpose convention) with the per-model data-space center ``c``
         subtracted first (issue #27).
         """
+        if self.sphere is None or self.mean is None or self.W is None or self.c is None:
+            raise RuntimeError(
+                "AMICATorchNG.transform() requires a fitted model; call fit() first."
+            )
         X_t = torch.from_numpy(np.ascontiguousarray(X)).to(self.device, self.dtype)
         X_t = self.sphere @ (X_t - self.mean)
         # c is the per-model data-space center: unmix as W(x - c) (issue #27).
@@ -1761,10 +1812,20 @@ class AMICATorchNG:
 
     def get_mixing_matrix(self, model_idx: int = 0) -> np.ndarray:
         """True mixing matrix ``A_fort`` = (stored A)^T (issue #24 convention)."""
+        if self.A is None or self.comp_list is None:
+            raise RuntimeError(
+                "AMICATorchNG.get_mixing_matrix() requires a fitted model; call "
+                "fit() first."
+            )
         return self.A[:, self.comp_list[:, model_idx]].T.cpu().numpy()
 
     def get_unmixing_matrix(self, model_idx: int = 0) -> np.ndarray:
         """True unmixing matrix ``W_fort`` = (stored W)^T (issue #24 convention)."""
+        if self.W is None:
+            raise RuntimeError(
+                "AMICATorchNG.get_unmixing_matrix() requires a fitted model; call "
+                "fit() first."
+            )
         return self.W[:, :, model_idx].T.cpu().numpy()
 
     # ------------------------------------------------------------------
@@ -1799,6 +1860,19 @@ class AMICATorchNG:
         """
         from scipy.special import gamma
 
+        if (
+            self.comp_list is None
+            or self.alpha is None
+            or self.mu is None
+            or self.beta is None
+            or self.rho is None
+            or self.W is None
+            or self.sphere is None
+        ):
+            raise RuntimeError(
+                "AMICATorchNG.variance_order() requires a fitted model; call "
+                "fit() first."
+            )
         cl = self.comp_list[:, model_idx].cpu().numpy()
         alpha = self.alpha[:, cl].cpu().numpy()
         mu = self.mu[:, cl].cpu().numpy()
@@ -1833,6 +1907,11 @@ class AMICATorchNG:
         outdir : str or path-like
             Destination directory (created if absent).
         """
+        if self.A is None:
+            raise RuntimeError(
+                "write_amica_output requires a fitted model; call fit() first."
+            )
+
         from ..numpy_impl.load import write_amicaout
 
         def _np(t):

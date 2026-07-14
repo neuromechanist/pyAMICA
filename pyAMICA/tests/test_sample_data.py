@@ -38,6 +38,7 @@ def test_sample_data_scikit(tmp_path):
     model.fit()
 
     # Compare weights
+    assert model.W is not None
     W_pyamica = model.W[:, :, 0]  # Get weights from first model
 
     correlations = np.zeros((32, 32))
@@ -280,6 +281,7 @@ def test_cli_output_format_roundtrip(tmp_path):
     # Value-level round-trip: the loaded arrays equal the in-memory ones. Guards
     # against a transpose/axis-order or dtype regression that the shape checks
     # above would miss.
+    assert model.W is not None and model.A is not None and model.alpha is not None
     np.testing.assert_allclose(r["W"], model.W)
     np.testing.assert_allclose(r["A"], model.A)
     np.testing.assert_allclose(r["alpha"], model.alpha)

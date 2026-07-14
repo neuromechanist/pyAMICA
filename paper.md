@@ -111,7 +111,7 @@ single-precision runs are seven-significant-digit, so double precision remains t
 |---|---|---:|
 | MLX (Apple GPU) | float32 | 25 |
 | CUDA (NVIDIA RTX 4090) | float64 | 39 |
-| Native Fortran (Intel Xeon workstation, 24 cores) | float64 | 30 |
+| Native Fortran (Intel Core i9-13900K, 24 cores) | float64 | 30 |
 | PyTorch CPU (Apple Silicon) | float64 | 193 |
 | Native Fortran (Apple Silicon, 8 cores) | float64 | 70 |
 | PyTorch MPS (Apple GPU) | float32 | 255 |

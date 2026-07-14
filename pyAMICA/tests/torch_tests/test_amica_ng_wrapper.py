@@ -108,6 +108,7 @@ def test_ng_default_device_avoids_mps_float64(real_data, caplog):
         model.fit(real_data[:, :2048], max_iter=2, block_size=1024, seed=42)
 
     # float64 parity runs must never land on MPS.
+    assert model.model_ is not None
     assert model.model_.device.type in ("cpu", "cuda")
     if torch.backends.mps.is_available():
         assert model.model_.device.type == "cpu"
@@ -135,6 +136,7 @@ def test_ng_mps_float32_escape_hatch(real_data):
     model.fit(
         real_data[:, :2048], max_iter=2, block_size=1024, seed=42, dtype=torch.float32
     )
+    assert model.model_ is not None
     assert model.model_.device.type == "mps"
     assert model.model_.dtype == torch.float32
 
@@ -242,6 +244,7 @@ def test_write_amica_output_ll_matches_kept_iterate(real_data, tmp_path):
     if not model.is_fitted_:
         pytest.skip("aggressive run ended degenerate; not the case under test")
     ng = model.model_
+    assert ng is not None and ng.final_ll_ is not None
     if np.isclose(ng.ll_history[-1], ng.final_ll_):
         pytest.skip("run was monotone; keep_best restore did not fire")
 

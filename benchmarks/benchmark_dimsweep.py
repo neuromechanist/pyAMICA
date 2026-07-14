@@ -57,6 +57,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 import numpy as np
 
@@ -90,7 +91,7 @@ def _torch_available(device: str) -> bool:
     return False
 
 
-def _share_kw_torch(share):
+def _share_kw_torch(share) -> dict[str, Any]:
     # share_start/share_iter tuned so a merge actually fires inside the short
     # benchmark budget (share_iter must be > 6); no-op when share is off.
     return (
@@ -127,6 +128,7 @@ def _run_torch(
         m.fit(data, max_iter=n_iter, verbose=False)
         if device == "cuda":
             torch.cuda.synchronize()
+        assert m.final_ll_ is not None
         return perf_counter() - t0, float(m.final_ll_)
 
     # CPU-scaling knob (#86): pin intra-op threads for the CPU device (no-op on
@@ -160,6 +162,7 @@ def _run_mlx(data, iters, repeats, n_models=1):
         )
         t0 = perf_counter()
         m.fit(data, max_iter=n_iter, verbose=False)  # fit's mx.eval syncs
+        assert m.final_ll_ is not None
         return perf_counter() - t0, float(m.final_ll_)
 
     one(min(5, iters))
@@ -178,7 +181,7 @@ def _run_numpy(data, iters, repeats, n_models=1, share=False, threads=None):
     from pyAMICA.numpy_impl.core import AMICA as AMICA_NumPy
 
     # NumPy uses share_int (torch uses share_iter).
-    share_kw = (
+    share_kw: dict[str, Any] = (
         dict(share_comps=True, share_start=5, share_int=8, comp_thresh=0.99)
         if share
         else {}
@@ -416,7 +419,9 @@ def _available(
         if share:
             return False
         try:
-            import mlx.core as mx
+            # mlx is a compiled extension with no type stubs; ty cannot resolve
+            # it statically even when installed.
+            import mlx.core as mx  # ty: ignore[unresolved-import]
 
             return mx.default_device().type == mx.DeviceType.gpu
         except Exception:
@@ -487,7 +492,7 @@ def _run_backend(
 
 
 def _platform_info() -> dict:
-    info = {"machine": platform.machine(), "system": platform.system()}
+    info: dict[str, Any] = {"machine": platform.machine(), "system": platform.system()}
     info["nproc"] = os.cpu_count()  # context for the CPU-scaling sweep (#86)
     try:
         import torch

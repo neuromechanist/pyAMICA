@@ -197,7 +197,7 @@ The table above uses each platform's default thread count and has no Fortran row
 A separate core-count sweep (`--threads`, real ds002718 sub-002 EEG, 70 channels, `n_mix=3`,
 `pdftype=0`, `do_newton` off, `block_size=512`) adds native Fortran (via `OMP_NUM_THREADS`) alongside torch-CPU (`set_num_threads`) and NumPy (`threadpoolctl`) on the same two machines as above, GPU backends run once since they are thread-independent:
 
-| backend (Intel Xeon / RTX 4090 workstation, 32 cores) | 4c | 8c | 12c | 16c | 24c |
+| backend (Intel Core i9-13900K / RTX 4090 workstation, 24 cores / 32 threads) | 4c | 8c | 12c | 16c | 24c |
 |---|---:|---:|---:|---:|---:|
 | native-fortran f64 | 69.5 | 43.2 | 49.0 | 40.0 | **30.0** |
 | torch-CPU f64 | 105.9 | 91.0 | 92.6 | 142.5 | 212.8 |
@@ -216,14 +216,14 @@ GPU (thread-independent, run once): CUDA f64 = 38.5, CUDA f32 = 36.2.
 GPU (thread-independent, run once): MLX f32 = 33.4, MPS f32 = 217.7.
 
 Native Fortran with OpenMP is the only CPU backend that scales with cores:
-on 24 of the workstation's 32 cores it beats the RTX 4090 (30 vs 38.5 ms/iteration),
+on all 24 of the 13900K's cores it beats the RTX 4090 (30 vs 38.5 ms/iteration),
 and on 8 of the Mac's 14 cores it is faster than either torch-CPU precision.
 torch-CPU f64 peaks around 8 cores then regresses from oversubscription (91 to 213 ms/iteration going from 8 to 24 cores on the workstation);
 torch-CPU f32 is faster and scale-stable but never catches the GPU.
 NumPy is thread-flat (BLAS/Python-bound) and slowest everywhere.
-MLX remains the efficiency winner overall: ~33 ms/iteration, flat, no tuning, beating a 450 W RTX 4090 and a 32-core workstation running 24 cores,
+MLX remains the efficiency winner overall: ~33 ms/iteration, flat, no tuning, beating a 450 W RTX 4090 and a 24-core Core i9-13900K workstation,
 at a fraction of the power and cost;
-native-Fortran@24c is marginally faster in raw ms/iteration only by pinning most cores of a much larger, hotter machine.
+native-Fortran@24c is marginally faster in raw ms/iteration only by pinning every core of a much larger, hotter machine.
 Native-Fortran timing at ≤32 channels is at or below the binary's ~10 ms stamp resolution, so trust the 48/70-channel scaling curve;
 the full 16/32/48/70-channel grid is in the result JSONs alongside `.context/issue-84/phase2_cpu_scaling.md`.
 

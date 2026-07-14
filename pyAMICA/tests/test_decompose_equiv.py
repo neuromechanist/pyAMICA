@@ -17,6 +17,7 @@ _REPO = Path(__file__).resolve().parents[2]
 def _load():
     path = _REPO / "benchmarks" / "benchmark_decompose.py"
     spec = importlib.util.spec_from_file_location("benchmark_decompose", path)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

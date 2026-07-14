@@ -93,7 +93,7 @@ class AMICA:
         self,
         n_models: int = 1,
         n_mix: int = 3,
-        device: Optional[Union[str, object]] = None,
+        device: Optional[Union[str, torch.device]] = None,
         verbose: bool = True,
     ):
         self.n_models = n_models
@@ -108,7 +108,7 @@ class AMICA:
         self.stop_reason_ = None
         self.converged_ = False
 
-    def _select_device(self, ng_dtype) -> object:
+    def _select_device(self, ng_dtype) -> Union[str, torch.device]:
         """Resolve the compute device, applying the MPS/float64 fallback.
 
         ``AMICATorchNG`` defaults to float64 for Fortran parity, which MPS
@@ -261,6 +261,7 @@ class AMICA:
             Sources of shape (n_sources, n_samples)
         """
         self._check_usable("transform")
+        assert self.model_ is not None
 
         return self.model_.transform(X, model_idx=model_idx)
 
@@ -298,6 +299,7 @@ class AMICA:
             Mixing matrix of shape (n_channels, n_sources)
         """
         self._check_usable("get the mixing matrix")
+        assert self.model_ is not None
 
         return self.model_.get_mixing_matrix(model_idx=model_idx)
 
@@ -316,6 +318,7 @@ class AMICA:
             Unmixing matrix of shape (n_sources, n_channels)
         """
         self._check_usable("get the unmixing matrix")
+        assert self.model_ is not None
 
         return self.model_.get_unmixing_matrix(model_idx=model_idx)
 
@@ -343,6 +346,7 @@ class AMICA:
             Source indices, highest back-projected variance first.
         """
         self._check_usable("compute the variance order")
+        assert self.model_ is not None
 
         return self.model_.variance_order(model_idx=model_idx, return_svar=return_svar)
 
@@ -364,6 +368,7 @@ class AMICA:
             Destination directory (created if absent).
         """
         self._check_usable("write EEGLAB output")
+        assert self.model_ is not None
 
         self.model_.write_amica_output(outdir)
 
@@ -384,6 +389,7 @@ class AMICA:
             Destination path (a ``.pt`` file by convention).
         """
         self._check_usable("save")
+        assert self.model_ is not None
 
         payload = {
             "format_version": 1,
@@ -398,7 +404,7 @@ class AMICA:
 
     @classmethod
     def load(
-        cls, filepath: str, device: Optional[Union[str, object]] = None
+        cls, filepath: str, device: Optional[Union[str, torch.device]] = None
     ) -> "AMICA":
         """
         Load a fitted model saved by :meth:`save`.

@@ -7,6 +7,8 @@ precision on an identical block with identical parameters.
 """
 
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -33,7 +35,7 @@ def _load_real_data() -> np.ndarray:
     )
 
 
-def _fresh_ng(block_size: int = 256, **kwargs) -> AMICATorchNG:
+def _fresh_ng(block_size: int = 256, **kwargs: Any) -> AMICATorchNG:
     return AMICATorchNG(
         n_channels=NW,
         n_models=1,
@@ -49,6 +51,17 @@ def _fresh_ng(block_size: int = 256, **kwargs) -> AMICATorchNG:
 def _numpy_ref_like(ng: AMICATorchNG, blk: int, **kwargs) -> AMICA_NumPy:
     """A NumPy AMICA carrying the NG backend's exact parameters (the
     established copy-params parity pattern). Model count follows ``ng``."""
+    assert (
+        ng.comp_list is not None
+        and ng.A is not None
+        and ng.W is not None
+        and ng.c is not None
+        and ng.mu is not None
+        and ng.alpha is not None
+        and ng.beta is not None
+        and ng.rho is not None
+        and ng.gm is not None
+    )
     npm = AMICA_NumPy(num_models=ng.n_models, num_mix=NMIX, **kwargs)
     npm.data_dim = NW
     npm.num_comps = NW * ng.n_models
@@ -89,6 +102,17 @@ def test_sufficient_stats_match_numpy_reference():
     block = X_t[:, :blk].contiguous()
     ng_upd = ng._get_block_updates(block)
 
+    assert (
+        ng.comp_list is not None
+        and ng.A is not None
+        and ng.W is not None
+        and ng.c is not None
+        and ng.mu is not None
+        and ng.alpha is not None
+        and ng.beta is not None
+        and ng.rho is not None
+        and ng.gm is not None
+    )
     npm = AMICA_NumPy(num_models=1, num_mix=NMIX, do_newton=False)
     npm.data_dim = NW
     npm.num_comps = NW
@@ -224,6 +248,16 @@ def test_forward_ll_per_source_factorization_order():
     ng_ll = ng._block_sample_ll(block).cpu().numpy()
 
     # Independent NumPy reference from NG's own tensors.
+    assert (
+        ng.W is not None
+        and ng.c is not None
+        and ng.comp_list is not None
+        and ng.mu is not None
+        and ng.beta is not None
+        and ng.rho is not None
+        and ng.alpha is not None
+        and ng.gm is not None
+    )
     block_np = block.cpu().numpy()
     W = ng.W.cpu().numpy()[:, :, 0]
     c = ng.c.cpu().numpy()[:, 0]
@@ -336,6 +370,14 @@ def test_newton_mstep_matches_numpy_reference():
     block = X_t[:, :blk].contiguous()
     acc = ng._get_block_updates(block)
     ng._update_parameters(acc, blk)
+    assert (
+        ng.A is not None
+        and ng.mu is not None
+        and ng.beta is not None
+        and ng.rho is not None
+        and ng.alpha is not None
+        and ng.gm is not None
+    )
     A_ng = ng.A.cpu().numpy().copy()
 
     ng2 = _fresh_ng(do_newton=True, newt_start=0, newtrate=0.5)
@@ -380,16 +422,18 @@ def test_newton_finalize_uses_preupdate_mu():
     block = X_t[:, :256].contiguous()
     acc = ng._get_block_updates(block)
 
+    assert ng.mu is not None
     mu_pre = ng.mu.clone()
     captured = {}
     original = ng._finalize_newton_stats
 
     def spy(a):
+        assert ng.mu is not None
         captured["mu"] = ng.mu.clone()  # mu as seen by the finalization
         return original(a)
 
-    ng._finalize_newton_stats = spy
-    ng._update_parameters(acc, 256)
+    with mock.patch.object(ng, "_finalize_newton_stats", side_effect=spy):
+        ng._update_parameters(acc, 256)
 
     assert "mu" in captured, "Newton finalization was not invoked"
     assert torch.equal(captured["mu"], mu_pre), (
@@ -460,6 +504,7 @@ def test_newton_posdef_mstep_composition():
     ng.iteration = 5
     block = X_t[:, :blk].contiguous()
     acc = ng._get_block_updates(block)
+    assert ng.A is not None and ng.comp_list is not None
     A_before = ng.A.clone()
 
     # Independent expected A-update for the (single) model, using the same
@@ -477,9 +522,10 @@ def test_newton_posdef_mstep_composition():
     nz = scale > 0
     A_expected[:, nz] = A_expected[:, nz] / scale[nz]
 
-    ng._finalize_newton_stats = forced
-    ng._update_parameters(acc, blk)
+    with mock.patch.object(ng, "_finalize_newton_stats", side_effect=forced):
+        ng._update_parameters(acc, blk)
 
+    assert ng.A is not None
     assert ng.n_newton_fallbacks == 0  # positive-definite branch taken
     assert ng.lrate == pytest.approx(lrate_after)  # ramped toward newtrate
     assert np.max(np.abs(ng.A.cpu().numpy() - A_expected.cpu().numpy())) < 1e-10
@@ -501,6 +547,7 @@ def test_newton_stats_match_at_rho_boundaries(rho_val):
     ng = _fresh_ng(do_newton=True, newt_start=0)
     X_t = ng._preprocess(data)
     ng._initialize_parameters()
+    assert ng.rho is not None
     ng.rho[:] = rho_val
     block = X_t[:, :blk].contiguous()
     ng_upd = ng._get_block_updates(block)
@@ -546,6 +593,16 @@ def test_multimodel_sufficient_stats_match_numpy_reference():
     ng_upd = ng._get_block_updates(block)
 
     npm = _numpy_ref_like(ng, blk, do_newton=False)
+    assert (
+        ng.A is not None
+        and ng.W is not None
+        and ng.c is not None
+        and ng.mu is not None
+        and ng.alpha is not None
+        and ng.beta is not None
+        and ng.rho is not None
+        and ng.gm is not None
+    )
     npm.A = ng.A.cpu().numpy().copy()
     npm.W = ng.W.cpu().numpy().copy()
     npm.c = ng.c.cpu().numpy().copy()
@@ -554,6 +611,7 @@ def test_multimodel_sufficient_stats_match_numpy_reference():
     npm.beta = ng.beta.cpu().numpy().copy()
     npm.rho = ng.rho.cpu().numpy().copy()
     npm.gm = ng.gm.cpu().numpy().copy()
+    assert ng.comp_list is not None
     npm.comp_list = ng.comp_list.cpu().numpy()
     np_upd = npm._get_block_updates(block.cpu().numpy())
 
@@ -586,6 +644,7 @@ def test_single_model_bias_c_stays_zero():
     data = _load_real_data()[:, :2048]
     ng = _fresh_ng(block_size=1024)  # n_models=1
     ng.fit(data, max_iter=5, verbose=False)
+    assert ng.c is not None
     assert torch.all(ng.c == 0.0), "single-model c must remain exactly zero"
 
 
@@ -616,6 +675,7 @@ def test_multimodel_bias_c_is_responsibility_weighted_data_mean():
     acc = ng._accumulate_blocks(X_t)
     ng._update_parameters(acc, X_t.shape[1])
 
+    assert ng.c is not None
     for h in range(2):
         expected = (X_t * v[:, h]).sum(dim=1) / v[:, h].sum()
         assert torch.allclose(ng.c[:, h], expected, atol=1e-10), (
@@ -660,6 +720,7 @@ def test_newton_multimodel_finite_and_shaped():
     # for both models -- get_unmixing_matrix returns W, which never touches c,
     # so assert isfinite(ng.c) directly to close that blind spot.
     assert len(ng.ll_history) == 6
+    assert ng.c is not None
     assert torch.all(torch.isfinite(ng.c))
     for h in range(2):
         assert np.all(np.isfinite(ng.get_unmixing_matrix(h)))
@@ -692,6 +753,7 @@ def test_multimodel_bias_c_matches_numpy_reference():
     ng._update_parameters(acc, X_t.shape[1])
 
     expected = np_upd["dc_numer"] / np_upd["dgm"][None, :]
+    assert ng.c is not None
     assert np.allclose(ng.c.cpu().numpy(), expected, atol=1e-8)
 
 
@@ -714,6 +776,7 @@ def test_numpy_multimodel_bias_c_updates():
         do_sphere=True,
     )
     npm.fit(data)
+    assert npm.c is not None
     assert np.all(np.isfinite(npm.c))
     assert not np.allclose(npm.c, 0.0)
     assert not np.allclose(npm.c[:, 0], npm.c[:, 1], atol=1e-6)
@@ -739,6 +802,12 @@ def test_multimodel_transform_applies_bias_c():
         newt_start=0,
     )
     ng.fit(data, max_iter=4, verbose=False)
+    assert (
+        ng.c is not None
+        and ng.sphere is not None
+        and ng.mean is not None
+        and ng.W is not None
+    )
     # c must actually be nonzero for this test to mean anything.
     assert not np.allclose(ng.c.cpu().numpy(), 0.0)
 
@@ -833,6 +902,7 @@ def test_rejection_shrinks_good_sample_set():
 
     assert m.numrej <= 2
     assert m.numrej >= 1
+    assert m.good_idx is not None
     n_good = int(m.good_idx.numel())
     assert n_good < n_total  # some samples rejected
     assert np.all(np.isfinite(m.get_unmixing_matrix(0)))
@@ -876,6 +946,7 @@ def test_multimodel_rejection_keeps_bias_c_finite():
         # A degenerate stop is acceptable (surfaced, not silent); nothing more
         # to assert -- the point is it did not silently return a NaN model.
         return
+    assert m.c is not None
     assert torch.all(torch.isfinite(m.c)), "bias c left non-finite without a stop"
     assert np.all(np.isfinite(m.ll_history))
 
@@ -970,6 +1041,7 @@ def test_state_dict_refuses_nonfinite_params():
     m.fit(data[:, :2048], max_iter=2, verbose=False)
 
     m.stop_reason = "max_iter"  # not a degenerate marker
+    assert m.A is not None
     m.A[0, 0] = float("nan")
     with pytest.raises(RuntimeError, match="non-finite"):
         m.state_dict()
@@ -986,6 +1058,7 @@ def test_state_dict_snapshots_not_aliases():
 
     state = m.state_dict()
     captured = state["params"]["A"].clone()
+    assert m.A is not None
     m.A[0, 0] += 1.0  # the same in-place mutation fit() does each iteration
     assert torch.equal(state["params"]["A"], captured)
 
@@ -1066,7 +1139,7 @@ def test_full_fit_parity_numpy_vs_ng(tmp_path):
     data = _load_real_data()  # (NW, FIELD) float64
     n_samples = data.shape[1]
 
-    cfg = dict(
+    cfg: dict[str, Any] = dict(
         block_size=512,
         lrate=0.05,
         lratefact=0.5,
@@ -1106,6 +1179,7 @@ def test_full_fit_parity_numpy_vs_ng(tmp_path):
 
     ng = _fresh_ng(maxdecs=5, **cfg)
     ng.fit(data, max_iter=150, verbose=False)
+    assert ng.sphere is not None
     filt_ng = ng.get_unmixing_matrix(0) @ ng.sphere.cpu().numpy()
     ll_ng = ng.ll_history[-1]
 
@@ -1134,7 +1208,9 @@ def test_keep_best_single_model_is_bit_exact():
     and the returned parameters are byte-for-byte identical to keep_best=False.
     This guards single-model issue #24 parity against the safeguard."""
     data = _load_real_data()
-    common = dict(block_size=512, lrate=0.05, do_newton=True, newt_start=50)
+    common: dict[str, Any] = dict(
+        block_size=512, lrate=0.05, do_newton=True, newt_start=50
+    )
     on = _fresh_ng(keep_best=True, **common)
     on.fit(data, max_iter=100, verbose=False)
     off = _fresh_ng(keep_best=False, **common)
@@ -1156,13 +1232,19 @@ def test_keep_best_snapshot_restore_roundtrip():
     m.fit(_load_real_data()[:, :2048], max_iter=3, verbose=False)
 
     snap = m._snapshot_params()
+    assert m.A is not None
     orig = float(m.A[0, 0])
     m.A[0, 0] = orig + 5.0  # the same kind of in-place edit fit() does each step
-    assert float(snap["A"][0, 0]) == orig  # snapshot is a clone, not an alias
+    snap_a = snap["A"]
+    assert isinstance(snap_a, torch.Tensor)
+    assert float(snap_a[0, 0]) == orig  # snapshot is a clone, not an alias
     m._restore_params(snap)
+    assert m.A is not None
     assert float(m.A[0, 0]) == orig  # restore reverts the mutation
     for name in AMICATorchNG._PARAM_TENSORS:
-        assert torch.equal(getattr(m, name), snap[name]), name
+        snap_val = snap[name]
+        assert isinstance(snap_val, torch.Tensor)
+        assert torch.equal(getattr(m, name), snap_val), name
 
 
 def _multimodel_keep_best(seed: int, keep_best: bool) -> AMICATorchNG:
@@ -1192,6 +1274,7 @@ def test_keep_best_returns_within_tol_of_peak():
 
     # keep_best does not alter the trajectory, only the returned iterate.
     assert on.ll_history == off.ll_history
+    assert on.final_ll_ is not None and off.final_ll_ is not None
     # return-last returns exactly the last iterate; keep_best is never worse.
     assert off.final_ll_ == off.ll_history[-1]
     assert on.final_ll_ >= off.final_ll_
