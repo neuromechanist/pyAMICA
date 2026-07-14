@@ -33,7 +33,9 @@ import logging
 import math
 from typing import Optional
 
-import mlx.core as mx
+# mlx ships as a compiled extension with no type stubs, so ty cannot resolve
+# it statically even when installed; scope the suppression to this one import.
+import mlx.core as mx  # ty: ignore[unresolved-import]
 import numpy as np
 from scipy.special import digamma, gammaln
 

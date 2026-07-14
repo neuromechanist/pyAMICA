@@ -419,7 +419,9 @@ def _available(
         if share:
             return False
         try:
-            import mlx.core as mx
+            # mlx is a compiled extension with no type stubs; ty cannot resolve
+            # it statically even when installed.
+            import mlx.core as mx  # ty: ignore[unresolved-import]
 
             return mx.default_device().type == mx.DeviceType.gpu
         except Exception:
