@@ -3,13 +3,15 @@
 **Correctness in pyAMICA is defined as parity with the reference Fortran binary,
 not merely as convergence.** A run is correct when it reproduces the Fortran output within numerical tolerance.
 This page collects the full verification evidence: bit-exact score functions, single-model parity,
-multi-model distributional equivalence, cross-platform device and precision invariance,
+multi-model distributional similarity, cross-platform device and precision invariance,
 the EEGLAB drop-in round-trip, and the remaining validated behaviors.
-Every result uses the bundled real sample EEG and the reference Fortran binary; none uses synthetic data.
-This is currently an exemplar validation on one real recording (the EEGLAB tutorial dataset:
-32 channels, 30504 samples at 128 Hz, ~238 s) plus one external benchmark subject
-(OpenNeuro ds002718 sub-002); extending to a multi-subject, multi-dataset validation is planned
-future work, not yet done.
+Every result uses real EEG and the reference Fortran binary; none uses synthetic data.
+The multi-model and score-function checks use only the bundled EEGLAB tutorial sample (32 channels,
+30504 samples at 128 Hz, ~238 s); the single-model headline additionally uses an external recording
+(OpenNeuro ds002718 sub-002, 70 channels) at $k=\text{frames}/\text{channels}^2\approx153$, well past
+the ~60 threshold where cross-backend agreement plateaus (below), since the bundled sample sits at
+that threshold's boundary ($k\approx30$). Extending to a multi-subject, multi-dataset validation is
+planned future work, not yet done.
 Throughout, IC abbreviates independent component and LL log-likelihood.
 
 ## Validation at a glance
@@ -18,8 +20,9 @@ Throughout, IC abbreviates independent component and LL log-likelihood.
 |---|---|---|
 | Source-density score and log-density (non-GG families) | vs the literal `amica15.f90` expressions | bit-exact ($<10^{-12}$) |
 | Per-block sufficient statistics and one M-step | vs Fortran | bit-exact ($\sim\!10^{-15}$) |
-| Single-model solution (`do_newton=0`) | log-likelihood, component correlation, Amari distance vs Fortran | LL within ~0.005 of $-3.4018$; correlation 0.998; Amari 0.006 |
-| Multi-model solution | distributional equivalence over 20-run ensembles | indistinguishable from Fortran's own run-to-run spread ($p = 0.96$) |
+| Single-model solution (`do_newton=0`, $k\approx153$) | log-likelihood, component correlation vs Fortran | LL within ~0.0005 of $-3.6993$; correlation 0.998 |
+| Single-model solution (`do_newton=0`, bundled, $k\approx30$) | Amari distance vs Fortran | 0.006 |
+| Multi-model solution | distributional similarity over 20-run ensembles | indistinguishable from Fortran's own run-to-run spread ($p = 0.96$) |
 | Device and precision invariance | same independent components across CPU/CUDA/MPS/MLX, float32/float64, Linux/macOS | identical (1.000) across all eight torch/MLX combinations |
 | Cross-backend log-likelihood | converged LL across every backend | agree to ~3 significant digits (max pairwise ~0.003) |
 | EEGLAB output | `write_amica_output` round-trip through `loadmodout15` | single-model bytes are an exact serialization; loads with correct layout |
@@ -36,16 +39,21 @@ a standard unmixing-matrix comparison metric (Amari, Cichocki & Yang, 1996) that
 
 ## Single-model parity
 
-On real sample EEG, with Newton disabled (`do_newton=0`), the natural-gradient backend reaches
-Fortran's solution, averaged over 5 seeds at a matched 2000-iteration budget:
+With Newton disabled (`do_newton=0`), the natural-gradient backend reaches Fortran's solution,
+averaged over 5 seeds at a matched 2000-iteration budget. The headline correlation is measured on an
+external, unambiguously well-determined recording (OpenNeuro ds002718, 70 channels, $k\approx153$) so
+it is not sensitive to whether a particular small dataset happens to be well-conditioned; the bundled
+32-channel sample ($k\approx30$, at the project's own data-adequacy boundary) gives a consistent Amari
+distance:
 
-- Log-likelihood ~ -3.40 (Fortran ~ -3.4018).
-- Hungarian-matched component correlation ~0.998 (Fortran-vs-Fortran self-consistency over the
-  same 5 seeds: ~0.998), clearing the >0.95 gate.
-- Amari distance ~0.006 (Fortran-vs-Fortran: ~0.005).
+- Log-likelihood ~ -3.6993 ($k\approx153$; Fortran ~ -3.6993, gap ~0.0003).
+- Hungarian-matched component correlation ~0.998 ($k\approx153$; Fortran-vs-Fortran self-consistency
+  over the same 5 seeds: ~0.999), clearing the >0.95 gate. On the bundled sample ($k\approx30$) both
+  numbers are consistent: ~0.998 pyAMICA-vs-Fortran, ~0.998 Fortran-vs-Fortran.
+- Amari distance ~0.006 (bundled sample; Fortran-vs-Fortran: ~0.005).
 
 The fixed source-density families are bit-exact against the literal Fortran score/derivative expressions (~1e-15),
-and the backend converges to the binary's solution within ~0.005 log-likelihood.
+and the backend converges to the binary's solution within ~0.005 log-likelihood on either dataset.
 
 ### Source-density families are bit-exact
 
@@ -72,10 +80,10 @@ sub-Gaussian (code 4) densities on a kurtosis schedule; its dynamic switch has n
 log-likelihood instead. Each fixed family converges within ~0.005 LL of the binary at a matched Newton budget.
 See `pyAMICA/tests/torch_tests/test_ng_pdf_families.py` and ADR 0002.
 
-## Multi-model equivalence
+## Multi-model distributional similarity
 
 Multi-model AMICA is not partition-identifiable, so exact partition parity with Fortran is the wrong acceptance bar.
-The right test is whether the two implementations sample the same distribution over solutions. Running an ensemble of `N = 20` fits per implementation on the real sample EEG (`n_models = 2`, 3 mixture components, 100 iterations, matched schedule),
+The right test is whether the two implementations sample a similar distribution over solutions. Running an ensemble of `N = 20` fits per implementation on the bundled sample EEG (`n_models = 2`, 3 mixture components, 100 iterations, matched schedule),
 the pyAMICA-vs-Fortran partition cross-correlation distribution overlaps Fortran's own run-to-run distribution:
 
 | Distribution (pairwise Hungarian-matched \|corr\|) | Mean | SD | Range |
@@ -380,18 +388,24 @@ Tests live under `pyAMICA/tests/`: `torch_tests/test_ng_backend.py`, `torch_test
 
 ## Reproducing these results
 
-Everything on this page runs from the bundled sample data and the reference binary, with no external download:
+The multi-model and score-function checks run from the bundled sample data and the reference binary,
+with no external download:
 
 ```bash
 uv run python validate_implementations.py     # single- and multi-model parity report
 uv run pytest                                  # the full parity/behavior test suite
 ```
 
-The single-model conformity row above (`do_newton=0`, 0.998 correlation / 0.006 Amari) is the
-5-seed, 2000-iteration sweep produced by
-`uv run python .context/issue-144-parity-data-adequacy/bundled_sample_newton0.py 5 2000`;
-`validate_implementations.py`'s own CLI defaults (a single seed, 100 iterations, `do_newton` read
-from `sample_params.json` where it is `true`) do not reproduce this row directly.
+The bundled-sample single-model numbers (`do_newton=0`, ~0.998 correlation / 0.006 Amari, $k\approx30$)
+are the 5-seed, 2000-iteration sweep produced by
+`uv run python .context/issue-144-parity-data-adequacy/bundled_sample_newton0.py 5 2000`.
+The headline correlation/LL ($k\approx153$) additionally needs the external ds002718 recording
+(OpenNeuro, sub-002, manual download) and is produced by
+`.context/issue-144-parity-data-adequacy/run_5seed_newton0.sh`; that script's paths, thread count, and
+Fortran binary are specific to the workstation it was run on, so it is not yet a portable one-command
+reproduction (tracked as future work). `validate_implementations.py`'s own CLI defaults (a single seed,
+100 iterations, `do_newton` read from `sample_params.json` where it is `true`) do not reproduce either
+row directly.
 
 The multi-model ensemble and Amari detail regenerate from saved fits (no re-fitting) with
 `uv run python .context/issue-27/amari_distance.py`. The cross-platform benchmark and equivalence

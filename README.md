@@ -12,8 +12,8 @@ EEG/EMG blind source separation and is a drop-in replacement for EEGLAB's AMICA:
 single-model output is byte-identical to the Fortran reference and loads directly
 in EEGLAB.
 
-Single-model results match the Fortran reference (log-likelihood ~ -3.40,
-Hungarian-matched component correlation ~ 0.998 with Newton disabled); see the
+Single-model results match the Fortran reference (Hungarian-matched component correlation ~ 0.998
+on well-determined data, Newton disabled); see the
 [documentation](https://eeglab.org/pyAMICA/) for validation details and the
 backend-selection guide.
 
