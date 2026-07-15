@@ -387,6 +387,12 @@ uv run python validate_implementations.py     # single- and multi-model parity r
 uv run pytest                                  # the full parity/behavior test suite
 ```
 
+The single-model conformity row above (`do_newton=0`, 0.998 correlation / 0.006 Amari) is the
+5-seed, 2000-iteration sweep produced by
+`uv run python .context/issue-144-parity-data-adequacy/bundled_sample_newton0.py 5 2000`;
+`validate_implementations.py`'s own CLI defaults (a single seed, 100 iterations, `do_newton` read
+from `sample_params.json` where it is `true`) do not reproduce this row directly.
+
 The multi-model ensemble and Amari detail regenerate from saved fits (no re-fitting) with
 `uv run python .context/issue-27/amari_distance.py`. The cross-platform benchmark and equivalence
 figures are produced by `benchmarks/benchmark_decompose.py` (and the sweep scripts alongside it);

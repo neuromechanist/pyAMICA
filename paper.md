@@ -32,7 +32,7 @@ bibliography: paper.bib
 Independent Component Analysis (ICA) is a standard method for separating electroencephalography (EEG) and electromyography (EMG) recordings into maximally independent sources,
 which isolates brain, muscle, and artifact activity for downstream analysis. Adaptive Mixture ICA (AMICA) generalizes single-model ICA to a mixture of ICA models with adaptive source densities,
 and produces the most dipolar (and thus most physiologically interpretable) component decompositions of EEG among the widely used algorithms benchmarked by @delorme2012independent.
-Its reference implementation, however, is a Fortran program parallelized with the Message Passing Interface (MPI) and distributed as a compiled binary driven from MATLAB/EEGLAB,
+Its reference implementation is a Fortran program parallelized with the Message Passing Interface (MPI) and distributed as a compiled binary driven from MATLAB/EEGLAB,
 which is difficult to install, runs only on the CPU, and is not usable from a Python scientific workflow.
 
 `pyAMICA` is a Python implementation of AMICA that reproduces the reference Fortran results within numerical tolerance while running on the CPU, NVIDIA GPUs (CUDA), and Apple GPUs (Apple's MLX array framework [@mlx2023]).
@@ -61,7 +61,7 @@ and that is validated to reproduce the Fortran reference numerically, is needed 
 General-purpose Python ICA implementations do not fill this gap. `scikit-learn` and `MNE-Python` provide FastICA [@hyvarinen2000independent] and Infomax [@bell1995information; @lee1999independent],
 and Picard [@ablin2018faster] provides a faster maximum-likelihood ICA,
 but none implement AMICA's mixture of models, adaptive generalized-Gaussian source densities, or Newton updates,
-and so they do not reproduce AMICA decompositions. `pyAMICA` targets researchers who need AMICA specifically:
+and so they do not reproduce AMICA decompositions. `pyAMICA` targets researchers who need AMICA:
 EEG/EMG analysts who want AMICA-quality decompositions inside a Python pipeline,
 users of GPU hardware who want faster runs than the CPU-only binary, and methodologists who need a transparent reference implementation to inspect and build on.
 
@@ -75,7 +75,7 @@ logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture o
 `pyAMICA`'s conformity with the reference binary is measured on one exemplar real EEG recording (the bundled EEGLAB tutorial dataset: 32 channels, 30504 samples at 128 Hz, ~238 s; Table 1);
 a multi-subject, multi-dataset validation is planned future work.
 Both implementations were run for AMICA's usual 2000 iterations with otherwise-default parameters
-(two separate configuration files currently drive them, JSON for `pyAMICA` and Fortran's own text format, with only a subset of settings transcribed; a shared-format reader is planned),
+(two separate configuration files drive them, JSON for `pyAMICA` and Fortran's own text format, with a subset of settings transcribed; a shared-format reader is planned),
 using two complementary metrics:
 Hungarian-matched component correlation, and the Amari distance [@amari1996new], a standard unmixing-matrix comparison metric that needs no assignment step since it is permutation- and scale-invariant by construction.
 Both agree for the single model (mean values; Table 1), and the source-density score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions.
@@ -91,13 +91,13 @@ Equivalence is claimed for the partition structure; the multi-model log-likeliho
 |---|---|---|
 | Single-model | Log-likelihood gap to Fortran (mean per-sample-channel LL, $-3.4018$) | within ~0.005 |
 | Single-model | Conformity with Fortran (Newton off) | 0.998 / 0.006 |
-| Single-model | Score functions and sufficient statistics | exact to floating-point resolution ($\sim\!10^{-15}$) |
+| Single-model | Score functions (non-default families) and sufficient statistics | exact to floating-point resolution ($\sim\!10^{-15}$) |
 | Multi-model | Single-run magnitude (`pyAMICA`-Fortran; Fortran-Fortran) | 0.65; 0.64 (sd 0.05) / 0.163; 0.174 (sd 0.02) |
 | Multi-model | Ensemble equivalence, 20 runs each: mean difference, between $-$ within-Fortran (permutation $p$) | $+0.011$ ($p=0.96$) / $-0.011$ ($p>0.999$) |
 
 : Single-model parity and multi-model distributional equivalence of `pyAMICA`
 with the Fortran reference on the bundled sample EEG. All values are means (sd shown where relevant)
-over matched components (single-model) or over the 190 pairwise ensemble comparisons (multi-model).
+over matched components (single-model) or 190 within- and 400 cross-implementation pairs (multi-model).
 Full methodology and reproduction steps are in the documentation.
 
 ![Multi-model solution-ensemble partition-correlation distributions (panel A) and log-likelihood distributions (panel B) for 20 `pyAMICA` and 20 Fortran fits of the sample EEG; dashed lines mark each distribution's mean.
@@ -114,7 +114,7 @@ with enough cores pinned it beats the CUDA GPU on the workstation (Table 2), tho
 it does not catch Apple's MLX on laptop hardware.
 A data-size sweep further shows cross-backend component equivalence rising with frames per channel and plateauing near 0.98 once the decomposition is well-determined,
 where two independent double-precision implementations (native Fortran and PyTorch-CUDA) agree at a mean of 0.995;
-single-precision runs agree with double precision to seven significant digits, so double precision remains the default for parity.
+single-precision runs agree with double precision to four to five significant digits, so double precision remains the default for parity.
 
 | Backend (device) | Precision | ms / iteration |
 |---|---|---:|
