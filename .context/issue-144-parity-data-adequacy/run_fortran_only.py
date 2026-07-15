@@ -55,6 +55,17 @@ def main():
             lines.append(f"max_threads {threads}")
         elif ln.startswith("pcakeep"):
             lines.append(f"pcakeep {nw}")
+        elif ln.startswith("use_min_dll"):
+            # Force the full max_iter budget instead of Fortran's own
+            # early-stopping (matches benchmark_dimsweep.py's convention for
+            # fixed-length, matched runs): otherwise Fortran can converge and
+            # stop well short of 2000 while AMICATorchNG (no early-stopping
+            # equivalent) keeps optimizing past that point, letting weakly-
+            # determined components drift to a different, still-valid optimum
+            # -- an asymmetry, not real disagreement.
+            lines.append("use_min_dll 0")
+        elif ln.startswith("use_grad_norm"):
+            lines.append("use_grad_norm 0")
         else:
             lines.append(ln)
     (out_dir / "input.param").write_text("\n".join(lines) + "\n")

@@ -68,6 +68,15 @@ def main():
                 lines.append(f"field_dim {field}")
             elif ln.startswith("max_iter"):
                 lines.append(f"max_iter {max_iter}")
+            elif ln.startswith("use_min_dll"):
+                # Force the full max_iter budget instead of Fortran's own
+                # early-stopping: otherwise Fortran can converge and stop
+                # well short of max_iter while AMICATorchNG (no equivalent)
+                # keeps optimizing past that point, drifting weakly-
+                # determined components to a different, still-valid optimum.
+                lines.append("use_min_dll 0")
+            elif ln.startswith("use_grad_norm"):
+                lines.append("use_grad_norm 0")
             else:
                 lines.append(ln)
         (d / "input.param").write_text("\n".join(lines) + "\n")

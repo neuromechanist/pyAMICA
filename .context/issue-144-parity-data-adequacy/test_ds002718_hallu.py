@@ -45,6 +45,7 @@ def main():
     n_seeds = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     max_iter = int(sys.argv[3]) if len(sys.argv) > 3 else 2000
     threads = int(sys.argv[4]) if len(sys.argv) > 4 else 24
+    seed_offset = int(sys.argv[5]) if len(sys.argv) > 5 else 0
 
     data = np.load(npy_path).astype(np.float64)
     nw, field = data.shape
@@ -60,7 +61,7 @@ def main():
     write_fdt(data, fdt_path)
 
     results = []
-    for seed in range(n_seeds):
+    for seed in range(seed_offset, seed_offset + n_seeds):
         d = work / f"run_{seed}"
         (d / "fortran_output").mkdir(parents=True, exist_ok=True)
         os.symlink(fdt_path, d / "data.fdt")
@@ -84,6 +85,17 @@ def main():
                 # W comes back reduced-rank (the template's literal 32 is
                 # only correct by coincidence at nw=32).
                 lines.append(f"pcakeep {nw}")
+            elif ln.startswith("use_min_dll"):
+                # Force the full max_iter budget instead of Fortran's own
+                # early-stopping (matches benchmark_dimsweep.py's convention):
+                # otherwise Fortran can converge and stop well short of
+                # max_iter while AMICATorchNG (no early-stopping equivalent)
+                # keeps optimizing past that point, letting weakly-determined
+                # components drift to a different, still-valid optimum -- an
+                # asymmetry, not real disagreement.
+                lines.append("use_min_dll 0")
+            elif ln.startswith("use_grad_norm"):
+                lines.append("use_grad_norm 0")
             else:
                 lines.append(ln)
         (d / "input.param").write_text("\n".join(lines) + "\n")
