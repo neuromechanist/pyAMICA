@@ -78,7 +78,7 @@ Both implementations were run for AMICA's usual 2000 iterations with otherwise-d
 (two separate configuration files currently drive them, JSON for `pyAMICA` and Fortran's own text format, with only a subset of settings transcribed; a shared-format reader is planned),
 using two complementary metrics:
 Hungarian-matched component correlation, and the Amari distance [@amari1996new], a standard unmixing-matrix comparison metric that needs no assignment step since it is permutation- and scale-invariant by construction.
-Both agree closely for the single model (mean values; Table 1), and the source-density score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions.
+Both agree for the single model (mean values; Table 1), and the source-density score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions.
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar for the multi-model case;
 it is instead assessed by distributional equivalence across ensembles of 20 runs each (\autoref{fig:ensemble}).
 Both metrics again agree: a run-level permutation test, which permutes the 40 runs as intact units to respect the dependence among pairwise values,
@@ -90,7 +90,7 @@ Equivalence is claimed for the partition structure; the multi-model log-likeliho
 | Regime | Metric | Result (mean; correlation / Amari distance) |
 |---|---|---|
 | Single-model | Log-likelihood gap to Fortran (mean per-sample-channel LL, $-3.4018$) | within ~0.005 |
-| Single-model | Conformity with Fortran | 0.997 / 0.006 |
+| Single-model | Conformity with Fortran (Newton off) | 0.998 / 0.006 |
 | Single-model | Score functions and sufficient statistics | exact to floating-point resolution ($\sim\!10^{-15}$) |
 | Multi-model | Single-run magnitude (`pyAMICA`-Fortran; Fortran-Fortran) | 0.65; 0.64 (sd 0.05) / 0.163; 0.174 (sd 0.02) |
 | Multi-model | Ensemble equivalence, 20 runs each: mean difference, between $-$ within-Fortran (permutation $p$) | $+0.011$ ($p=0.96$) / $-0.011$ ($p>0.999$) |
@@ -98,14 +98,15 @@ Equivalence is claimed for the partition structure; the multi-model log-likeliho
 : Single-model parity and multi-model distributional equivalence of `pyAMICA`
 with the Fortran reference on the bundled sample EEG. All values are means (sd shown where relevant)
 over matched components (single-model) or over the 190 pairwise ensemble comparisons (multi-model).
+Full methodology and reproduction steps are in the documentation.
 
 ![Multi-model solution-ensemble partition-correlation distributions (panel A) and log-likelihood distributions (panel B) for 20 `pyAMICA` and 20 Fortran fits of the sample EEG; dashed lines mark each distribution's mean.
 The within-Fortran, within-`pyAMICA`, and between-implementation correlation distributions overlap,
 so the single-run correlation reflects the estimator's intrinsic run-to-run spread rather than a gap to the reference.
-Panel B's apparent separation is a mean log-likelihood gap of only 0.009 on an axis spanning ~0.035.\label{fig:ensemble}](docs/assets/figures/multimodel-ensemble.png){ width=100% }
+Panel B's apparent separation is a 0.009 log-likelihood gap on a ~0.035 axis.\label{fig:ensemble}](docs/assets/figures/multimodel-ensemble.png){ width=100% }
 
 All backends converge to the same single-model log-likelihood on real EEG (maximum pairwise difference ~0.003).
-On Apple Silicon the MLX backend is the fastest option and is roughly flat with channel count (15-25 ms per iteration from 16 to 70 channels; see the documentation),
+On Apple Silicon the MLX backend is the fastest option and is flat with channel count (15-25 ms per iteration from 16 to 70 channels; see the documentation),
 about eight times faster than double-precision multithreaded CPU; PyTorch-MPS is not a win (at or worse than the CPU).
 On NVIDIA hardware double-precision CUDA is the reproducible path and is overhead-bound at EEG scale,
 so single precision gives it little additional speedup (Table 2). Native Fortran itself scales with CPU cores, unlike the CPU backends above:
@@ -129,7 +130,7 @@ single-precision runs agree with double precision to seven significant digits, s
 `pdftype`=0, `block_size`=512; warm, minimum of repeated runs).
 CPU, MPS, and MLX on Apple Silicon; CUDA on a separate NVIDIA RTX 4090;
 CUDA float32 is comparable (~36 ms).
-The two native-Fortran rows are from a separate core-count sweep (documentation) on the same two machines, at the core count where each backend's throughput levels off;
+The two native-Fortran rows are from a separate core-count sweep (documentation) on the same two machines, at each backend's throughput plateau;
 the other CPU rows above use the platform default thread count, so they are not core-matched to Fortran.
 Unlike the correctness comparison, this benchmark uses external data (OpenNeuro ds002718, one subject so far) and specific GPU hardware.
 

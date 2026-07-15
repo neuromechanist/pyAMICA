@@ -13,7 +13,7 @@ single-model output is byte-identical to the Fortran reference and loads directl
 in EEGLAB.
 
 Single-model results match the Fortran reference (log-likelihood ~ -3.40,
-Hungarian-matched component correlation ~ 0.997); see the
+Hungarian-matched component correlation ~ 0.998 with Newton disabled); see the
 [documentation](https://eeglab.org/pyAMICA/) for validation details and the
 backend-selection guide.
 

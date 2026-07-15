@@ -18,7 +18,7 @@ Throughout, IC abbreviates independent component and LL log-likelihood.
 |---|---|---|
 | Source-density score and log-density (non-GG families) | vs the literal `amica15.f90` expressions | bit-exact ($<10^{-12}$) |
 | Per-block sufficient statistics and one M-step | vs Fortran | bit-exact ($\sim\!10^{-15}$) |
-| Single-model solution | log-likelihood, component correlation, Amari distance vs Fortran | LL within ~0.005 of $-3.4018$; correlation 0.997; Amari 0.006 |
+| Single-model solution (`do_newton=0`) | log-likelihood, component correlation, Amari distance vs Fortran | LL within ~0.005 of $-3.4018$; correlation 0.998; Amari 0.006 |
 | Multi-model solution | distributional equivalence over 20-run ensembles | indistinguishable from Fortran's own run-to-run spread ($p = 0.96$) |
 | Device and precision invariance | same independent components across CPU/CUDA/MPS/MLX, float32/float64, Linux/macOS | identical (1.000) across all eight torch/MLX combinations |
 | Cross-backend log-likelihood | converged LL across every backend | agree to ~3 significant digits (max pairwise ~0.003) |
@@ -36,11 +36,13 @@ a standard unmixing-matrix comparison metric (Amari, Cichocki & Yang, 1996) that
 
 ## Single-model parity
 
-On real sample EEG the natural-gradient backend reaches Fortran's solution:
+On real sample EEG, with Newton disabled (`do_newton=0`), the natural-gradient backend reaches
+Fortran's solution, averaged over 5 seeds at a matched 2000-iteration budget:
 
 - Log-likelihood ~ -3.40 (Fortran ~ -3.4018).
-- Hungarian-matched component correlation ~0.997, clearing the >0.95 gate.
-- Amari distance ~0.006.
+- Hungarian-matched component correlation ~0.998 (Fortran-vs-Fortran self-consistency over the
+  same 5 seeds: ~0.998), clearing the >0.95 gate.
+- Amari distance ~0.006 (Fortran-vs-Fortran: ~0.005).
 
 The fixed source-density families are bit-exact against the literal Fortran score/derivative expressions (~1e-15),
 and the backend converges to the binary's solution within ~0.005 log-likelihood.
