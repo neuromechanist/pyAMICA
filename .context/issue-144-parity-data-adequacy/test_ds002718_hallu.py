@@ -78,6 +78,12 @@ def main():
                 lines.append(f"max_iter {max_iter}")
             elif ln.startswith("max_threads"):
                 lines.append(f"max_threads {threads}")
+            elif ln.startswith("pcakeep"):
+                # AMICATorchNG has no PCA source reduction (n_sources ==
+                # n_channels always), so pcakeep must track nw or Fortran's
+                # W comes back reduced-rank (the template's literal 32 is
+                # only correct by coincidence at nw=32).
+                lines.append(f"pcakeep {nw}")
             else:
                 lines.append(ln)
         (d / "input.param").write_text("\n".join(lines) + "\n")
