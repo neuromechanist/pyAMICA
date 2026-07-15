@@ -104,3 +104,14 @@ exclude_lines = [
 # analysis scripts that ARE tested (loaded via importlib from the test suite)
 # were fixed on their own merits rather than excluded. (issue #122)
 exclude = [".context/**"]
+
+[tool.ty.rules]
+# benchmarks/benchmark_decompose.py lazy-imports `mne` (the optional `viz`
+# extra) with a `# ty: ignore[unresolved-import]`, since CI's base env (no
+# extras, matching the other jobs) can't resolve it. Whether that comment is
+# "used" or "unused" then depends on whether the local env happens to have the
+# extra installed, so this rule would otherwise flip between a false pass and
+# a false "unused-ignore-comment" warning depending on the developer's own
+# environment rather than the code. Disabled project-wide rather than per-line
+# since there's no per-environment suppression for the checker itself.
+unused-ignore-comment = "ignore"
