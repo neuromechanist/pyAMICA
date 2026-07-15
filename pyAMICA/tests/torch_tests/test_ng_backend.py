@@ -1120,6 +1120,8 @@ def test_end_to_end_correlation_vs_fortran():
     assert m.n_newton_fallbacks == 0
 
 
+@pytest.mark.slow
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_end_to_end_correlation_vs_fortran_from_sample_params_json():
     """Same correctness bar as ``test_end_to_end_correlation_vs_fortran``, but
     built the way a user actually reproduces the paper's Table 1 numbers: via
