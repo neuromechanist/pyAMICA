@@ -1120,6 +1120,45 @@ def test_end_to_end_correlation_vs_fortran():
     assert m.n_newton_fallbacks == 0
 
 
+def test_end_to_end_correlation_vs_fortran_from_sample_params_json():
+    """Same correctness bar as ``test_end_to_end_correlation_vs_fortran``, but
+    built the way a user actually reproduces the paper's Table 1 numbers: via
+    ``run_pytorch_amica``, which maps ``sample_data/sample_params.json`` onto
+    ``AMICATorchNG`` kwargs (the documented ``validate_implementations.py``
+    path), not via hand-picked kwargs.
+
+    This is the regression guard the hand-picked-kwargs test above cannot be:
+    a bad JSON setting with an ``AMICATorchNG`` equivalent (e.g.
+    ``do_approx_sphere``) silently overrides that constructor's safe default
+    when loaded through this path, but never touches ``_fresh_ng``'s explicit
+    kwargs above, so it can regress here while the other test stays green.
+    """
+    import sys
+
+    root = Path(__file__).resolve().parents[2].parent
+    sys.path.insert(0, str(root))
+    from validate_implementations import (
+        load_sample_data,
+        run_fortran_amica,
+        run_pytorch_amica,
+        compare_results,
+        amari_distance,
+    )
+
+    data, params = load_sample_data()
+    params = dict(params)
+    params["max_iter"] = 100
+    out = root / "pyAMICA" / "tests" / "torch_tests" / "_ng_e2e_json_tmp"
+    out.mkdir(parents=True, exist_ok=True)
+    fortran = run_fortran_amica(data, params, out, SEED)
+    assert fortran is not None, "Fortran binary run failed"
+
+    ng_results = run_pytorch_amica(data, params, out, SEED)
+    cmp = compare_results(fortran, ng_results)
+    assert cmp["mean_correlation"] > 0.95
+    assert amari_distance(fortran["W"], ng_results["W"]) < 0.05
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
 def test_full_fit_parity_numpy_vs_ng(tmp_path):

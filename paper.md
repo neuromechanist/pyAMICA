@@ -46,7 +46,7 @@ which the CPU-only binary does not offer and which is numerically faithful (agre
 a single-model output file is byte-identical in layout to a native AMICA file and needs no manual re-interpretation,
 and multi-model output round-trips through the same loader. Correctness is defined as parity with the Fortran reference for the single-model case and, because multi-model AMICA is not partition-identifiable, as distributional equivalence for the multi-model case;
 both are validated on real EEG against the reference binary.
-A minimal example is a three-line scikit-learn-style call, `AMICA(n_models=1, n_mix=3).fit(X)` on a `(channels, samples)` array (full workflow in the README).
+A minimal example is a scikit-learn-style call, `AMICA(n_models=1, n_mix=3).fit(X)` on a `(channels, samples)` array (full workflow in the README).
 The software is at <https://github.com/sccn/pyAMICA> (archived at doi:10.5281/zenodo.21312148).
 
 # Statement of need
@@ -72,9 +72,11 @@ exact-EM mixture updates, a positive-definite Newton step [@palmer2008newton],
 symmetric zero-phase-component-analysis (ZCA) sphering, the five source-density families of the reference (generalized Gaussian, Gaussian,
 logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture of ICA models, and component sharing across models.
 
-`pyAMICA`'s conformity with the reference binary is measured on one exemplar real EEG recording (the bundled EEGLAB tutorial dataset: 32 channels, 30504 samples at 128 Hz, ~238 s; Table 1)
--- a multi-subject, multi-dataset validation is planned future work --
-running both implementations for AMICA's usual 2000 iterations with otherwise-default parameters, with two complementary metrics:
+`pyAMICA`'s conformity with the reference binary is measured on one exemplar real EEG recording (the bundled EEGLAB tutorial dataset: 32 channels, 30504 samples at 128 Hz, ~238 s; Table 1);
+a multi-subject, multi-dataset validation is planned future work.
+Both implementations were run for AMICA's usual 2000 iterations with otherwise-default parameters
+(two separate configuration files currently drive them, JSON for `pyAMICA` and Fortran's own text format, with only a subset of settings transcribed; a shared-format reader is planned),
+using two complementary metrics:
 Hungarian-matched component correlation, and the Amari distance [@amari1996new], a standard unmixing-matrix comparison metric that needs no assignment step since it is permutation- and scale-invariant by construction.
 Both agree closely for the single model (mean values; Table 1), and the source-density score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions.
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar for the multi-model case;
@@ -100,15 +102,15 @@ over matched components (single-model) or over the 190 pairwise ensemble compari
 ![Multi-model solution-ensemble partition-correlation distributions (panel A) and log-likelihood distributions (panel B) for 20 `pyAMICA` and 20 Fortran fits of the sample EEG; dashed lines mark each distribution's mean.
 The within-Fortran, within-`pyAMICA`, and between-implementation correlation distributions overlap,
 so the single-run correlation reflects the estimator's intrinsic run-to-run spread rather than a gap to the reference.
-Panel B's apparent separation is a mean log-likelihood gap of only 0.009 on an axis spanning ~0.02.\label{fig:ensemble}](docs/assets/figures/multimodel-ensemble.png){ width=100% }
+Panel B's apparent separation is a mean log-likelihood gap of only 0.009 on an axis spanning ~0.035.\label{fig:ensemble}](docs/assets/figures/multimodel-ensemble.png){ width=100% }
 
 All backends converge to the same single-model log-likelihood on real EEG (maximum pairwise difference ~0.003).
 On Apple Silicon the MLX backend is the fastest option and is roughly flat with channel count (15-25 ms per iteration from 16 to 70 channels; see the documentation),
 about eight times faster than double-precision multithreaded CPU; PyTorch-MPS is not a win (at or worse than the CPU).
 On NVIDIA hardware double-precision CUDA is the reproducible path and is overhead-bound at EEG scale,
 so single precision gives it little additional speedup (Table 2). Native Fortran itself scales with CPU cores, unlike the CPU backends above:
-with enough cores pinned it is competitive with, or faster than, the GPU it is compared against on each machine (Table 2),
-though only by dedicating most cores of a much larger, hotter host than a laptop GPU.
+with enough cores pinned it beats the CUDA GPU on the workstation (Table 2), though only by dedicating most cores of a larger, hotter host than a laptop GPU;
+it does not catch Apple's MLX on laptop hardware.
 A data-size sweep further shows cross-backend component equivalence rising with frames per channel and plateauing near 0.98 once the decomposition is well-determined,
 where two independent double-precision implementations (native Fortran and PyTorch-CUDA) agree at a mean of 0.995;
 single-precision runs agree with double precision to seven significant digits, so double precision remains the default for parity.
