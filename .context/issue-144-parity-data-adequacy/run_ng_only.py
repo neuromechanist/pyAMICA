@@ -30,6 +30,7 @@ def main():
     seed = int(sys.argv[2])
     max_iter = int(sys.argv[3])
     out_dir = Path(sys.argv[4])
+    do_newton = bool(int(sys.argv[5])) if len(sys.argv) > 5 else True
 
     data = np.load(npy_path).astype(np.float64)
     nw, field = data.shape
@@ -39,10 +40,13 @@ def main():
     )
     fort_ll = float((out_dir / "fortran_ll.txt").read_text())
 
-    print(f"seed {seed}: running AMICATorchNG on CUDA...", flush=True)
+    print(
+        f"seed {seed}: running AMICATorchNG on CUDA (do_newton={do_newton})...",
+        flush=True,
+    )
     m = AMICATorchNG(
         n_channels=nw, n_models=1, n_mix=3, block_size=512, lrate=0.05,
-        minlrate=1e-8, lratefact=0.5, maxdecs=3, do_newton=True,
+        minlrate=1e-8, lratefact=0.5, maxdecs=3, do_newton=do_newton,
         newt_start=50, newt_ramp=10, newtrate=1.0, rho0=1.5, minrho=1.0,
         maxrho=2.0, rholrate=0.05, rholratefact=0.5, invsigmin=0.0,
         invsigmax=100.0, doscaling=True, scalestep=1, seed=seed, device="cuda",

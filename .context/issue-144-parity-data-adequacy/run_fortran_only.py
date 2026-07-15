@@ -29,6 +29,7 @@ def main():
     max_iter = int(sys.argv[3])
     threads = int(sys.argv[4])
     out_dir = Path(sys.argv[5])
+    do_newton = int(sys.argv[6]) if len(sys.argv) > 6 else 1
     out_dir.mkdir(parents=True, exist_ok=True)
 
     data = np.load(npy_path).astype(np.float64)
@@ -66,6 +67,8 @@ def main():
             lines.append("use_min_dll 0")
         elif ln.startswith("use_grad_norm"):
             lines.append("use_grad_norm 0")
+        elif ln.startswith("do_newton"):
+            lines.append(f"do_newton {do_newton}")
         else:
             lines.append(ln)
     (out_dir / "input.param").write_text("\n".join(lines) + "\n")
@@ -73,7 +76,10 @@ def main():
     orig = os.getcwd()
     os.chdir(out_dir)
     env = {**os.environ, "OMP_NUM_THREADS": str(threads)}
-    print(f"seed {seed}: starting Fortran ({threads} threads)...", flush=True)
+    print(
+        f"seed {seed}: starting Fortran ({threads} threads, do_newton={do_newton})...",
+        flush=True,
+    )
     try:
         r = subprocess.run(
             [str(BIN), "input.param"], capture_output=True, text=True,
