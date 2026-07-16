@@ -80,28 +80,6 @@ def load_sample_data() -> Tuple[np.ndarray, Dict]:
     return data, params
 
 
-def create_fortran_params(params: Dict, output_dir: Path, seed: int) -> Path:
-    """Create parameter file for Fortran AMICA."""
-    param_file = output_dir / "params.txt"
-
-    # Create Fortran-style parameter file
-    with open(param_file, "w") as f:
-        f.write(f"datafile '{output_dir}/data.fdt'\n")
-        f.write(f"num_chans {params['data_dim']}\n")
-        f.write(f"num_frames {params['field_dim'][0]}\n")
-        f.write(f"num_models {params.get('num_models', 1)}\n")
-        f.write(f"num_mix {params.get('num_mix', 3)}\n")
-        f.write(f"max_iter {params.get('max_iter', 100)}\n")
-        f.write(f"lrate {params.get('lrate', 0.05)}\n")
-        f.write(f"do_mean {1 if params.get('do_mean', True) else 0}\n")
-        f.write(f"do_sphere {1 if params.get('do_sphere', True) else 0}\n")
-        f.write(f"do_newton {1 if params.get('do_newton', False) else 0}\n")
-        f.write(f"outdir '{output_dir}/fortran_output'\n")
-        f.write(f"seed {seed}\n")
-
-    return param_file
-
-
 def run_fortran_amica(
     data: np.ndarray, params: Dict, output_dir: Path, seed: int
 ) -> Optional[Dict]:

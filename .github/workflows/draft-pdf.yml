@@ -1,8 +1,11 @@
 name: Draft PDF
 
 # Builds paper.md into a JOSS-formatted PDF (Pandoc + inara, via the official
-# openjournals action) and uploads it as an artifact. This verifies the paper
-# compiles under JOSS's toolchain before submission and gives a per-push preview.
+# openjournals action). Not a JOSS submission step -- this just keeps the
+# committed paper.pdf in the repo root in sync with paper.md/paper.bib for
+# local review. On a direct push it commits the rebuilt PDF back (skipped for
+# pull_request runs, since a PR checkout is a detached merge ref, not the head
+# branch, so pushing there would go to the wrong place or fail outright).
 on:
   push:
     paths:
@@ -15,6 +18,9 @@ on:
       - paper.bib
       - .github/workflows/draft-pdf.yml
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   paper:
@@ -34,3 +40,15 @@ jobs:
           name: paper
           # The action writes the compiled PDF next to the paper source.
           path: paper.pdf
+      - name: Commit and push rebuilt PDF
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add paper.pdf
+          if ! git diff --cached --quiet; then
+            git commit -m "Rebuild paper.pdf [skip ci]"
+            git push
+          else
+            echo "paper.pdf unchanged, nothing to commit"
+          fi

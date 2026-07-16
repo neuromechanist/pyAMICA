@@ -13,7 +13,7 @@ use_grad_norm 1
 min_grad_norm 1.000000e-07
 num_mix_comps 3
 pdftype 0
-max_iter 200
+max_iter 2000
 num_samples 1
 data_dim 32
 field_dim 30504
