@@ -31,9 +31,15 @@ scope for this BSD-3-Clause project. This port instead takes an explicit
 ``unmixing`` matrix: callers that want the sphere-then-unmixing composition
 (e.g. wiring MIR to a fitted AMICA model) compose it themselves before calling
 ``mir``.
+
+MIR follows the separation-quality-metric approach introduced by Delorme,
+Palmer, Onton, Oostenveld, and Makeig (2012), "Independent EEG sources are
+dipolar", PLoS ONE (this repo's ``paper.bib`` key ``delorme2012independent``).
 """
 
 import numpy as np
+
+from ._common import resolve_nbins, validate_signal_matrix
 
 _MIN_ABS_EIGENVALUE = 1e-10
 
@@ -42,20 +48,9 @@ def _marginal_entropies(
     u: np.ndarray, nbins: int | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
     """Port of getMIR.m's nested getent4: per-row binned differential entropy."""
-    if not np.all(np.isfinite(u)):
-        raise ValueError(
-            "_marginal_entropies: input contains non-finite (NaN/Inf) values; "
-            "differential entropy is undefined for non-finite samples."
-        )
+    validate_signal_matrix(u)
     n_signals, n_samples = u.shape
-    if nbins is None:
-        nbins = round(3 * np.log2(1 + n_samples / 10))
-    if nbins < 1:
-        raise ValueError(
-            f"_marginal_entropies: nbins={nbins} is not >= 1 (n_samples="
-            f"{n_samples} is too small for the default nbins formula; pass "
-            "an explicit nbins or supply more samples)."
-        )
+    nbins = resolve_nbins(n_samples, nbins)
 
     entropies = np.empty(n_signals)
     variances = np.empty(n_signals)
@@ -63,12 +58,6 @@ def _marginal_entropies(
         row = u[i]
         umin = row.min()
         umax = row.max()
-        if umax == umin:
-            raise ValueError(
-                f"_marginal_entropies: channel {i} is constant (all "
-                f"{n_samples} samples == {umin!r}); differential entropy is "
-                "undefined for a zero-variance channel."
-            )
         delta = (umax - umin) / nbins
         # MATLAB's round() is half-away-from-zero; np.round is half-to-even.
         # Immaterial here since exact bin-boundary ties have probability zero
