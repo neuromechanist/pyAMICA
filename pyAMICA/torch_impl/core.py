@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -619,6 +619,13 @@ class AMICATorchNG:
         self.sphere: Optional[torch.Tensor] = None
         self.sldet = 0.0
 
+        # Sphered training data, set by fit() (issue #155): retained so
+        # write_amica_output can recompute the full-dataset LLt from the
+        # CURRENT parameters at write time. Not a fitted parameter (absent from
+        # state_dict()/_PARAM_TENSORS): a model restored via from_state_dict()
+        # has no training data, so write_amica_output writes no LLt for it.
+        self._X_t: Optional[torch.Tensor] = None
+
     # ------------------------------------------------------------------
     # Preprocessing
     # ------------------------------------------------------------------
@@ -852,6 +859,37 @@ class AMICATorchNG:
         statistic; Fortran ``P``/``loglik``, amica17.f90:1372)."""
         logV, *_ = self._forward(X)
         return torch.logsumexp(logV, dim=1)  # (batch,)
+
+    def _compute_full_posterior_ll(
+        self, X_t: torch.Tensor
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Recompute the per-model/per-sample log-likelihood over every sample
+        of ``X_t`` (the sphered training data retained by ``fit()``), for the
+        Fortran ``LLt`` output (issue #155).
+
+        Reuses ``_forward``'s ``logV`` (Fortran's ``modloglik``: already
+        includes the ``log|det W|`` + ``sldet`` Jacobian terms) rather than any
+        value accumulated during training, so this reflects ``self``'s current
+        parameters -- correct even after a keep-best rollback (issue #51) to an
+        earlier iterate than the training loop's last.
+
+        Returns
+        -------
+        Lht : ndarray of shape (n_models, n_samples)
+        Lt : ndarray of shape (n_samples,)
+        """
+        n_samples = X_t.shape[1]
+        Lht = np.zeros((self.n_models, n_samples))
+        Lt = np.zeros(n_samples)
+
+        for start in range(0, n_samples, self.block_size):
+            end = min(start + self.block_size, n_samples)
+            logV, *_ = self._forward(X_t[:, start:end])
+            lt_block = torch.logsumexp(logV, dim=1)
+            Lht[:, start:end] = logV.T.detach().cpu().numpy()
+            Lt[start:end] = lt_block.detach().cpu().numpy()
+
+        return Lht, Lt
 
     def _get_block_updates(self, X: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Compute sufficient-statistic accumulators for one data block.
@@ -1546,6 +1584,7 @@ class AMICATorchNG:
 
         X_t = self._preprocess(X)
         n_total = X_t.shape[1]
+        self._X_t = X_t
 
         self._initialize_parameters()
         self.ll_history = []
@@ -1949,6 +1988,16 @@ class AMICATorchNG:
         ):
             ll = ll[: int(np.argmax(ll)) + 1]
 
+        # LLt (Fortran's per-sample/per-model log-likelihood, issue #155):
+        # recomputed fresh from the CURRENT parameters over the retained
+        # sphered training data. Only fit() sets _X_t, so a model restored via
+        # from_state_dict() (no training data) writes without LLt, same as a
+        # Fortran run with write_LLt disabled.
+        if self._X_t is not None:
+            Lht, Lt = self._compute_full_posterior_ll(self._X_t)
+        else:
+            Lht = Lt = None
+
         write_amicaout(
             outdir,
             gm=_np(self.gm),
@@ -1963,6 +2012,8 @@ class AMICATorchNG:
             comp_list=_np(self.comp_list),
             ll=ll,
             A=_np(self.A),
+            Lht=Lht,
+            Lt=Lt,
         )
 
     # ------------------------------------------------------------------

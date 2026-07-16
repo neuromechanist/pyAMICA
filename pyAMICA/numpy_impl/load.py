@@ -63,14 +63,16 @@ def write_amicaout(
     comp_list,
     ll,
     A=None,
+    Lht=None,
+    Lt=None,
 ):
     """Write a fitted AMICA model as the Fortran/EEGLAB binary output directory.
 
     Emits the raw little-endian files that :func:`loadmodout` and EEGLAB's
     ``loadmodout15.m`` read: ``gm``, ``W``, ``S``, ``mean``, ``c``, ``alpha``,
-    ``mu``, ``sbeta``, ``rho``, ``comp_list`` (1-based ``int32``) and ``LL``.
-    This is the write counterpart of :func:`loadmodout`, so a pyAMICA fit (either
-    backend) drops into an EEGLAB workflow (issue #92).
+    ``mu``, ``sbeta``, ``rho``, ``comp_list`` (1-based ``int32``), ``LL`` and
+    (when given) ``LLt``. This is the write counterpart of :func:`loadmodout`,
+    so a pyAMICA fit (either backend) drops into an EEGLAB workflow (issue #92).
 
     Both backends store these arrays in the same convention, so for a single
     model the bytes are identical to the Fortran reference's ``amicaout`` files;
@@ -93,6 +95,12 @@ def write_amicaout(
         Mixing matrix. ``loadmodout15`` derives ``A`` from ``W`` and ``S`` and
         ignores this file; it is written (when given) only so pyAMICA's own
         ``load_results`` can restore ``A`` directly for the viz helpers.
+    Lht : array-like of shape (num_models, n_samples), optional
+        Per-model per-sample log-likelihood (Fortran ``modloglik``). Written
+        together with ``Lt`` as the ``LLt`` file (issue #155); omitted (as
+        before) when either is ``None``.
+    Lt : array-like of shape (n_samples,), optional
+        Total per-sample log-likelihood (Fortran ``loglik``).
     """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +132,12 @@ def write_amicaout(
     # comp_list is 1-based on disk (loadmodout subtracts 1 when indexing).
     _w("comp_list", np.asarray(comp_list) + 1, dtype=np.int32, order="F")
     _w("LL", np.asarray(ll))
+    if Lht is not None and Lt is not None:
+        # Fortran writes, per timepoint, each model's log-likelihood then the
+        # total (write_output, amica15.f90:2308-2333) -- a column-major
+        # (num_models+1, n_samples) matrix. Stacking Lt as the last row and
+        # flattening order="F" reproduces that per-timepoint sequence exactly.
+        _w("LLt", np.vstack([np.atleast_2d(Lht), np.atleast_2d(Lt)]), order="F")
 
 
 def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
@@ -195,10 +209,12 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
                 f"be corrupt or from an incompatible run."
             )
 
-    # Read log likelihoods
+    # Read log likelihoods. Stored column-major (Fortran writes, per timepoint,
+    # each model's log-likelihood then the total), so reshape order="F" (matches
+    # loadmodout15.m's `reshape(LLt, num_models+1, N)` and write_amicaout below).
     LLt = read_binary_file(outdir / "LLt")
     if LLt is not None:
-        LLt = LLt.reshape(num_models + 1, -1)
+        LLt = LLt.reshape(num_models + 1, -1, order="F")
         Lht = LLt[:num_models]
         Lt = LLt[num_models]
     else:

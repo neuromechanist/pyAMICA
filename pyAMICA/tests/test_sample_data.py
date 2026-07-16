@@ -17,6 +17,32 @@ eeglab_data_file = op.join(sample_data_path, "eeglab_data.fdt")
 amicaout_dir = op.join(sample_data_path, "amicaout")
 
 
+def test_loadmodout_llt_reshape_order():
+    """``loadmodout`` reads the bundled Fortran-produced ``LLt`` file with the
+    correct column-major reshape (issue #155 regression).
+
+    The reference binary writes, per timepoint, each model's log-likelihood
+    then the total (Fortran ``write_output``, amica15.f90:2308-2333) -- a
+    column-major ``(num_models+1, N)`` layout (matching EEGLAB's
+    ``loadmodout15.m``, which does ``reshape(LLt, num_models+1, N)`` under
+    MATLAB's column-major default). A C-order reshape scrambles this. The
+    bundled fixture is single-model, so ``Lht[0]`` must equal ``Lt`` exactly --
+    a C-order bug would break both this equality and the mean check below.
+    """
+    out = loadmodout(amicaout_dir)
+    assert out.num_models == 1
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, out.Lt.shape[0])
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+
+    # Fortran's bundled "LL" file already reports the per-sample-per-channel
+    # normalized log-likelihood (~-3.40), so nw * final_ll recovers the LLt
+    # convention's per-sample total (summed over channels), Lt.mean().
+    nw = out.W.shape[0]
+    final_ll = out.LL[-1]
+    np.testing.assert_allclose(out.Lt.mean(), nw * final_ll, rtol=1e-3)
+
+
 @pytest.mark.slow
 @pytest.mark.xfail(
     reason="uses a per-row corrcoef of the internal W (= Fortran W^T, so rows are "
@@ -294,6 +320,45 @@ def test_cli_output_format_roundtrip(tmp_path):
     # mixing-vector-only path.
     viz.plot_components(str(outdir), data=data, max_comps=3)
     viz.plot_pdf_fits(str(outdir), data, max_comps=2)
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_numpy_llt_roundtrip(tmp_path):
+    """A real (short but genuine) single-model NumPy fit writes an ``LLt`` file
+    that round-trips through ``loadmodout`` (issue #155).
+
+    ``Lht[0]`` must equal ``Lt`` exactly for a single model (both are read from
+    the same on-disk sequence). ``Lt.mean()`` (the per-sample total log-density,
+    summed over channels) should be close to ``model.ll[-1] / model.num_samples``
+    -- ``self.ll`` is this backend's raw (unnormalized) per-iteration sum of the
+    same per-sample quantity, so dividing by the sample count recovers the same
+    convention as ``Lt.mean()``. They are not bit-identical: ``self.ll[-1]`` is
+    the pre-update E-step likelihood of the last iteration, while the written
+    LLt is recomputed post-update, so a loose tolerance is used.
+    """
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )[:, :4096]
+    outdir = tmp_path / "out"
+    model = AMICA(
+        use_tqdm=False,
+        num_models=1,
+        num_mix=3,
+        seed=1,
+        max_iter=30,
+        writestep=10000,
+        do_opt_block=False,
+        outdir=str(outdir),
+    )
+    model.fit(data)
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, model.num_samples)
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+
+    expected = model.ll[-1] / model.num_samples
+    np.testing.assert_allclose(out.Lt.mean(), expected, rtol=1e-2)
 
 
 @pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")

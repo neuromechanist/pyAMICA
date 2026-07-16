@@ -255,6 +255,52 @@ def test_write_amica_output_ll_matches_kept_iterate(real_data, tmp_path):
     assert len(ll) < len(ng.ll_history)  # the later overshoot is dropped
 
 
+def test_write_amica_output_llt_roundtrip(fitted_ng, tmp_path):
+    """A real (short but genuine) single-model NG fit writes an ``LLt`` file
+    that round-trips through ``loadmodout`` (issue #155).
+
+    ``Lht[0]`` must equal ``Lt`` exactly for a single model. ``Lt.mean()`` (the
+    per-sample total log-density, summed over channels) should be close to
+    ``nw * final_ll_`` -- the NG backend's ``final_ll_`` is already the
+    per-sample-per-channel normalized log-likelihood, matching the Fortran
+    ``LL`` file convention directly.
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    outdir = tmp_path / "amicaout"
+    fitted_ng.write_amica_output(str(outdir))
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, 4096)
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+
+    assert fitted_ng.final_ll_ is not None
+    np.testing.assert_allclose(out.Lt.mean(), NW * fitted_ng.final_ll_, rtol=1e-2)
+
+
+def test_write_amica_output_llt_multimodel(real_data, tmp_path):
+    """A small real 2-model NG fit's ``LLt`` satisfies its definitional
+    relationship: the total per-sample log-likelihood is the log-sum-exp of
+    the per-model log-likelihoods over models (issue #155). Few iterations --
+    this exercises the multi-model LLt code path, not convergence."""
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=5, block_size=1024, seed=7)
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (2, 4096)
+
+    from scipy.special import logsumexp
+
+    np.testing.assert_allclose(out.Lt, logsumexp(out.Lht, axis=0), rtol=1e-10)
+
+
 def test_ng_wrapper_fit_transform_real_data(fitted_ng, real_data):
     assert fitted_ng.is_fitted_
     assert len(fitted_ng.ll_history_) >= 1

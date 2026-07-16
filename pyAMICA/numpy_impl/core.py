@@ -953,6 +953,86 @@ class AMICA:
 
         return updates
 
+    def _compute_full_posterior_ll(
+        self, data: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Recompute the per-model/per-sample log-likelihood over every sample
+        of ``data`` (default ``self.data``), for the Fortran ``LLt`` output
+        (issue #155).
+
+        Duplicates the ``b``/``z``/``logV`` forward pass in
+        ``_get_block_updates`` (same definitions, Fortran amica17.f90:1280-1372)
+        rather than sharing it, so this read-only computation cannot affect
+        that method's training-path behavior. Computed fresh from ``self``'s
+        current parameters, not stashed mid-training-loop values, so it is
+        correct even after a keep-best rollback (issue #51).
+
+        Returns
+        -------
+        Lht : ndarray of shape (num_models, n_samples)
+            Per-model log-likelihood, Fortran's ``modloglik``.
+        Lt : ndarray of shape (n_samples,)
+            Total log-likelihood, Fortran's ``loglik``.
+        """
+        assert (
+            self.data_dim is not None
+            and self.W is not None
+            and self.c is not None
+            and self.comp_list is not None
+            and self.beta is not None
+            and self.mu is not None
+            and self.rho is not None
+            and self.alpha is not None
+            and self.gm is not None
+        )
+        if data is None:
+            assert self.data is not None
+            data = self.data
+        n_samples = data.shape[1]
+        Lht = np.zeros((self.num_models, n_samples))
+        Lt = np.zeros(n_samples)
+
+        for start in range(0, n_samples, self.block_size):
+            end = min(start + self.block_size, n_samples)
+            X = data[:, start:end]
+            batch_size = X.shape[1]
+
+            b = np.zeros((batch_size, self.data_dim, self.num_models))
+            for h in range(self.num_models):
+                b[:, :, h] = np.dot((X - self.c[:, h][:, None]).T, self.W[:, :, h])
+
+            z = np.zeros((batch_size, self.data_dim, self.num_mix, self.num_models))
+            for h in range(self.num_models):
+                for i in range(self.data_dim):
+                    k = self.comp_list[i, h]
+                    for j in range(self.num_mix):
+                        y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
+                        log_pdf, _ = self._compute_log_pdf(y, self.rho[j, k])
+                        z[:, i, j, h] = (
+                            np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + log_pdf
+                        )
+
+            z0max = np.max(z, axis=2, keepdims=True)
+            ll_src = z0max[:, :, 0, :] + np.log(np.sum(np.exp(z - z0max), axis=2))
+            logV = np.zeros((batch_size, self.num_models))
+            for h in range(self.num_models):
+                with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                    _, logdet_W = np.linalg.slogdet(self.W[:, :, h])
+                logV[:, h] = (
+                    np.log(self.gm[h])
+                    + logdet_W
+                    + self.sldet
+                    + np.sum(ll_src[:, :, h], axis=1)
+                )
+
+            Vmax = np.max(logV, axis=1, keepdims=True)
+            ll_samples = Vmax[:, 0] + np.log(np.sum(np.exp(logV - Vmax), axis=1))
+
+            Lht[:, start:end] = logV.T
+            Lt[start:end] = ll_samples
+
+        return Lht, Lt
+
     def _update_parameters(self, updates: Dict):
         """
         Update model parameters using computed updates.
@@ -1521,6 +1601,8 @@ class AMICA:
         # (loadmodout treats 'nd' as optional).
         from .load import write_amicaout
 
+        Lht, Lt = self._compute_full_posterior_ll()
+
         write_amicaout(
             self.outdir,
             gm=self.gm,
@@ -1535,6 +1617,8 @@ class AMICA:
             comp_list=self.comp_list,
             ll=np.asarray(self.ll),
             A=self.A,
+            Lht=Lht,
+            Lt=Lt,
         )
 
     def _write_history(self):
