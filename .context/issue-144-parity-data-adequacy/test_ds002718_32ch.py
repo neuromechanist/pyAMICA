@@ -7,7 +7,7 @@ Data: OpenNeuro ds002718 sub-002 (Wakeman-Henson faces), first 32 of the first
 70 EEG channels, first N frames -- real data, not committed (not bundled; see
 benchmarks/README_dimsweep.md for the download recipe this mirrors).
 
-    uv run python .context/issue-140-parity-data-adequacy/test_ds002718_32ch.py <npy> [n_seeds] [max_iter]
+    uv run python .context/issue-144-parity-data-adequacy/test_ds002718_32ch.py <npy> [n_seeds] [max_iter]
 """
 
 import os
@@ -68,6 +68,12 @@ def main():
                 lines.append(f"field_dim {field}")
             elif ln.startswith("max_iter"):
                 lines.append(f"max_iter {max_iter}")
+            elif ln.startswith("pcakeep"):
+                # AMICATorchNG has no PCA source reduction (n_sources ==
+                # n_channels always), so pcakeep must track nw or Fortran's
+                # W comes back reduced-rank (the template's literal 32 is
+                # only correct by coincidence at nw=32).
+                lines.append(f"pcakeep {nw}")
             elif ln.startswith("use_min_dll"):
                 # Force the full max_iter budget instead of Fortran's own
                 # early-stopping: otherwise Fortran can converge and stop
@@ -101,8 +107,11 @@ def main():
                 for ln in reversed(r.stdout.splitlines())
                 if "LL =" in ln
             ),
-            float("nan"),
+            None,
         )
+        if fort_ll is None:
+            print(f"seed {seed}: WARNING could not parse LL from Fortran stdout")
+            fort_ll = float("nan")
 
         m = AMICATorchNG(
             n_channels=nw, n_models=1, n_mix=3, block_size=512, lrate=0.05,
@@ -112,6 +121,11 @@ def main():
             invsigmax=100.0, doscaling=True, scalestep=1, seed=seed, device="cpu",
         )  # fmt: skip
         m.fit(data, max_iter=max_iter, verbose=False)
+        if m.stop_reason in AMICATorchNG._DEGENERATE_STOP_REASONS:
+            print(
+                f"seed {seed}: NG fit ended degenerate (stop_reason={m.stop_reason!r}), skipping"
+            )
+            continue
         W_ng = m.get_unmixing_matrix(0)
 
         corrs = xcorr(W_fortran, W_ng)
@@ -127,6 +141,11 @@ def main():
             f"mean={np.mean(results):.4f} range={np.min(results):.4f}-{np.max(results):.4f}"
         )
 
+    if len(results) < n_seeds:
+        print(f"\n{n_seeds - len(results)}/{n_seeds} seed(s) failed or were degenerate")
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

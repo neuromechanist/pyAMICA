@@ -42,6 +42,8 @@ def amari_index(gain):
     abs_gain = np.abs(gain)
     row_max = abs_gain.max(axis=1)
     col_max = abs_gain.max(axis=0)
+    if np.any(row_max == 0) or np.any(col_max == 0):
+        raise ValueError("amari_index: a row or column is all-zero (degenerate W)")
     row_term = (abs_gain.sum(axis=1) / row_max - 1).sum()
     col_term = (abs_gain.sum(axis=0) / col_max - 1).sum()
     return (row_term + col_term) / (2 * n * (n - 1))
@@ -95,6 +97,8 @@ def run_fortran(data_dim, max_iter, seed, work_dir):
                 parts = line.split()
                 if "LL" in parts:
                     ll = float(parts[parts.index("LL") + 2])
+    if ll is None:
+        print(f"seed {seed}: WARNING could not parse LL from Fortran out.txt")
     return W, ll
 
 

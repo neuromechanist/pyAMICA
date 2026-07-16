@@ -36,7 +36,6 @@ def xcorr(Wa, Wb):
 def write_fdt(data: np.ndarray, path: Path) -> None:
     """(n_channels, n_samples) -> amica's raw float32 .fdt, channel-fastest
     (column-major) order -- byte-identical to EEGLAB's own .fdt layout."""
-    np.ascontiguousarray(data).astype("<f4").tobytes(order="F")
     path.write_bytes(np.ascontiguousarray(data).astype("<f4").tobytes(order="F"))
 
 
@@ -126,8 +125,14 @@ def main():
                 for ln in reversed(r.stdout.splitlines())
                 if "LL =" in ln
             ),
-            float("nan"),
+            None,
         )
+        if fort_ll is None:
+            print(
+                f"seed {seed}: WARNING could not parse LL from Fortran stdout",
+                flush=True,
+            )
+            fort_ll = float("nan")
 
         print(f"seed {seed}: running AMICATorchNG on CUDA...", flush=True)
         m = AMICATorchNG(
@@ -138,6 +143,12 @@ def main():
             invsigmax=100.0, doscaling=True, scalestep=1, seed=seed, device="cuda",
         )  # fmt: skip
         m.fit(data, max_iter=max_iter, verbose=False)
+        if m.stop_reason in AMICATorchNG._DEGENERATE_STOP_REASONS:
+            print(
+                f"seed {seed}: NG fit ended degenerate (stop_reason={m.stop_reason!r}), skipping",
+                flush=True,
+            )
+            continue
         W_ng = m.get_unmixing_matrix(0)
 
         corrs = xcorr(W_fortran, W_ng)
@@ -157,6 +168,14 @@ def main():
             flush=True,
         )
 
+    if len(results) < n_seeds:
+        print(
+            f"\n{n_seeds - len(results)}/{n_seeds} seed(s) failed or were degenerate",
+            flush=True,
+        )
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

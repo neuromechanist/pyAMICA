@@ -96,8 +96,13 @@ def main():
             for ln in reversed(r.stdout.splitlines())
             if "LL =" in ln
         ),
-        float("nan"),
+        None,
     )
+    if fort_ll is None:
+        print(
+            f"seed {seed}: WARNING could not parse LL from Fortran stdout", flush=True
+        )
+        fort_ll = float("nan")
     (out_dir / "fortran_ll.txt").write_text(str(fort_ll))
     print(f"seed {seed}: Fortran done, LL={fort_ll:.4f}", flush=True)
 

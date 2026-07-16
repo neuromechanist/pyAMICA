@@ -52,6 +52,11 @@ def main():
         invsigmax=100.0, doscaling=True, scalestep=1, seed=seed, device="cuda",
     )  # fmt: skip
     m.fit(data, max_iter=max_iter, verbose=False)
+    if m.stop_reason in AMICATorchNG._DEGENERATE_STOP_REASONS:
+        raise RuntimeError(
+            f"seed {seed}: NG fit ended degenerate (stop_reason={m.stop_reason!r}); "
+            "refusing to report a correlation against a singular/NaN W"
+        )
     W_ng = m.get_unmixing_matrix(0)
 
     corrs = xcorr(W_fortran, W_ng)
