@@ -2,7 +2,7 @@
 written by run_fortran_only.py to the same out_dir. Run these sequentially
 (one GPU) after the Fortran-only jobs (which can run concurrently on CPU).
 
-    uv run python run_ng_only.py <npy> <seed> <max_iter> <out_dir>
+    uv run python run_ng_only.py <npy> <seed> <max_iter> <out_dir> [do_newton]
 """
 
 import sys

@@ -106,9 +106,10 @@ exclude_lines = [
 exclude = [".context/**"]
 
 [tool.ty.rules]
-# benchmarks/benchmark_decompose.py lazy-imports `mne` (the optional `viz`
-# extra) with a `# ty: ignore[unresolved-import]`, since CI's base env (no
-# extras, matching the other jobs) can't resolve it. Whether that comment is
+# Optional-extra lazy imports (mne: benchmarks/benchmark_decompose.py; mlx:
+# pyAMICA/mlx_impl/core.py, benchmarks/benchmark_dimsweep.py) carry
+# `# ty: ignore[unresolved-import]` comments, since CI's base env (no extras,
+# matching the other jobs) can't resolve either. Whether such a comment is
 # "used" or "unused" then depends on whether the local env happens to have the
 # extra installed, so this rule would otherwise flip between a false pass and
 # a false "unused-ignore-comment" warning depending on the developer's own

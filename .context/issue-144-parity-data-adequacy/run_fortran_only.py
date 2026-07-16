@@ -3,7 +3,7 @@ another seed's CUDA phase or other Fortran-only jobs at reduced thread counts).
 Writes W + LL to a fixed per-seed directory for a later, separate NG phase to
 pick up.
 
-    uv run python run_fortran_only.py <npy> <seed> <max_iter> <threads> <out_dir>
+    uv run python run_fortran_only.py <npy> <seed> <max_iter> <threads> <out_dir> [do_newton]
 """
 
 import os

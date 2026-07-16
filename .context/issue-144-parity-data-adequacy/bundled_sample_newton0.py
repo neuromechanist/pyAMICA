@@ -1,6 +1,10 @@
 """do_newton=0 parity + Fortran-vs-Fortran self-consistency on the bundled
-32-channel sample EEG (the dataset paper.md's Table 1 actually describes:
-"uses only the bundled real sample EEG ... with no external download").
+32-channel sample EEG. This is the source of Table 1's bundled-sample Amari
+distance row and the score-function/multi-model checks, which paper.md still
+describes as needing no external download; Table 1's single-model headline
+correlation/LL instead comes from the external ds002718 recording (see
+run_5seed_newton0.sh), since the bundled sample sits at the project's own
+data-adequacy boundary (k~30).
 
 Runs N seeds of: Fortran (amica15mac, do_newton overridden to 0) and
 AMICATorchNG (do_newton=False), then reports:

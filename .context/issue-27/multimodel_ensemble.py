@@ -7,6 +7,7 @@ cross-correlation, plus the log-likelihood distributions. Writes the figure
 next to this script. Real sample data + Fortran binary only (NO MOCK).
 
     uv run python .context/issue-27/multimodel_ensemble.py [N]
+    uv run python .context/issue-27/multimodel_ensemble.py --from-cache  # reuse ensemble.npz, no re-fitting
 
 The Fortran binary (`sample_data/amica15mac`) is x86_64 and runs under Rosetta
 on Apple silicon. Absolute cross-corr magnitudes depend on config/seed; the
@@ -228,10 +229,10 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     fig.text(
         cx_a,
         0.20,
-        f"mean corr. (190 run pairs)\n"
-        f"within-Fortran: {within_F.mean():.3f}\n"
-        f"within-pyAMICA: {within_G.mean():.3f}\n"
-        f"between: {between.mean():.3f}\n"
+        f"mean corr. (run pairs)\n"
+        f"within-Fortran: {within_F.mean():.3f} (n={len(within_F)})\n"
+        f"within-pyAMICA: {within_G.mean():.3f} (n={len(within_G)})\n"
+        f"between: {between.mean():.3f} (n={len(between)})\n"
         f"diff: {diff:+.3f} (margin +/-0.05)\n"
         f"perm. p={p_perm:.2f}",
         ha="center",

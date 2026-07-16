@@ -4,7 +4,7 @@ k-sweep already validated at ~0.98 mean |corr|, native-fortran-f64 vs
 torch-cuda-f64 specifically at 0.995), run on hallu: native Linux Fortran
 build (24 threads) + PyTorch CUDA, across multiple independent seeds.
 
-    uv run python .context/issue-144-parity-data-adequacy/test_ds002718_hallu.py <npy> [n_seeds] [max_iter] [threads]
+    uv run python .context/issue-144-parity-data-adequacy/test_ds002718_hallu.py <npy> [n_seeds] [max_iter] [threads] [seed_offset]
 """
 
 import os
