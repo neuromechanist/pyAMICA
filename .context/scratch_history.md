@@ -45,6 +45,17 @@ python -m pyAMICA.amica_cli pyAMICA/sample_data/sample_params.json --verbose --o
 gfortran -O3 -fopenmp amica17.f90 funmod2.f90 -o amica -llapack -lblas
 ```
 
+## Issue #155 (LLt output): MATLAB interop re-verified for the new file
+`LLt` (per-timepoint, per-model log-likelihood) was added to the writer in PR
+#156, so it went through the same #92 MATLAB gate below. Result: real
+`loadmodout15.m` under MATLAB R2025b reads pyAMICA's `LLt` bit-exactly (single-
+and multi-model), and both readers agree bit-exactly on the genuine Fortran
+fixture. Full record + how to re-run:
+`.context/issue-155/matlab_interop_verification.md`. The automated tests only
+pin "we read Fortran"; only the MATLAB run pins "EEGLAB reads us", since a
+self-consistently-wrong writer/reader pair passes every round-trip test. Re-run
+it by hand if the LLt layout, `write_amicaout`, or `loadmodout` ever change.
+
 ## Issue #92 (EEGLAB drop-in output): the column-major layout fix (KEY)
 Fortran/EEGLAB store arrays **column-major**. The MATLAB round-trip exposed that
 pyAMICA wrote the non-square mixture params (`alpha`/`mu`/`sbeta`/`rho`, shape
