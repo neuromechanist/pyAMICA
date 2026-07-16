@@ -134,3 +134,80 @@ def test_pairwise_mi_raises_on_constant_channel(data_slice):
 def test_block_diagonal_order_trivial_cases():
     assert block_diagonal_order(np.zeros((0, 0))).tolist() == []
     assert block_diagonal_order(np.zeros((1, 1))).tolist() == [0]
+
+
+def test_pairwise_mi_nbins_passthrough_matches_manual_computation(data_slice):
+    nbins = 15
+    subset = data_slice[:4]
+    n_samples = subset.shape[1]
+    n_channels = subset.shape[0]
+    expected = np.zeros((n_channels, n_channels))
+    for i in range(n_channels):
+        for j in range(i, n_channels):
+            joint_counts, _, _ = np.histogram2d(subset[i], subset[j], bins=nbins)
+            h_x = _binned_entropy_from_counts(joint_counts.sum(axis=1), n_samples)
+            h_y = _binned_entropy_from_counts(joint_counts.sum(axis=0), n_samples)
+            h_xy = _binned_entropy_from_counts(joint_counts.ravel(), n_samples)
+            mi = h_x + h_y - h_xy
+            expected[i, j] = expected[j, i] = mi
+
+    mi_matrix = pairwise_mi(subset, nbins=nbins)
+
+    np.testing.assert_allclose(mi_matrix, expected)
+
+
+def test_pairwise_mi_raises_on_invalid_nbins(data_slice):
+    with pytest.raises(ValueError, match="not >= 1"):
+        pairwise_mi(data_slice[:4], nbins=0)
+
+
+def test_pairwise_mi_raises_on_nbins_too_sparse(data_slice):
+    small = data_slice[:4, :50]
+    with pytest.raises(ValueError, match="empty or singleton"):
+        pairwise_mi(small, nbins=100)
+
+
+def test_pairwise_mi_single_component(data_slice):
+    subset = data_slice[:1]
+    mi_matrix = pairwise_mi(subset)
+    assert mi_matrix.shape == (1, 1)
+    assert np.isfinite(mi_matrix[0, 0])
+
+
+def test_block_diagonal_order_two_components(data_slice):
+    subset = data_slice[:2]
+    mi_matrix = pairwise_mi(subset)
+    order = block_diagonal_order(mi_matrix)
+    assert sorted(order.tolist()) == [0, 1]
+
+
+def test_block_diagonal_order_raises_on_non_square():
+    with pytest.raises(ValueError, match="square"):
+        block_diagonal_order(np.zeros((3, 5)))
+
+
+def test_block_diagonal_order_raises_on_non_finite():
+    m = np.array([[0.0, 1.0], [1.0, np.nan]])
+    with pytest.raises(ValueError, match="non-finite"):
+        block_diagonal_order(m)
+
+
+def test_block_diagonal_order_raises_on_asymmetric():
+    m = np.array(
+        [[0.0, 1.0, 2.0], [1.0, 0.0, 3.0], [2.0, 5.0, 0.0]],
+    )
+    with pytest.raises(ValueError, match="symmetric"):
+        block_diagonal_order(m)
+
+
+def test_block_diagonal_order_handles_ties():
+    m = np.array(
+        [
+            [0.0, 5.0, 5.0, 1.0],
+            [5.0, 0.0, 1.0, 1.0],
+            [5.0, 1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0, 0.0],
+        ]
+    )
+    order = block_diagonal_order(m)
+    assert sorted(order.tolist()) == [0, 1, 2, 3]
