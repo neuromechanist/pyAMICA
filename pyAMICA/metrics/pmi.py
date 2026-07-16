@@ -27,14 +27,18 @@ correction) and the algorithm description in issue #135.
 
 import numpy as np
 
-from ._common import resolve_nbins, validate_signal_matrix
+from ._common import resolve_nbins, validate_mi_matrix, validate_signal_matrix
 
 
 def _binned_entropy_from_counts(counts: np.ndarray, n_samples: int) -> float:
-    """Miller-Madow-corrected plug-in entropy from occupied-bin counts."""
+    """Miller-Madow-corrected plug-in entropy; zero-count bins are dropped internally."""
     counts = counts[counts > 0]
     p = counts / n_samples
     h_plugin = -np.sum(p * np.log(p))
+    # m = the number of *occupied* bins/cells actually observed, not the
+    # configured bin count -- the standard Miller-Madow correction, and
+    # deliberately different from mir.py's _marginal_entropies, which is a
+    # literal port of getMIR.m's fixed-nbins correction term.
     m = counts.size
     return float(h_plugin + (m - 1) / (2 * n_samples))
 
@@ -61,16 +65,30 @@ def pairwise_mi(sources: np.ndarray, nbins: int | None = None) -> np.ndarray:
     Raises
     ------
     ValueError
-        If `sources` contains non-finite values or a constant channel.
+        If `sources` contains non-finite values, a constant channel, or
+        `nbins` is too large for `n_samples` (too many joint-histogram cells
+        to be estimated from that many samples).
     """
     validate_signal_matrix(sources)
     n, n_samples = sources.shape
     nbins = resolve_nbins(n_samples, nbins)
+    if nbins**2 > n_samples:
+        raise ValueError(
+            f"pairwise_mi: nbins={nbins} gives a {nbins}x{nbins} joint "
+            f"histogram ({nbins**2} cells) for only {n_samples} samples; "
+            "most cells would be empty or singleton, making the MI estimate "
+            "meaningless. Reduce nbins or supply more samples."
+        )
 
     mi_matrix = np.zeros((n, n))
     for i in range(n):
         for j in range(i, n):
             joint_counts, _, _ = np.histogram2d(sources[i], sources[j], bins=nbins)
+            # Marginals are summed from this same joint histogram rather than
+            # independently rebinned, so H(X), H(Y), H(X,Y) share one
+            # consistent partition (and the diagonal i==j reduces exactly to
+            # H(X_i), since the joint histogram of a channel with itself is
+            # diagonal-only).
             marginal_x = joint_counts.sum(axis=1)
             marginal_y = joint_counts.sum(axis=0)
             h_x = _binned_entropy_from_counts(marginal_x, n_samples)
@@ -96,7 +114,14 @@ def block_diagonal_order(mi_matrix: np.ndarray) -> np.ndarray:
         Length-`n` permutation of `0..n-1`. Reordering both axes of
         `mi_matrix` by `order` tends to cluster high-MI pairs adjacent to the
         diagonal.
+
+    Raises
+    ------
+    ValueError
+        If `mi_matrix` isn't square, contains non-finite values, or isn't
+        symmetric.
     """
+    validate_mi_matrix(mi_matrix)
     n = mi_matrix.shape[0]
     if n <= 1:
         return np.arange(n)

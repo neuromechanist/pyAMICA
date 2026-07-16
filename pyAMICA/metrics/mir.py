@@ -101,8 +101,10 @@ def mir(
     ------
     ValueError
         If `unmixing` is singular or near-singular (the log-Jacobian term is
-        undefined for a non-invertible transform), or if `data`/`unmixing`
-        contain non-finite values or a constant channel.
+        undefined for a non-invertible transform), or if `data` (or the
+        transformed `unmixing @ data`) contains non-finite values or a
+        constant channel -- a non-finite `unmixing` is also caught this way,
+        indirectly, via the transformed data.
     """
     eigvals = np.linalg.eigvals(unmixing)
     min_abs_eig = np.min(np.abs(eigvals))

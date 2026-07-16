@@ -33,3 +33,19 @@ def resolve_nbins(n_samples: int, nbins: int | None) -> int:
             "an explicit nbins or supply more samples)."
         )
     return nbins
+
+
+def validate_mi_matrix(mi_matrix: np.ndarray) -> None:
+    """Raise ValueError if `mi_matrix` isn't square, finite, and symmetric."""
+    if mi_matrix.ndim != 2 or mi_matrix.shape[0] != mi_matrix.shape[1]:
+        raise ValueError(
+            f"validate_mi_matrix: mi_matrix must be square 2-D, got shape "
+            f"{mi_matrix.shape}."
+        )
+    if not np.all(np.isfinite(mi_matrix)):
+        raise ValueError(
+            "validate_mi_matrix: mi_matrix contains non-finite (NaN/Inf) "
+            "values; cannot rank affinities against an undefined value."
+        )
+    if not np.allclose(mi_matrix, mi_matrix.T):
+        raise ValueError("validate_mi_matrix: mi_matrix must be symmetric.")
