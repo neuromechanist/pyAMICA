@@ -362,6 +362,118 @@ def test_numpy_llt_roundtrip(tmp_path):
 
 
 @pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_numpy_llt_reject_zeroes_rejected_samples(tmp_path):
+    """Under ``do_reject``, rejected samples must be exactly zero in the
+    written ``LLt`` (issue #155 Fix 1): Fortran zeroes a rejected sample's
+    ``modloglik``/``loglik`` on write (amica15.f90:2211-2216) and its
+    ``load_rej`` reader reconstructs the rejection mask from that exact zero
+    sentinel (``sum(modloglik(:,i)) == 0.0``, amica15.f90:887-896). Good
+    samples must stay non-zero and finite.
+    """
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )[:, :4096]
+    outdir = tmp_path / "out"
+    model = AMICA(
+        use_tqdm=False,
+        num_models=1,
+        num_mix=3,
+        seed=1,
+        max_iter=15,
+        writestep=10000,
+        do_opt_block=False,
+        do_reject=True,
+        rejstart=2,
+        rejint=3,
+        maxrej=3,
+        rejsig=2.0,
+        outdir=str(outdir),
+    )
+    model.fit(data)
+    good_idx = model.good_idx
+    num_samples = model.num_samples
+    assert good_idx is not None and num_samples is not None
+    assert good_idx.size < num_samples, "fixture must reject something"
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    good = np.zeros(num_samples, dtype=bool)
+    good[good_idx] = True
+
+    np.testing.assert_array_equal(out.Lht[:, ~good], 0.0)
+    np.testing.assert_array_equal(out.Lt[~good], 0.0)
+    assert np.all(out.Lht[:, good] != 0.0)
+    assert np.all(np.isfinite(out.Lht[:, good]))
+    assert np.all(out.Lt[good] != 0.0)
+    assert np.all(np.isfinite(out.Lt[good]))
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_numpy_llt_multimodel_roundtrip(tmp_path):
+    """A small real 2-model NumPy fit's ``LLt`` satisfies its definitional
+    relationship: the total per-sample log-likelihood is the log-sum-exp of
+    the per-model log-likelihoods (issue #155). Only the torch backend had a
+    multi-model LLt round-trip test; the two ``_compute_full_posterior_ll``
+    are separate implementations, so this exercises the numpy one too. Few
+    iterations -- this is a code-path smoke test, not a convergence check.
+    """
+    from scipy.special import logsumexp
+
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )[:, :4096]
+    outdir = tmp_path / "out"
+    model = AMICA(
+        use_tqdm=False,
+        num_models=2,
+        num_mix=3,
+        seed=7,
+        max_iter=5,
+        writestep=10000,
+        do_opt_block=False,
+        outdir=str(outdir),
+    )
+    model.fit(data)
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (2, model.num_samples)
+    np.testing.assert_allclose(out.Lt, logsumexp(out.Lht, axis=0), rtol=1e-10)
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
+def test_numpy_llt_partial_final_block(tmp_path):
+    """The block loop's remainder branch (``end = min(start + block_size,
+    n_samples)``) is exercised by a sample count NOT evenly divisible by
+    ``block_size`` (issue #155 Fix 6d -- the existing LLt tests all used
+    exactly-divisible counts, e.g. 4096/128, so this branch was untested).
+    """
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )[:, :4100]
+    assert data.shape[1] % 1024 != 0, "fixture must not be block_size-divisible"
+    outdir = tmp_path / "out"
+    model = AMICA(
+        use_tqdm=False,
+        num_models=1,
+        num_mix=3,
+        seed=1,
+        max_iter=5,
+        writestep=10000,
+        do_opt_block=False,
+        block_size=1024,
+        outdir=str(outdir),
+    )
+    model.fit(data)
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, model.num_samples)
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+    assert np.all(np.isfinite(out.Lt))
+
+
+@pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
 def test_restart_on_early_nan_recovers(tmp_path):
     """An early non-finite LL triggers reinitialize-and-restart (Fortran
     restartiter path, #39); the fit recovers and finishes with a finite LL.
