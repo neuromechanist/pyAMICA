@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -619,6 +619,18 @@ class AMICATorchNG:
         self.sphere: Optional[torch.Tensor] = None
         self.sldet = 0.0
 
+        # Full-dataset per-sample/per-model log-likelihood (Fortran's LLt,
+        # issue #155), computed ONCE at the end of fit() -- after any
+        # keep-best restore (issue #51), so it reflects the parameters
+        # actually exported, never a mid-training-loop value -- and stored as
+        # compact numpy arrays (not the full sphered dataset, which would pin
+        # n_channels x N x 8 bytes on the model, on GPU too). Not a fitted
+        # parameter (absent from state_dict()/_PARAM_TENSORS): a model
+        # restored via from_state_dict() has neither, so write_amica_output
+        # writes no LLt for it.
+        self._llt_lht: Optional[np.ndarray] = None
+        self._llt_lt: Optional[np.ndarray] = None
+
     # ------------------------------------------------------------------
     # Preprocessing
     # ------------------------------------------------------------------
@@ -852,6 +864,68 @@ class AMICATorchNG:
         statistic; Fortran ``P``/``loglik``, amica17.f90:1372)."""
         logV, *_ = self._forward(X)
         return torch.logsumexp(logV, dim=1)  # (batch,)
+
+    def _compute_full_posterior_ll(
+        self, X_t: torch.Tensor
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Recompute the per-model/per-sample log-likelihood over every sample
+        of ``X_t`` (the sphered training data), for the Fortran ``LLt`` output
+        (issue #155). Called once from ``fit()`` (after any keep-best restore)
+        with the full dataset; not retained on ``self`` afterward.
+
+        Reuses ``_forward``'s ``logV`` (Fortran's ``modloglik``: already
+        includes the ``log|det W|`` + ``sldet`` Jacobian terms) rather than any
+        value accumulated during training, so this reflects ``self``'s current
+        parameters -- correct even after a keep-best rollback (issue #51) to an
+        earlier iterate than the training loop's last.
+
+        Deliberate divergence from Fortran: Fortran's ``modloglik`` is filled
+        during iteration i's E-step, the M-step then updates the parameters,
+        and ``write_output`` writes both -- so Fortran's on-disk LLt is stale
+        by one M-step relative to the parameters written alongside it. This
+        method recomputes from the POST-update (and, here, post-keep-best-
+        restore) parameters, so pyAMICA's LLt is self-consistent with the
+        written W/A (better-behaved, not "fixed toward Fortran" -- do not
+        change this to match Fortran's staleness).
+
+        Under ``do_reject``, only the good set (``self.good_idx``) is scored --
+        Fortran zeroes a rejected sample's ``modloglik``/``loglik`` on write
+        (amica15.f90:2211-2216) and ``load_rej`` uses that exact zero as the
+        rejection sentinel (``sum(modloglik(:,i)) == 0.0``, amica15.f90:
+        887-896), so rejected columns of the returned arrays are left at their
+        zero-initialized value rather than computed and discarded -- this also
+        avoids running rejected outliers through the model for the first time
+        at write time.
+
+        Returns
+        -------
+        Lht : ndarray of shape (n_models, n_samples). Zero for rejected
+            samples under ``do_reject``.
+        Lt : ndarray of shape (n_samples,). Zero for rejected samples under
+            ``do_reject``.
+        """
+        n_samples = X_t.shape[1]
+        Lht = np.zeros((self.n_models, n_samples))
+        Lt = np.zeros(n_samples)
+
+        if self.do_reject:
+            assert self.good_idx is not None
+            idx = self.good_idx.detach().cpu().numpy()
+            X_use = X_t[:, self.good_idx]
+        else:
+            idx = np.arange(n_samples)
+            X_use = X_t
+        n_use = X_use.shape[1]
+
+        for start in range(0, n_use, self.block_size):
+            end = min(start + self.block_size, n_use)
+            logV, *_ = self._forward(X_use[:, start:end])
+            lt_block = torch.logsumexp(logV, dim=1)
+            cols = idx[start:end]
+            Lht[:, cols] = logV.T.detach().cpu().numpy()
+            Lt[cols] = lt_block.detach().cpu().numpy()
+
+        return Lht, Lt
 
     def _get_block_updates(self, X: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Compute sufficient-statistic accumulators for one data block.
@@ -1747,6 +1821,13 @@ class AMICATorchNG:
             self._restore_params(best_snapshot)
             self.final_ll_ = best_ll
 
+        # LLt (Fortran's per-sample/per-model log-likelihood, issue #155):
+        # computed ONCE here, strictly after the keep-best restore above, so
+        # the stored arrays reflect the parameters actually being returned/
+        # exported by fit() -- never a mid-training-loop value. Stored as
+        # compact numpy arrays rather than retaining the full sphered dataset.
+        self._llt_lht, self._llt_lt = self._compute_full_posterior_ll(X_t)
+
         return self
 
     def _sample_ll(self, good_idx: torch.Tensor, X_t: torch.Tensor) -> torch.Tensor:
@@ -1914,11 +1995,19 @@ class AMICATorchNG:
         """Write this fitted model as the Fortran/EEGLAB AMICA output directory.
 
         Produces the raw binary files that EEGLAB's ``loadmodout15.m`` (and the
-        Python port :func:`pyAMICA.numpy_impl.load.loadmodout`) read, so a
-        PyTorch NG fit drops directly into an EEGLAB workflow (issue #92).
-        ``loadmodout15`` performs the variance-ordering and unit-norm
-        normalization on load, so the on-disk parameters are written in fit
-        order. Single-model output is byte-compatible with the Fortran reference.
+        Python port :func:`pyAMICA.numpy_impl.load.loadmodout`) read: ``gm``,
+        ``W``, ``S``, ``mean``, ``c``, ``alpha``, ``mu``, ``sbeta``, ``rho``,
+        ``comp_list``, ``LL``, so a PyTorch NG fit drops directly into an
+        EEGLAB workflow (issue #92). ``loadmodout15`` performs the
+        variance-ordering and unit-norm normalization on load, so the on-disk
+        parameters are written in fit order. Single-model output is
+        byte-compatible with the Fortran reference.
+
+        Also writes ``LLt`` (the per-sample/per-model log-likelihood, issue
+        #155) for a model that was just ``fit()`` in this process. A model
+        restored via :meth:`from_state_dict` has no training data to recompute
+        it from, so ``LLt`` is omitted for it (a warning is logged) -- the
+        rest of the output is unaffected.
 
         Parameters
         ----------
@@ -1949,6 +2038,21 @@ class AMICATorchNG:
         ):
             ll = ll[: int(np.argmax(ll)) + 1]
 
+        # LLt (Fortran's per-sample/per-model log-likelihood, issue #155):
+        # computed once at the end of fit() (after any keep-best restore) and
+        # stored compactly on self. A model restored via from_state_dict()
+        # never ran fit() in this process, so it has neither -- warn rather
+        # than silently omitting the file (silent-failure review).
+        if self._llt_lht is not None and self._llt_lt is not None:
+            Lht, Lt = self._llt_lht, self._llt_lt
+        else:
+            logger.warning(
+                "No LLt data available (model was restored via "
+                "from_state_dict(), not freshly fit()); writing output "
+                "without the LLt file."
+            )
+            Lht = Lt = None
+
         write_amicaout(
             outdir,
             gm=_np(self.gm),
@@ -1963,6 +2067,8 @@ class AMICATorchNG:
             comp_list=_np(self.comp_list),
             ll=ll,
             A=_np(self.A),
+            Lht=Lht,
+            Lt=Lt,
         )
 
     # ------------------------------------------------------------------

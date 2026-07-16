@@ -255,6 +255,182 @@ def test_write_amica_output_ll_matches_kept_iterate(real_data, tmp_path):
     assert len(ll) < len(ng.ll_history)  # the later overshoot is dropped
 
 
+def test_write_amica_output_llt_roundtrip(fitted_ng, tmp_path):
+    """A real (short but genuine) single-model NG fit writes an ``LLt`` file
+    that round-trips through ``loadmodout`` (issue #155).
+
+    ``Lht[0]`` must equal ``Lt`` exactly for a single model. ``Lt.mean()`` (the
+    per-sample total log-density, summed over channels) should be close to
+    ``nw * final_ll_`` -- the NG backend's ``final_ll_`` is already the
+    per-sample-per-channel normalized log-likelihood, matching the Fortran
+    ``LL`` file convention directly.
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    outdir = tmp_path / "amicaout"
+    fitted_ng.write_amica_output(str(outdir))
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, 4096)
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+
+    assert fitted_ng.final_ll_ is not None
+    np.testing.assert_allclose(out.Lt.mean(), NW * fitted_ng.final_ll_, rtol=1e-2)
+
+
+def test_write_amica_output_llt_multimodel(real_data, tmp_path):
+    """A small real 2-model NG fit's ``LLt`` satisfies its definitional
+    relationship: the total per-sample log-likelihood is the log-sum-exp of
+    the per-model log-likelihoods over models (issue #155). Few iterations --
+    this exercises the multi-model LLt code path, not convergence."""
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=5, block_size=1024, seed=7)
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (2, 4096)
+
+    from scipy.special import logsumexp
+
+    np.testing.assert_allclose(out.Lt, logsumexp(out.Lht, axis=0), rtol=1e-10)
+
+
+def test_loadmodout_llt_gm_reorder_alignment(real_data, tmp_path):
+    """``loadmodout`` must permute ``Lht`` by the SAME ``gm_ord`` it applies to
+    ``W``/``mod_prob``/``comp_list``/etc, not leave it in on-disk order (issue
+    #155 review Addition B).
+
+    ``test_write_amica_output_llt_multimodel``'s ``Lt == logsumexp(Lht,
+    axis=0)`` check is permutation-invariant over the model axis, so it
+    cannot detect a model-axis misalignment between ``Lht`` and ``W``/``gm``.
+    This test instead reads the raw on-disk ``gm``/``LLt`` bytes directly,
+    computes the permutation by hand, and checks ``loadmodout``'s ``Lht``
+    against it.
+
+    Requires a genuinely non-identity ``gm_ord`` (model 1 outweighing model
+    0), or this degenerates into a tautology that passes regardless of
+    whether the permutation is applied; seed=4 gives exactly that on real
+    sample EEG.
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=8, block_size=1024, seed=4)
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+
+    gm_raw = np.fromfile(outdir / "gm", dtype=np.float64)
+    num_models = gm_raw.size
+    gm_ord = np.argsort(gm_raw)[::-1]
+    assert not np.array_equal(gm_ord, np.arange(num_models)), (
+        "fixture must give a non-identity gm ordering, or this test is a tautology"
+    )
+
+    LLt_raw = np.fromfile(outdir / "LLt", dtype=np.float64)
+    n_samples = LLt_raw.size // (num_models + 1)
+    LLt_raw = LLt_raw.reshape(num_models + 1, n_samples, order="F")
+    Lht_raw = LLt_raw[:num_models]
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None
+    np.testing.assert_array_equal(out.Lht, Lht_raw[gm_ord])
+    assert not np.array_equal(out.Lht, Lht_raw), (
+        "Lht must actually be permuted by gm_ord, not left in on-disk order"
+    )
+
+
+def test_write_amica_output_llt_reject_zeroes_rejected_samples(real_data, tmp_path):
+    """Under ``do_reject``, rejected samples must be exactly zero in the
+    written ``LLt`` (issue #155 Fix 1): Fortran zeroes a rejected sample's
+    ``modloglik``/``loglik`` on write (amica15.f90:2211-2216) and its
+    ``load_rej`` reader reconstructs the rejection mask from that exact zero
+    sentinel (``sum(modloglik(:,i)) == 0.0``, amica15.f90:887-896). Good
+    samples must stay non-zero and finite.
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(
+        real_data[:, :4096],
+        max_iter=15,
+        block_size=1024,
+        seed=1,
+        do_reject=True,
+        rejstart=2,
+        rejint=3,
+        maxrej=3,
+        rejsig=2.0,
+    )
+    ng = model.model_
+    assert ng is not None and ng.good_idx is not None
+    assert ng.good_idx.numel() < 4096, "fixture must reject something"
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+
+    good = np.zeros(4096, dtype=bool)
+    good[ng.good_idx.detach().cpu().numpy()] = True
+
+    np.testing.assert_array_equal(out.Lht[:, ~good], 0.0)
+    np.testing.assert_array_equal(out.Lt[~good], 0.0)
+    assert np.all(out.Lht[:, good] != 0.0)
+    assert np.all(np.isfinite(out.Lht[:, good]))
+    assert np.all(out.Lt[good] != 0.0)
+    assert np.all(np.isfinite(out.Lt[good]))
+
+
+def test_write_amica_output_llt_partial_final_block(real_data, tmp_path):
+    """The block loop's remainder branch (``end = min(start + block_size,
+    n_samples)``) is exercised by a sample count NOT evenly divisible by
+    ``block_size`` (issue #155 Fix 6d -- the existing LLt tests all used
+    exactly-divisible counts, e.g. 4096/1024, so this branch was untested).
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    n = 4100
+    assert n % 1024 != 0, "fixture must not be block_size-divisible"
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :n], max_iter=5, block_size=1024, seed=1)
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, n)
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+    assert np.all(np.isfinite(out.Lt))
+
+
+def test_from_state_dict_write_amica_output_omits_llt(fitted_ng, tmp_path, caplog):
+    """A model restored via ``from_state_dict`` (the ``AMICA.load`` path) has
+    no training data to recompute ``LLt`` from (issue #155 Fix 2/3): a warning
+    must fire and no ``LLt`` file must be written, while the rest of the
+    output is unaffected."""
+    path = str(tmp_path / "model.pt")
+    fitted_ng.save(path)
+    loaded = AMICA.load(path, device="cpu")
+
+    outdir = tmp_path / "amicaout"
+    with caplog.at_level(logging.WARNING, logger="pyAMICA.torch_impl.core"):
+        loaded.write_amica_output(str(outdir))
+
+    assert not (outdir / "LLt").exists()
+    assert (outdir / "W").exists()  # the rest of the output is unaffected
+    assert any(
+        "LLt" in r.getMessage() and "restored" in r.getMessage().lower()
+        for r in caplog.records
+    )
+
+
 def test_ng_wrapper_fit_transform_real_data(fitted_ng, real_data):
     assert fitted_ng.is_fitted_
     assert len(fitted_ng.ll_history_) >= 1

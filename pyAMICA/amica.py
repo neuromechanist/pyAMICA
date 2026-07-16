@@ -362,6 +362,11 @@ class AMICA:
         sign-flipping is needed. Single-model output is byte-compatible with the
         Fortran reference (issue #92).
 
+        Also writes ``LLt`` (the per-sample/per-model log-likelihood, issue
+        #155) for a model that was just fit in this process; a model restored
+        via :meth:`load` has no training data to recompute it from, so
+        ``LLt`` is omitted for it (a warning is logged).
+
         Parameters
         ----------
         outdir : str
