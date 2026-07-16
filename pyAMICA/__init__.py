@@ -16,6 +16,7 @@ Main Features:
 from .version import __version__
 from .amica import AMICA
 from .torch_impl import AMICATorchNG
+from . import metrics
 from . import numpy_impl
 from . import torch_impl
 
@@ -27,6 +28,7 @@ __all__ = [
     "AMICA",
     "AMICATorchNG",
     "AMICA_NumPy",
+    "metrics",
     "numpy_impl",
     "torch_impl",
     "__version__",
