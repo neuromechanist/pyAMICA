@@ -1134,12 +1134,23 @@ def test_end_to_end_correlation_vs_fortran_from_sample_params_json():
     ``do_approx_sphere``) silently overrides that constructor's safe default
     when loaded through this path, but never touches ``_fresh_ng``'s explicit
     kwargs above, so it can regress here while the other test stays green.
+
+    The end-to-end correlation/Amari checks below are too loose on their own
+    to reliably catch this at a practical iteration budget: a reintroduced
+    ``do_approx_sphere: false`` still clears both thresholds at ``max_iter``
+    below a few hundred (issue #144 PR review measured 0.9986 correlation /
+    0.0049 Amari at 100 iterations, only marginally failing by 500). The
+    explicit ``do_approx_sphere`` assertion below is the actual regression
+    guard -- deterministic, independent of optimization dynamics -- and the
+    fit-based checks stay as a broader "does the JSON-loaded pipeline work"
+    sanity check.
     """
     import sys
 
     root = Path(__file__).resolve().parents[2].parent
     sys.path.insert(0, str(root))
     from validate_implementations import (
+        _NG_PARAMS,
         load_sample_data,
         run_fortran_amica,
         run_pytorch_amica,
@@ -1149,7 +1160,20 @@ def test_end_to_end_correlation_vs_fortran_from_sample_params_json():
 
     data, params = load_sample_data()
     params = dict(params)
-    params["max_iter"] = 100
+    params["max_iter"] = 300
+
+    assert "do_approx_sphere" in _NG_PARAMS, (
+        "AMICATorchNG must accept do_approx_sphere for this guard to mean "
+        "anything -- update this test if the constructor signature changed"
+    )
+    assert params.get("do_approx_sphere") is True, (
+        "sample_params.json's do_approx_sphere maps straight through to "
+        "AMICATorchNG's constructor kwarg of the same name (run_pytorch_amica "
+        "passes through any params.json key that is in _NG_PARAMS unchanged); "
+        "False here silently breaks Fortran parity (non-symmetric PCA "
+        "whitening instead of symmetric ZCA sphering)"
+    )
+
     out = root / "pyAMICA" / "tests" / "torch_tests" / "_ng_e2e_json_tmp"
     out.mkdir(parents=True, exist_ok=True)
     fortran = run_fortran_amica(data, params, out, SEED)
