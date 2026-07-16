@@ -132,6 +132,12 @@ def write_amicaout(
     # comp_list is 1-based on disk (loadmodout subtracts 1 when indexing).
     _w("comp_list", np.asarray(comp_list) + 1, dtype=np.int32, order="F")
     _w("LL", np.asarray(ll))
+    if (Lht is None) != (Lt is None):
+        raise ValueError(
+            "write_amicaout: Lht and Lt must be given together (both None to "
+            f"omit LLt, or both arrays to write it); got Lht={Lht!r}, "
+            f"Lt={Lt!r}."
+        )
     if Lht is not None and Lt is not None:
         # Fortran writes, per timepoint, each model's log-likelihood then the
         # total (write_output, amica15.f90:2308-2333) -- a column-major
