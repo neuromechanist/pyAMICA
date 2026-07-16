@@ -73,7 +73,7 @@ def test_mir_identity_unmixing_is_approximately_zero(data_slice):
 def test_mir_scaled_identity_matches_closed_form(data_slice):
     n, n_samples = data_slice.shape
     c = 2.5
-    hx, vx = _marginal_entropies(data_slice)
+    _, vx = _marginal_entropies(data_slice)
 
     mir_val, variance = mir(c * np.eye(n), data_slice)
 
