@@ -748,19 +748,31 @@ class AMICA:
 
         return updates
 
-    def _get_block_updates(self, X: np.ndarray) -> Dict:
-        """
-        Compute parameter updates for a data block.
+    def _forward_block(self, X: np.ndarray):
+        """Shared E-step forward pass for one data block (Fortran
+        amica17.f90:1280-1372): activations ``b``, the raw (unnormalized)
+        mixture log-probabilities ``z``, their per-source max ``z0max``, the
+        per-model log-likelihood ``logV`` (with the log|det W| + sldet
+        Jacobian), and the per-sample total log-likelihood (``Vmax``/
+        ``ll_samples``, log-sum-exp over models).
 
-        Parameters
-        ----------
-        X : ndarray
-            Data block to process
+        Shared by ``_get_block_updates`` (the training-path M-step, which
+        normalizes ``z``/``logV`` into responsibilities) and
+        ``_compute_full_posterior_ll`` (the LLt write path, which only needs
+        ``logV``/``ll_samples``) so a single copy carries any future fix to
+        this forward pass -- this codebase has had one-sided forward-pass bugs
+        before (issue #24's fp-vs-dpdf sign bug), and a duplicated copy could
+        silently drift (issue #155).
 
         Returns
         -------
-        updates : dict
-            Parameter updates for this block
+        b : ndarray of shape (batch, data_dim, num_models)
+        z : ndarray of shape (batch, data_dim, num_mix, num_models)
+            Raw (unnormalized) mixture log-probabilities.
+        z0max : ndarray of shape (batch, data_dim, 1, num_models)
+        logV : ndarray of shape (batch, num_models)
+        Vmax : ndarray of shape (batch, 1)
+        ll_samples : ndarray of shape (batch,)
         """
         assert (
             self.data_dim is not None
@@ -774,28 +786,6 @@ class AMICA:
             and self.gm is not None
         )
         batch_size = X.shape[1]
-        tiny = np.finfo(np.float64).tiny
-        updates = {
-            "dgm": np.zeros(self.num_models),
-            "dalpha_n": np.zeros((self.num_mix, self.num_comps)),
-            "dmu_n": np.zeros((self.num_mix, self.num_comps)),
-            "dmu_d": np.zeros((self.num_mix, self.num_comps)),
-            "dbeta_n": np.zeros((self.num_mix, self.num_comps)),
-            "dbeta_d": np.zeros((self.num_mix, self.num_comps)),
-            "drho_n": np.zeros((self.num_mix, self.num_comps)),
-            "dWtmp": np.zeros((self.data_dim, self.data_dim, self.num_models)),
-            "dc_numer": np.zeros((self.data_dim, self.num_models)),
-            "ll": 0.0,
-        }
-
-        if self.do_newton:
-            updates.update(
-                {
-                    "dsigma2": np.zeros((self.data_dim, self.num_models)),
-                    "dlambda": np.zeros((self.data_dim, self.num_models)),
-                    "dkappa": np.zeros((self.data_dim, self.num_models)),
-                }
-            )
 
         # Compute activations for each model. c is the per-model data-space
         # center: b = W(x - c). Fortran subtracts wc in the E-step
@@ -861,6 +851,60 @@ class AMICA:
         # Block log-likelihood = sum_t logsumexp_h logV (Fortran :1372).
         Vmax = np.max(logV, axis=1, keepdims=True)
         ll_samples = Vmax[:, 0] + np.log(np.sum(np.exp(logV - Vmax), axis=1))
+
+        return b, z, z0max, logV, Vmax, ll_samples
+
+    def _get_block_updates(self, X: np.ndarray) -> Dict:
+        """
+        Compute parameter updates for a data block.
+
+        Parameters
+        ----------
+        X : ndarray
+            Data block to process
+
+        Returns
+        -------
+        updates : dict
+            Parameter updates for this block
+        """
+        assert (
+            self.data_dim is not None
+            and self.c is not None
+            and self.W is not None
+            and self.comp_list is not None
+            and self.beta is not None
+            and self.mu is not None
+            and self.rho is not None
+            and self.alpha is not None
+            and self.gm is not None
+        )
+        batch_size = X.shape[1]
+        tiny = np.finfo(np.float64).tiny
+        updates = {
+            "dgm": np.zeros(self.num_models),
+            "dalpha_n": np.zeros((self.num_mix, self.num_comps)),
+            "dmu_n": np.zeros((self.num_mix, self.num_comps)),
+            "dmu_d": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta_n": np.zeros((self.num_mix, self.num_comps)),
+            "dbeta_d": np.zeros((self.num_mix, self.num_comps)),
+            "drho_n": np.zeros((self.num_mix, self.num_comps)),
+            "dWtmp": np.zeros((self.data_dim, self.data_dim, self.num_models)),
+            "dc_numer": np.zeros((self.data_dim, self.num_models)),
+            "ll": 0.0,
+        }
+
+        if self.do_newton:
+            updates.update(
+                {
+                    "dsigma2": np.zeros((self.data_dim, self.num_models)),
+                    "dlambda": np.zeros((self.data_dim, self.num_models)),
+                    "dkappa": np.zeros((self.data_dim, self.num_models)),
+                }
+            )
+
+        b, z, z0max, logV, Vmax, ll_samples = self._forward_block(X)
+
         updates["ll"] = np.sum(ll_samples)
         # Expose the per-sample vector for outlier rejection (issue #123); only
         # under do_reject, so the default path is unchanged.
@@ -953,29 +997,56 @@ class AMICA:
 
         return updates
 
-    def _compute_full_posterior_ll(
-        self, data: Optional[np.ndarray] = None
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def _compute_full_posterior_ll(self) -> Tuple[np.ndarray, np.ndarray]:
         """Recompute the per-model/per-sample log-likelihood over every sample
-        of ``data`` (default ``self.data``), for the Fortran ``LLt`` output
-        (issue #155).
+        of ``self.data``, for the Fortran ``LLt`` output (issue #155).
 
-        Duplicates the ``b``/``z``/``logV`` forward pass in
-        ``_get_block_updates`` (same definitions, Fortran amica17.f90:1280-1372)
-        rather than sharing it, so this read-only computation cannot affect
-        that method's training-path behavior. Computed fresh from ``self``'s
-        current parameters, not stashed mid-training-loop values, so it is
-        correct even after a keep-best rollback (issue #51).
+        Shares the ``_forward_block`` forward pass with ``_get_block_updates``
+        (only ``logV``/``ll_samples`` are needed here), so this read-only
+        computation cannot silently drift from the training path's E-step.
+        Computed fresh from ``self``'s current parameters, not stashed
+        mid-training-loop values, so it is correct even after a keep-best
+        rollback (issue #51).
+
+        Deliberate divergence from Fortran: Fortran's ``modloglik`` is filled
+        during iteration i's E-step, the M-step then updates the parameters,
+        and ``write_output`` writes both -- so Fortran's on-disk LLt is stale
+        by one M-step relative to the parameters written alongside it. This
+        method recomputes from the POST-update parameters, so pyAMICA's LLt is
+        self-consistent with the written W/A (better-behaved, not "fixed
+        toward Fortran" -- do not change this to match Fortran's staleness).
+
+        Cost note: called at every ``writestep`` checkpoint during training
+        (see ``_write_results``), not just once at the end, so each
+        checkpoint now pays a full O(n_samples) forward pass it did not pay
+        before this method existed. Bounded and small at the default
+        ``writestep`` (100; the bundled sample config uses 20); accepted for
+        now since this is the legacy backend. A cheaper design (stash the
+        per-sample ``logV`` computed during the training E-step instead of
+        recomputing, as Fortran does by keeping ``modloglik`` permanently
+        allocated) is tracked as a follow-up rather than done here.
+
+        Under ``do_reject``, only the good set (``self.good_idx``) is scored
+        -- Fortran zeroes a rejected sample's ``modloglik``/``loglik`` on write
+        (amica15.f90:2211-2216) and ``load_rej`` uses that exact zero as the
+        rejection sentinel (``sum(modloglik(:,i)) == 0.0``, amica15.f90:
+        887-896), so rejected columns of ``Lht``/``Lt`` are left at their
+        zero-initialized value rather than computed and discarded -- this also
+        avoids running rejected outliers through the model for the first time
+        at write time.
 
         Returns
         -------
         Lht : ndarray of shape (num_models, n_samples)
-            Per-model log-likelihood, Fortran's ``modloglik``.
+            Per-model log-likelihood, Fortran's ``modloglik``. Zero for
+            rejected samples under ``do_reject``.
         Lt : ndarray of shape (n_samples,)
-            Total log-likelihood, Fortran's ``loglik``.
+            Total log-likelihood, Fortran's ``loglik``. Zero for rejected
+            samples under ``do_reject``.
         """
         assert (
             self.data_dim is not None
+            and self.data is not None
             and self.W is not None
             and self.c is not None
             and self.comp_list is not None
@@ -985,51 +1056,28 @@ class AMICA:
             and self.alpha is not None
             and self.gm is not None
         )
-        if data is None:
-            assert self.data is not None
-            data = self.data
+        data = self.data
         n_samples = data.shape[1]
         Lht = np.zeros((self.num_models, n_samples))
         Lt = np.zeros(n_samples)
 
-        for start in range(0, n_samples, self.block_size):
-            end = min(start + self.block_size, n_samples)
-            X = data[:, start:end]
-            batch_size = X.shape[1]
+        if self.do_reject:
+            assert self.good_idx is not None
+            idx = self.good_idx
+            data_use = data[:, idx]
+        else:
+            idx = np.arange(n_samples)
+            data_use = data
+        n_use = data_use.shape[1]
 
-            b = np.zeros((batch_size, self.data_dim, self.num_models))
-            for h in range(self.num_models):
-                b[:, :, h] = np.dot((X - self.c[:, h][:, None]).T, self.W[:, :, h])
+        for start in range(0, n_use, self.block_size):
+            end = min(start + self.block_size, n_use)
+            X = data_use[:, start:end]
+            _, _, _, logV, _, ll_samples = self._forward_block(X)
 
-            z = np.zeros((batch_size, self.data_dim, self.num_mix, self.num_models))
-            for h in range(self.num_models):
-                for i in range(self.data_dim):
-                    k = self.comp_list[i, h]
-                    for j in range(self.num_mix):
-                        y = self.beta[j, k] * (b[:, i, h] - self.mu[j, k])
-                        log_pdf, _ = self._compute_log_pdf(y, self.rho[j, k])
-                        z[:, i, j, h] = (
-                            np.log(self.alpha[j, k]) + np.log(self.beta[j, k]) + log_pdf
-                        )
-
-            z0max = np.max(z, axis=2, keepdims=True)
-            ll_src = z0max[:, :, 0, :] + np.log(np.sum(np.exp(z - z0max), axis=2))
-            logV = np.zeros((batch_size, self.num_models))
-            for h in range(self.num_models):
-                with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-                    _, logdet_W = np.linalg.slogdet(self.W[:, :, h])
-                logV[:, h] = (
-                    np.log(self.gm[h])
-                    + logdet_W
-                    + self.sldet
-                    + np.sum(ll_src[:, :, h], axis=1)
-                )
-
-            Vmax = np.max(logV, axis=1, keepdims=True)
-            ll_samples = Vmax[:, 0] + np.log(np.sum(np.exp(logV - Vmax), axis=1))
-
-            Lht[:, start:end] = logV.T
-            Lt[start:end] = ll_samples
+            cols = idx[start:end]
+            Lht[:, cols] = logV.T
+            Lt[cols] = ll_samples
 
         return Lht, Lt
 
@@ -1593,6 +1641,14 @@ class AMICA:
         losslessly, matching ``loadmodout``'s own C-order model-axis convention),
         but is not byte-identical to multi-model Fortran output. Multi-model
         Fortran interop is out of scope here (see #27).
+
+        Also writes ``LLt`` (issue #155) via ``_compute_full_posterior_ll``,
+        which is called on every ``_write_results`` call -- including every
+        mid-training ``writestep`` checkpoint, not just the final write -- so
+        each checkpoint now pays a full O(n_samples) forward pass over the
+        whole dataset. See ``_compute_full_posterior_ll``'s docstring for the
+        cost/tradeoff note and the cheaper stash-during-E-step design tracked
+        as a follow-up.
         """
         # A is written (Fortran output omits it; loadmodout derives A from W and
         # S) only so load_results can restore it directly for the viz helpers.
