@@ -94,6 +94,19 @@ def plot_pmi_heatmap(
         )
     n = mi_matrix.shape[0]
 
+    # Validate unconditionally, not only on the default-order branch. Passing an
+    # explicit `order` used to skip this entirely (the check rode along inside
+    # `block_diagonal_order`), so a non-finite matrix from an upstream failure
+    # rendered silently: imshow draws NaN as a blank cell, which reads as "no
+    # dependency measured here" rather than "the computation broke".
+    if not np.all(np.isfinite(mi_matrix)):
+        raise ValueError(
+            "plot_pmi_heatmap: mi_matrix contains non-finite values (NaN/Inf); "
+            "imshow would render these as blank cells indistinguishable from a "
+            "genuine near-zero mutual information. Check the pairwise_mi input "
+            "(e.g. a constant or non-finite source)."
+        )
+
     if order is None:
         order = block_diagonal_order(mi_matrix)
     order = np.asarray(order)

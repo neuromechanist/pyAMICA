@@ -158,6 +158,41 @@ def test_plot_pmi_heatmap_custom_order_is_honored(small_mi_matrix):
     assert tick_labels == [str(int(i)) for i in custom_order]
 
 
+@pytest.mark.parametrize("use_custom_order", [False, True])
+def test_plot_pmi_heatmap_pixels_are_actually_reordered(
+    small_mi_matrix, use_custom_order
+):
+    """The DRAWN values must be the permuted matrix, not just the tick labels.
+
+    The tick labels are generated straight from `order`, independently of the
+    array handed to `imshow`, so a heatmap whose axes advertise a reordering
+    while the pixels underneath stay in the original order would satisfy every
+    other test here. Verified: deleting the `mi_matrix[np.ix_(order, order)]`
+    permutation entirely left all nine other heatmap tests passing.
+
+    That is the same failure class as issue #136's trap 1, where MATLAB's
+    `mInfoMatrix` turned out to be stored ALREADY reordered and comparing it
+    raw gave r=-0.13 -- labels and data disagreeing, silently, while looking
+    entirely plausible. Assert the pixels directly.
+    """
+    n = small_mi_matrix.shape[0]
+    order = (
+        np.arange(n)[::-1]
+        if use_custom_order
+        else block_diagonal_order(small_mi_matrix)
+    )
+    fig = plot_pmi_heatmap(
+        small_mi_matrix,
+        order=order if use_custom_order else None,
+        mask_diagonal=False,
+    )
+    drawn = fig.axes[0].images[0].get_array()
+    assert drawn is not None
+    np.testing.assert_array_equal(
+        np.asarray(drawn), small_mi_matrix[np.ix_(order, order)]
+    )
+
+
 def test_plot_pmi_heatmap_labels_param_indexed_by_order(small_mi_matrix):
     n = small_mi_matrix.shape[0]
     labels = [f"ch{i}" for i in range(n)]
@@ -178,6 +213,24 @@ def test_plot_pmi_heatmap_model_title(small_mi_matrix):
 def test_plot_pmi_heatmap_raises_on_non_square():
     with pytest.raises(ValueError, match="square"):
         plot_pmi_heatmap(np.zeros((3, 5)))
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+@pytest.mark.parametrize("use_custom_order", [False, True])
+def test_plot_pmi_heatmap_raises_on_non_finite(small_mi_matrix, bad, use_custom_order):
+    """Non-finite entries must raise on BOTH order paths.
+
+    Validation used to ride along inside `block_diagonal_order`, so passing an
+    explicit `order` skipped it and imshow rendered NaN as a blank cell -- which
+    reads as "no dependency here" rather than "the computation failed". Real
+    data reaches this via a constant or non-finite source upstream.
+    """
+    mi = small_mi_matrix.copy()
+    mi[0, 1] = mi[1, 0] = bad
+    n = mi.shape[0]
+    order = np.arange(n)[::-1] if use_custom_order else None
+    with pytest.raises(ValueError, match="non-finite"):
+        plot_pmi_heatmap(mi, order=order)
 
 
 def test_plot_pmi_heatmap_accepts_existing_ax(small_mi_matrix):
