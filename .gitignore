@@ -51,3 +51,8 @@ site/
 
 # Regenerated multi-model ensemble data (issue #27); recreate with multimodel_ensemble.py
 .context/issue-27/ensemble.npz
+
+# Regenerated MATLAB-gate artifacts (issue #159); recreate with gate_prep.py + gate_compare.m
+.context/issue-159/gate_2model/
+.context/issue-159/py_*.npz
+.context/issue-159/mat_*.mat
