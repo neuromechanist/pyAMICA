@@ -94,13 +94,65 @@ algorithm (ours greedy nearest-neighbour chain vs MATLAB's iterative cost minimi
    became **-60.39**. After the softmax that yields confidently WRONG model probabilities
    at the start and end of every plot — plausible-looking and completely wrong. Fix, used
    in `viz.py`: divide by the window overlap (`np.convolve(np.ones_like(row), w, "same")`).
-3. **Getting sources from an `AmicaOutput` is error-prone.** The maintainer got this wrong
-   while building this very gate: `W @ S @ (X - mean)` is NOT the sources (it produced a
-   plausible heatmap with a 3x-wrong MI range, 0.195 vs 0.062). The canonical formula is
-   `W[:, :, m].T @ (sphere @ (X - mean) - c[:, m])` (`torch_impl/core.py: transform`).
-   Note `loadmodout` additionally normalises and variance-reorders. If it caught the
-   maintainer with full context, it will catch users — this is the argument for Phase 5
-   (#137) exposing `model.pmi()` / `model.mir()` so nobody hand-rolls it.
+3. **`W` means different things in different places, and an earlier version of this
+   document got it BACKWARDS.** The rule:
+
+   - **`AmicaOutput.W` (from `loadmodout`) is the EEGLAB convention: ROWS are
+     components.** Sources are `out.W[:, :, m] @ (sphere @ (X - mean))`. This is what
+     `pyAMICA/viz.py` does and it is CORRECT.
+   - **`AMICATorchNG.W` (the live model) is the internal convention: COLUMNS are
+     components.** Its `transform` therefore needs the transpose:
+     `self.W[:, :, m].T @ (sphere @ (X - mean) - c[:, m])`. Also correct, different matrix.
+
+   The two are transposes of each other; neither formula is portable to the other object.
+   Proof that `loadmodout`'s is row-convention, from `load.py` itself: it normalises `A`
+   by COLUMNS (`A[:, i] /= na`) but `W` by ROWS (`W[i, :] *= na`), alongside `mu *= na`
+   and `sbeta /= na`. All four are consistent only if `W`'s rows are the components, and
+   they keep `A`, `W`, `mu`, `sbeta` mutually consistent — which is exactly what
+   `plot_topo_pdf` needs, since it draws `A`'s column as a scalp map beside the histogram
+   of that component's activation and the mixture PDF from its `mu`/`sbeta`.
+
+   **This entry previously claimed the opposite** (that `W @ S @ (X - mean)` was wrong and
+   the transpose was "canonical"). That was false, it was written into this record, and a
+   PR reviewer reasonably escalated it as a critical bug in shipped, working code. Acting
+   on it would have broken `plot_topo_pdf`. Recording the bad reasoning so it is not
+   repeated:
+
+   - *Best-match correlation is a weak discriminator here.* Comparing candidate sources to
+     `transform()`'s output by per-row best |corr| gave 0.988 for the transpose vs 0.982
+     for the correct formula — both high, ranked the wrong way, because `loadmodout`
+     normalises and variance-reorders, so the bases legitimately differ.
+   - *"std(s_i) = ||W[:, i]|| for s = W.T x" proves nothing.* It is a true identity that
+     merely describes what `W.T x` computes; it is not evidence that `W.T x` is the
+     intended map.
+   - The check that actually settles it is consistency with `A`: `A @ (W @ sphered)`
+     reconstructs the centred data to 0.000000 relative error, the transpose form to 0.894.
+     (Partly circular, since `A := pinv(W @ S)` — but that circularity IS the point: `A`
+     and `W @ S` are inverse by construction, so they are the pair that belongs together.)
+
+   Standing lesson: verify a formula against the object's own invariants (does `A` invert
+   it? are `mu`/`sbeta` on that scale?), not against a similarly-named attribute on a
+   different class.
+3b. **A real, pre-existing `pdf.py` bug found while chasing trap 3 (fixed in this PR).**
+   `numpy_impl/pdf.py: compute_pdf` used `special.gammaln` where the generalized
+   Gaussian needs `special.gamma`:
+   `p(y) = exp(-|y|^rho) / (2 * Gamma(1 + 1/rho))`. Dividing by `log(Gamma(...))`
+   makes the "density" NEGATIVE for every rho outside the special-cased 1 and 2 — it
+   integrated to **-8.82 at the default `rho0=1.5`**. How it happened: the Fortran
+   computes this in LOG space (`- gamln(1+1/rho) - log(2)`, amica15.f90:1305-1306),
+   where log-gamma is right; the port transcribed `gamln` straight into a linear-space
+   expression. Blast radius:
+   - **The fit path was never affected.** `numpy_impl/core.py` has its own log-space
+     `_compute_log_pdf` mirroring the Fortran, and never imports `.pdf`. Parity is safe.
+   - The pre-existing `numpy_impl/viz.py: plot_pdf_fits` HAS been drawing wrong curves.
+   - `compute_log_pdf` inherited it (`np.log(pdf)` of a negative number -> NaN).
+   It survived because the only tests calling `compute_pdf` used rho=1.0 and rho=2.0 —
+   precisely the two special-cased branches that are correct. Guarded now by
+   `test_pdf_is_a_normalized_density_for_general_rho` (integrates to 1 for rho in
+   1.0..3.0, a property no restatement of the formula could fake) and
+   `test_pdf_general_branch_is_continuous_with_the_special_cases` (rho=2 vs rho=2+1e-9
+   must agree, since exact-equality dispatch sends them down different branches).
+
 4. **postAmicaUtility's own `loadmodout15.m` is broken on R2025b** (`Unmatched ']'`,
    line 120). pyAMICA's bundled copy works. `addpath` `pyAMICA/sample_data` LAST so ours
    shadows theirs, or the model never loads and every plot fails with a misleading

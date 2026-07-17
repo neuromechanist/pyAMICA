@@ -64,10 +64,13 @@ def plot_pmi_heatmap(
         `pairwise_mi`'s diagonal is each component's self-entropy (~2.83 on
         real data), not a mutual information -- an order of magnitude above
         the ~0.06 off-diagonal values. Left unmasked it blows out the colour
-        scale and hides all off-diagonal structure, so this defaults to True
-        (MATLAB instead zeroes its diagonal; masking is the closer analogue
-        here since our diagonal is not a small value, it is a different
-        quantity).
+        scale and hides all off-diagonal structure, so this defaults to True.
+        Deliberate divergence: MATLAB instead zeroes its diagonal. Masking is
+        the closer analogue here because our diagonal is not a small value, it
+        is a different quantity, and zeroing it would fabricate an MI of 0
+        where none was measured. Do not "align" this with MATLAB by zeroing
+        the diagonal of the matrix itself: `pairwise_mi`'s return value feeds
+        other consumers, and this is a display choice, not a data one.
     ax : matplotlib.axes.Axes, optional
         Axes to draw on. A new figure+axes is created if omitted.
     cmap : str, default "viridis"
@@ -223,8 +226,14 @@ def plot_model_probability(
         # probabilities at the start/end of every plot after the softmax.
         # Dividing by the same window convolved with a ones-signal renormalizes
         # each output sample by the fraction of the window actually inside the
-        # data. Verified against the MATLAB smoothing oracle on a real 2-model
-        # fit: corr=0.994 (1 s window), corr=0.984 (5 s window) (issue #136).
+        # data. Verified against the MATLAB smoothing oracle
+        # (`smooth_amica_prob`) on a real 2-model fit. Name which quantity is
+        # which, because two get compared and their numbers differ: this
+        # SMOOTHED LOG-LIKELIHOOD correlates at 0.9939 (1 s window) / 0.9836
+        # (5 s), while the PROBABILITIES it becomes after the softmax below
+        # correlate at 0.9886 / 0.9594. Both are recorded in
+        # `.context/issue-136/matlab_viz_verification.md`; an unlabelled 0.994
+        # here previously read as a stale copy of the 0.9886 figure (#136).
         #
         # Known, accepted divergence: MATLAB additionally pins its first/last
         # sample to the raw unsmoothed input (a MATLAB smooth() idiom); this
@@ -290,7 +299,7 @@ def plot_topo_pdf(
 ) -> Figure:
     """Per-component scalp map beside its fitted generalized-Gaussian mixture PDF.
 
-    Fresh design (issue #136 gotcha 4: `pop_topohistplot` is broken upstream on
+    Fresh design (issue #136 trap 5: `pop_topohistplot` is broken upstream on
     current EEGLAB, so there is no working visual reference to match). Each
     row is one component: a scalp map of ``out.A[:, i, model]`` next to the
     fitted mixture density (`pyAMICA.numpy_impl.pdf.compute_pdf`), optionally

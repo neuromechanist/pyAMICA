@@ -58,8 +58,19 @@ is stored ALREADY REORDERED -- compared raw it reads r=-0.13 and looks like our 
 is broken; un-permuted it is r=0.9887. (2) A naive `convolve(..., mode="same")`
 Hanning smooth zero-pads and silently corrupts both plot edges (Lht ~ -108 got
 dragged to -60), producing confidently wrong probabilities; divide by the window
-overlap. (3) Getting sources from an AmicaOutput is error-prone -- `W @ S @ (x-mean)`
-is WRONG (3x-off MI range); canonical is `W[:,:,m].T @ (sphere @ (x-mean) - c[:,m])`.
+overlap. (3) `W` differs by object: `AmicaOutput.W` (loadmodout) is EEGLAB convention
+(ROWS = components) so sources are `out.W[:,:,m] @ sphere @ (x-mean)`, while the
+live `AMICATorchNG.W` is internal convention (COLUMNS = components) so its
+transform needs the transpose. They are transposes; neither formula ports to the
+other object. An earlier note here claimed the opposite and a reviewer escalated
+it as a critical bug in correct code -- see the doc for the bad reasoning, and
+verify formulas against the object's own invariants (does `A` invert it?).
+(4) Chasing that turned up a REAL pre-existing bug: `numpy_impl/pdf.py` used
+`gammaln` where the generalized Gaussian needs `gamma`, making compute_pdf return
+a NEGATIVE density for any rho outside {1,2} (integral -8.82 at the default
+rho0=1.5). Fit path unaffected (core.py has its own correct log-space version);
+the shipped `numpy_impl/viz.py: plot_pdf_fits` was drawing wrong curves. Survived
+because tests only ever covered rho=1.0/2.0, the special-cased correct branches.
 
 ## Issue #155 (LLt output): MATLAB interop re-verified for the new file
 `LLt` (per-timepoint, per-model log-likelihood) was added to the writer in PR
