@@ -80,6 +80,42 @@ def test_pdf_computation():
     npt.assert_allclose(dpdf, -2 * y * pdf)
 
 
+def test_pdf_is_a_normalized_density_for_general_rho():
+    """`compute_pdf` must return an actual density for every rho, not just the
+    special-cased rho=1 (Laplace) and rho=2 (Gaussian).
+
+    The generalized Gaussian p(y) = exp(-|y|^rho) / (2*Gamma(1+1/rho)) integrates
+    to 1 by construction, so integrating the returned values is an oracle-free
+    check that holds for any rho. This is a property, not a restatement of the
+    formula: asserting `pdf == <the same expression the code uses>` cannot catch
+    a wrong expression, which is exactly how a `gammaln`-for-`gamma` transcription
+    bug survived here (it made the "density" negative, integrating to -8.82 at the
+    default rho0=1.5, while rho=1 and rho=2 stayed correct because they are
+    special-cased and were the only values tested).
+    """
+    y = np.linspace(-60.0, 60.0, 400001)
+    for rho in (1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0):
+        pdf, _ = compute_pdf(y, rho=rho)
+        assert np.all(pdf >= 0.0), f"rho={rho}: density has negative values"
+        integral = np.trapezoid(pdf, y)
+        npt.assert_allclose(integral, 1.0, rtol=1e-6, err_msg=f"rho={rho}")
+
+
+def test_pdf_general_branch_is_continuous_with_the_special_cases():
+    """The general-rho branch must agree with the rho=1/rho=2 special cases in
+    the limit, since they are the same density.
+
+    `compute_pdf` dispatches on exact equality (`rho == 1.0`, `rho == 2.0`), so
+    a nudge of 1e-9 takes the identical distribution down the general code path.
+    Any disagreement means the two branches do not describe the same density.
+    """
+    y = np.linspace(-8.0, 8.0, 2001)
+    for rho in (1.0, 2.0):
+        special_case, _ = compute_pdf(y, rho=rho)
+        general, _ = compute_pdf(y, rho=rho + 1e-9)
+        npt.assert_allclose(general, special_case, rtol=1e-6, atol=1e-12)
+
+
 def test_data_loading(temp_dir):
     """Test data loading functionality."""
     # Create test data
