@@ -77,6 +77,16 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync
+      # Build the dependency-free native binary (epic #165) so the AMICANative
+      # engine's end-to-end tests run for real on Linux (they skip without
+      # PAMICA_NATIVE_BINARY). Static reference LAPACK/BLAS, same as the release.
+      - name: Build native AMICA binary (for engine E2E tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran liblapack-dev libblas-dev
+          LAPACK_LIBS="-l:liblapack.a -l:libblas.a" EXTRA_LDFLAGS="-static-libquadmath" \
+            bash native/build.sh
+          echo "PAMICA_NATIVE_BINARY=$PWD/native/amica15_shim" >> "$GITHUB_ENV"
       # Exclude the "slow" parity tests: they invoke the macOS-only Fortran
       # reference binary (pyAMICA/sample_data/amica15mac), which cannot run on
       # the Linux runner. MPS-specific tests self-skip when MPS is absent.
