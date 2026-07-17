@@ -69,6 +69,13 @@ class AMICA:
         Log-likelihood of the *fitted* parameters (issue #51). Use this, not
         ``ll_history_[-1]``, as the model's log-likelihood: with the best-iterate
         safeguard the returned parameters can be an earlier, higher-LL iterate.
+    mir_history_ : list
+        Mutual Information Reduction (MIR) waypoint trajectory (issue #137),
+        populated when ``fit`` is called
+        with ``mir_step > 0``: ``(iteration, mir_nats, variance)`` tuples from
+        the mid-fit ``W``/``sphere``. Like ``ll_history_``, a ``keep_best``
+        restore does not rewrite it -- use :meth:`mir` on the fitted model for
+        the value of the *returned* parameters, not ``mir_history_[-1]``.
 
     Examples
     --------
@@ -107,6 +114,7 @@ class AMICA:
         self.final_ll_ = None
         self.stop_reason_ = None
         self.converged_ = False
+        self.mir_history_ = []
 
     def _select_device(self, ng_dtype) -> Union[str, torch.device]:
         """Resolve the compute device, applying the MPS/float64 fallback.
@@ -141,6 +149,7 @@ class AMICA:
         do_mean: bool = True,
         do_sphere: bool = True,
         do_newton: bool = False,
+        mir_step: int = 0,
         **kwargs,
     ) -> "AMICA":
         """
@@ -161,6 +170,11 @@ class AMICA:
         do_newton : bool, default=False
             Whether to enable the Fortran-parity Newton preconditioner (tune
             via ``newt_start``/``newtrate`` in ``**kwargs``).
+        mir_step : int, default=0
+            If > 0, compute MIR every ``mir_step`` iterations during training
+            and record it in ``mir_history_`` (issue #137). ``0`` (default)
+            disables the waypoints; see :meth:`AMICATorchNG.fit` for details
+            and the interaction with ``keep_best``.
         **kwargs
             Additional parameters passed to the :class:`AMICATorchNG`
             constructor (e.g. ``block_size``, ``rho0``, ``seed``, ``dtype``) --
@@ -203,12 +217,13 @@ class AMICA:
             device=device,
             **kwargs,
         )
-        backend.fit(X, max_iter=max_iter, verbose=self.verbose)
+        backend.fit(X, max_iter=max_iter, verbose=self.verbose, mir_step=mir_step)
 
         self.model_ = backend
         self.ll_history_ = backend.ll_history
         self.final_ll_ = backend.final_ll_
         self.stop_reason_ = backend.stop_reason
+        self.mir_history_ = backend.mir_history_
         self.converged_ = self.stop_reason_ not in AMICATorchNG._DEGENERATE_STOP_REASONS
         # A degenerate fit (nan_ll/singular_ll) holds non-finite parameters and
         # would return NaN sources, so it is not a usable model: is_fitted_ stays
@@ -321,6 +336,88 @@ class AMICA:
         assert self.model_ is not None
 
         return self.model_.get_unmixing_matrix(model_idx=model_idx)
+
+    def mir(
+        self, X: np.ndarray, model_idx: int = 0, nbins: Optional[int] = None
+    ) -> tuple:
+        """
+        Mutual Information Reduction (issue #137) of the fitted unmixing on ``X``.
+
+        Composes the full raw-data-to-sources transform (unmixing @ sphere)
+        the documented way and delegates to :func:`pyAMICA.metrics.mir`.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Raw (unpreprocessed) data of shape (n_channels, n_samples)
+        model_idx : int, default=0
+            Which model's unmixing to use
+        nbins : int, optional
+            Histogram bin count; see :func:`pyAMICA.metrics.mir`
+
+        Returns
+        -------
+        mir_nats : float
+            Mutual information removed, in nats.
+        variance : float
+            Variance of the estimate.
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted; or if PCA reduction (``pcakeep``/
+            ``pcadb``) is active, which leaves the sphere rank-deficient so
+            MIR's log-Jacobian term is undefined; or if ``X`` is non-finite or
+            has a constant channel. See :meth:`AMICATorchNG.mir` and
+            :func:`pyAMICA.metrics.mir`.
+        RuntimeError
+            If the fit ended degenerate (issue #50), since the parameters are
+            non-finite and any metric from them would be meaningless.
+        """
+        self._check_usable("compute MIR")
+        assert self.model_ is not None
+
+        return self.model_.mir(X, model_idx=model_idx, nbins=nbins)
+
+    def pmi(
+        self, X: np.ndarray, model_idx: int = 0, nbins: Optional[int] = None
+    ) -> np.ndarray:
+        """
+        Pairwise Mutual Information (issue #137) between the fitted sources on ``X``.
+
+        Delegates to :func:`pyAMICA.metrics.pairwise_mi` on
+        ``transform(X, model_idx)``.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Raw (unpreprocessed) data of shape (n_channels, n_samples)
+        model_idx : int, default=0
+            Which model's sources to use
+        nbins : int, optional
+            Histogram bin count; see :func:`pyAMICA.metrics.pairwise_mi`
+
+        Returns
+        -------
+        mi_matrix : np.ndarray of shape (n_sources, n_sources)
+            Symmetric pairwise mutual information, in nats. The diagonal is each
+            source's own entropy, not a mutual information; see
+            :func:`pyAMICA.viz.plot_pmi_heatmap`, which masks it by default.
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted; or if ``X`` is non-finite or has a
+            constant channel; or if ``nbins`` is too large for the sample count
+            (a sparse joint histogram fabricates mutual information from noise).
+            See :func:`pyAMICA.metrics.pairwise_mi`.
+        RuntimeError
+            If the fit ended degenerate (issue #50).
+        """
+        self._check_usable("compute PMI")
+        assert self.model_ is not None
+
+        return self.model_.pmi(X, model_idx=model_idx, nbins=nbins)
 
     def variance_order(
         self, model_idx: int = 0, return_svar: bool = False
@@ -459,6 +556,11 @@ class AMICA:
         )
         model.ll_history_ = model.model_.ll_history
         model.final_ll_ = model.model_.final_ll_
+        # mir_history_ is not persisted in state_dict() (a diagnostic
+        # trajectory, not a fitted parameter), so a loaded model's is always
+        # empty; expose it anyway for attribute-surface consistency with
+        # ll_history_.
+        model.mir_history_ = model.model_.mir_history_
         # state_dict() refuses to serialize a degenerate model, so a loaded model
         # is always usable; carry its stop_reason through for inspection anyway.
         model.stop_reason_ = model.model_.stop_reason
