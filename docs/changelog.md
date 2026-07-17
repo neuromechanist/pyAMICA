@@ -5,6 +5,16 @@ Release notes are also published on the
 
 ## Unreleased
 
+- `AMICATorchNG`/`AMICA` gain `mir()`/`pmi()` accessors that compose the
+  fitted unmixing the documented way (`get_unmixing_matrix(model_idx) @
+  sphere` for MIR, `transform(X, model_idx)` for PMI) and delegate to
+  `pyAMICA.metrics.mir`/`pairwise_mi`, so callers no longer hand-compose the
+  transform themselves. `fit()` also accepts `mir_step` (default `0`, off) to
+  record MIR waypoints during training in `mir_history_` as
+  `(iteration, mir_nats, variance)`; like `ll_history_`, it is a true
+  trajectory that a `keep_best` restore does not rewrite. PCA reduction
+  (`pcakeep`/`pcadb`) is rejected up front with a named error, since it
+  leaves the sphere rank-deficient and MIR's log-Jacobian undefined (#137).
 - Visualization module (`pyAMICA.viz`): `plot_pmi_heatmap` and
   `plot_model_probability`, backend-agnostic views over `AmicaOutput` that return
   a `Figure` (and accept an optional `ax`/`axes`) rather than mutating pyplot
