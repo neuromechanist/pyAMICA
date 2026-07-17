@@ -70,7 +70,8 @@ class AMICA:
         ``ll_history_[-1]``, as the model's log-likelihood: with the best-iterate
         safeguard the returned parameters can be an earlier, higher-LL iterate.
     mir_history_ : list
-        MIR waypoint trajectory (issue #137), populated when ``fit`` is called
+        Mutual Information Reduction (MIR) waypoint trajectory (issue #137),
+        populated when ``fit`` is called
         with ``mir_step > 0``: ``(iteration, mir_nats, variance)`` tuples from
         the mid-fit ``W``/``sphere``. Like ``ll_history_``, a ``keep_best``
         restore does not rewrite it -- use :meth:`mir` on the fitted model for
@@ -357,7 +358,21 @@ class AMICA:
         Returns
         -------
         mir_nats : float
+            Mutual information removed, in nats.
         variance : float
+            Variance of the estimate.
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted; or if PCA reduction (``pcakeep``/
+            ``pcadb``) is active, which leaves the sphere rank-deficient so
+            MIR's log-Jacobian term is undefined; or if ``X`` is non-finite or
+            has a constant channel. See :meth:`AMICATorchNG.mir` and
+            :func:`pyAMICA.metrics.mir`.
+        RuntimeError
+            If the fit ended degenerate (issue #50), since the parameters are
+            non-finite and any metric from them would be meaningless.
         """
         self._check_usable("compute MIR")
         assert self.model_ is not None
@@ -385,6 +400,19 @@ class AMICA:
         Returns
         -------
         mi_matrix : np.ndarray of shape (n_sources, n_sources)
+            Symmetric pairwise mutual information, in nats. The diagonal is each
+            source's own entropy, not a mutual information; see
+            :func:`pyAMICA.viz.plot_pmi_heatmap`, which masks it by default.
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted; or if ``X`` is non-finite or has a
+            constant channel; or if ``nbins`` is too large for the sample count
+            (a sparse joint histogram fabricates mutual information from noise).
+            See :func:`pyAMICA.metrics.pairwise_mi`.
+        RuntimeError
+            If the fit ended degenerate (issue #50).
         """
         self._check_usable("compute PMI")
         assert self.model_ is not None

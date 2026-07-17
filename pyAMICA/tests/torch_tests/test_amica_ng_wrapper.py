@@ -11,11 +11,13 @@ import math
 from pathlib import Path
 
 import numpy as np
+import numpy.testing as npt
 import pytest
 import torch
 
 from pyAMICA.amica import AMICA
 from pyAMICA.metrics import mir, pairwise_mi
+from pyAMICA.torch_impl.core import AMICATorchNG
 
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"
@@ -520,25 +522,40 @@ def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
 
 
 def test_mir_composes_unmixing_the_documented_way(fitted_ng, real_data):
-    """model.mir(X) must equal metrics.mir(get_unmixing_matrix(0) @ sphere, X)
-    exactly: this pins the W_fort @ sphere convention (issue #137 exists
-    precisely because that composition was gotten wrong by hand in Phase 4)."""
+    """`model.mir(X)` must match `metrics.mir(get_unmixing_matrix(0) @ sphere, X)`.
+
+    This pins the `W_fort @ sphere` composition, which is the whole reason issue
+    #137 exists: that composition was gotten wrong by hand during Phase 4, and
+    the wrong answer was *plausible* rather than obviously broken (dropping the
+    `.T` gives 42.4688 where the truth is 42.5486, only 0.19% off).
+
+    `rtol=1e-12` rather than exact equality: `mir()` composes `W.T @ sphere` in
+    torch while this test composes it in numpy, and the two BLAS paths differ in
+    the last bits (exact `==` passed locally and failed on CI). The tolerance is
+    still nine orders of magnitude tighter than the 1.9e-3 error it guards
+    against, so it catches a wrong composition comfortably.
+    """
     X = real_data[:, :4096]
     sphere = fitted_ng.model_.sphere.cpu().numpy()
     unmixing = fitted_ng.get_unmixing_matrix(0) @ sphere
-    expected = mir(unmixing, X)
+    expected_mir, expected_var = mir(unmixing, X)
 
-    actual = fitted_ng.mir(X)
-    assert actual == expected
+    actual_mir, actual_var = fitted_ng.mir(X)
+    npt.assert_allclose(actual_mir, expected_mir, rtol=1e-12)
+    npt.assert_allclose(actual_var, expected_var, rtol=1e-12)
 
 
 def test_pmi_matches_pairwise_mi_on_transform(fitted_ng, real_data):
-    """model.pmi(X) must equal pairwise_mi(model.transform(X)) exactly."""
+    """`model.pmi(X)` must match `pairwise_mi(model.transform(X))`.
+
+    `rtol=1e-12` for the same reason as the MIR test above: both sides run the
+    identical estimator, but the sources reach it via different float paths.
+    """
     X = real_data[:, :4096]
     expected = pairwise_mi(fitted_ng.transform(X))
 
     actual = fitted_ng.pmi(X)
-    np.testing.assert_array_equal(actual, expected)
+    npt.assert_allclose(actual, expected, rtol=1e-12)
 
 
 def test_mir_real_fitted_unmixing_is_large_and_positive(fitted_ng, real_data):
@@ -577,6 +594,57 @@ def test_mir_step_negative_raises(real_data):
         model.fit(
             real_data[:, :4096], max_iter=3, block_size=1024, seed=42, mir_step=-1
         )
+
+
+def test_failing_mir_waypoint_does_not_kill_the_fit(real_data, monkeypatch, caplog):
+    """A diagnostic must never destroy a decomposition.
+
+    `metrics.mir` raises on a near-singular unmixing, and a near-singular W
+    mid-fit is a transient the natural gradient can pass through (the training
+    path only warns about it). Before this guard, that ValueError propagated
+    straight out of `fit()` and threw away the whole fit -- turning on a
+    waypoint could lose hours of training over a condition the optimiser was
+    about to recover from.
+
+    Forcing the raise via monkeypatch is deliberate and is not mocked data: the
+    real trigger is a transient that cannot be induced on demand from real
+    input, and what is under test is the fit's response to a raising waypoint,
+    not any numerical claim. The fit's own inputs and arithmetic stay real
+    throughout.
+    """
+    real_mir = AMICATorchNG.mir
+    calls = {"n": 0}
+
+    def flaky_mir(self, X, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:  # fail on the second waypoint, mid-fit
+            raise ValueError("mir(): unmixing matrix is singular or near-singular")
+        return real_mir(self, X, **kwargs)
+
+    monkeypatch.setattr(AMICATorchNG, "mir", flaky_mir)
+
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    with caplog.at_level(logging.WARNING, logger="pyAMICA.torch_impl.core"):
+        model.fit(real_data[:, :4096], max_iter=4, block_size=1024, seed=42, mir_step=1)
+
+    # The fit survived and is usable.
+    assert model.is_fitted_
+    assert model.converged_
+    assert model.final_ll_ is not None
+    assert math.isfinite(model.final_ll_)
+
+    # The failed waypoint is recorded as a visible NaN gap, not silently dropped.
+    iters = [row[0] for row in model.mir_history_]
+    assert iters == [0, 1, 2, 3], iters
+    values = [row[1] for row in model.mir_history_]
+    assert math.isnan(values[1]), "failed waypoint must be a visible NaN"
+    assert all(math.isfinite(v) for i, v in enumerate(values) if i != 1)
+
+    # And it warned rather than failing silently.
+    assert any(
+        "MIR waypoint failed" in r.getMessage() and "iter 1" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_mir_step_zero_matches_omitted_argument(real_data):

@@ -591,7 +591,8 @@ class AMICATorchNG:
         # the iterate fit() actually kept -- use this, not ``ll_history[-1]``, as
         # the model's fitted log-likelihood. Set by fit().
         self.final_ll_: Optional[float] = None
-        # MIR waypoint trajectory (issue #137), populated by fit() when
+        # Mutual Information Reduction (MIR) waypoint trajectory (issue #137),
+        # populated by fit() when
         # mir_step > 0: (iteration, mir_nats, variance) tuples from the
         # CURRENT (mid-fit) W/sphere. Like ll_history, this is a true
         # trajectory that a keep_best restore does NOT rewrite -- the
@@ -1786,8 +1787,28 @@ class AMICATorchNG:
             # writestep/histstep idiom (numpy_impl/core.py). Computed from the
             # CURRENT W/sphere (just rebuilt above by _update_parameters /
             # the share_comps block) against the raw, un-preprocessed X.
+            #
+            # A failed waypoint must never kill the fit. `metrics.mir` raises on
+            # a near-singular unmixing, and a near-singular W mid-fit is a
+            # transient the natural gradient can pass through (the same
+            # condition is only a warning on the training path, see
+            # numpy_impl/core.py's logdet_W check). Letting that propagate would
+            # let a purely diagnostic flag destroy an otherwise-recoverable
+            # decomposition. Warn and record NaN instead: the gap stays visible
+            # in mir_history_ rather than being silently absent, so a plotted
+            # trajectory shows a hole exactly where the transient was.
             if mir_step > 0 and it % mir_step == 0:
-                mir_nats, mir_var = self.mir(X)
+                try:
+                    mir_nats, mir_var = self.mir(X)
+                except (ValueError, np.linalg.LinAlgError) as exc:
+                    logger.warning(
+                        "MIR waypoint failed at iter %d (%s: %s); recording NaN "
+                        "and continuing. The fit itself is unaffected.",
+                        it,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    mir_nats = mir_var = float("nan")
                 self.mir_history_.append((it, mir_nats, mir_var))
 
             # Learning-rate control, ported from Fortran (amica17.f90:1062-1108).
