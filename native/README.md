@@ -40,6 +40,26 @@ Toolchain (per sccn/amica PR #53): gfortran (+ a C compiler). No `mpif90` needed
 for the shim build. macOS: `brew install gcc`; Debian/Ubuntu:
 `sudo apt-get install -y gfortran liblapack-dev libblas-dev`.
 
+## Release binaries (cross-platform)
+
+`.github/workflows/release-binaries.yml` builds this recipe on a native runner for
+each target and attaches the checksummed binaries to the GitHub release:
+
+| target | runner | LAPACK/BLAS | link |
+|---|---|---|---|
+| macos-arm64 | macos-14 | Accelerate (system) | static Fortran runtime -> only Accelerate + libSystem |
+| linux-x64 | ubuntu-latest | static reference LAPACK/BLAS | static Fortran runtime, dynamic glibc |
+| linux-arm64 | ubuntu-24.04-arm | static reference LAPACK/BLAS | as above |
+| windows-x64 | windows-latest (MSYS2 MINGW64) | static OpenBLAS | `-static` (no MSYS2 DLLs) |
+| windows-arm64 | windows-11-arm (MSYS2 CLANGARM64) | static OpenBLAS | `-static`; experimental |
+
+Each target is smoke-tested (a 2-iteration fit on the bundled sample EEG must
+produce a finite negative LL) before its binary is uploaded, so a binary that
+cannot run on its platform fails the job rather than shipping. Run the workflow
+manually (`workflow_dispatch`) to validate without cutting a release. Platform
+specifics live in the workflow matrix; `native/build.sh` reads `LAPACK_LIBS` and
+`EXTRA_LDFLAGS` from it.
+
 ## Validation
 
 `validate_shim.sh` proves the shim is **mathematically identical to real Open MPI**,
