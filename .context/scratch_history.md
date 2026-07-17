@@ -45,6 +45,22 @@ python -m pyAMICA.amica_cli pyAMICA/sample_data/sample_params.json --verbose --o
 gfortran -O3 -fopenmp amica17.f90 funmod2.f90 -o amica -llapack -lblas
 ```
 
+## Issue #136 (MIR/PMI visualizations): MATLAB gate for plots
+Same run-and-observe posture as #155, extended to figures. postAmicaUtility is GPL
+(pop_topohistplot.m / pop_modPMI.m carry explicit GPL-2.0-or-later headers), pyAMICA
+is BSD-3-Clause, so its .m source was never read: the gate used only `help` text,
+rendered figures, and black-box I/O. Every plotted quantity is pinned to MATLAB
+(mir vs Apache-2.0 getMIR.m at 1.7e-15; P(model|data) vs LLt2v at 1.4e-14; v
+bit-exact; smoothed probability r=0.9886; pairwise_mi vs minfojp r=0.9887). Full
+record + traps + how to re-run: `.context/issue-136/matlab_viz_verification.md`.
+Three traps worth knowing before touching viz or metrics: (1) MATLAB's mInfoMatrix
+is stored ALREADY REORDERED -- compared raw it reads r=-0.13 and looks like our PMI
+is broken; un-permuted it is r=0.9887. (2) A naive `convolve(..., mode="same")`
+Hanning smooth zero-pads and silently corrupts both plot edges (Lht ~ -108 got
+dragged to -60), producing confidently wrong probabilities; divide by the window
+overlap. (3) Getting sources from an AmicaOutput is error-prone -- `W @ S @ (x-mean)`
+is WRONG (3x-off MI range); canonical is `W[:,:,m].T @ (sphere @ (x-mean) - c[:,m])`.
+
 ## Issue #155 (LLt output): MATLAB interop re-verified for the new file
 `LLt` (per-timepoint, per-model log-likelihood) was added to the writer in PR
 #156, so it went through the same #92 MATLAB gate below. Result: real
