@@ -1,5 +1,25 @@
 # Phase 4 MATLAB gate: MIR/PMI visualizations (issue #136, epic #133)
 
+> **OUTCOME (end of Phase 4): two plots shipped, `plot_topo_pdf` was CUT.**
+> `plot_pmi_heatmap` and `plot_model_probability` shipped, both fully pinned to
+> MATLAB (see the data gate below) with the visual gate accepted.
+> `plot_topo_pdf` is deferred to **#159**. It derives source activations from a
+> loaded `AmicaOutput`, and that turns out to rest on an unsettled `W`
+> convention: `loadmodout`'s `W` does not reproduce the live model's
+> `transform()` sources at high fidelity under EITHER orientation, even for a
+> single-model fit where `c` is identically zero (`W @ sphered` -> mean |corr|
+> 0.877; `W.T @ sphered` -> 0.932; **0/32** components above 0.999, where a
+> merely normalised + variance-reordered `W` would give ~1.000 for all 32, since
+> correlation already quotients out scale, sign and permutation). It is also the
+> only plot with **no MATLAB oracle** (`pop_topohistplot` is broken upstream,
+> trap 5), so nothing external could catch a wrong activation space. Shipping a
+> scalp map that renders plausibly but cannot be verified is precisely the
+> failure mode this epic kept hitting, so it was cut rather than documented-and-
+> shipped. The two plots that did ship touch neither raw data nor sources.
+>
+> Chasing this DID pay for itself: it uncovered a real, pre-existing, shipped
+> bug (`gammaln` for `gamma` in `numpy_impl/pdf.py`, trap 3b below).
+
 ## The contract
 
 Same bidirectional standard as [issue #155](../issue-155/matlab_interop_verification.md),

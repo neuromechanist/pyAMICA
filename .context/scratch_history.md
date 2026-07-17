@@ -45,6 +45,20 @@ python -m pyAMICA.amica_cli pyAMICA/sample_data/sample_params.json --verbose --o
 gfortran -O3 -fopenmp amica17.f90 funmod2.f90 -o amica -llapack -lblas
 ```
 
+## Issue #159 (loadmodout W convention): OPEN, blocks scalp-topography plots
+Deriving source activations from a loaded `AmicaOutput` is NOT settled.
+`loadmodout`'s W does not reproduce the live model's `transform()` sources at
+high fidelity under either orientation, even single-model with c identically
+zero: `W @ sphered` -> mean |corr| 0.877, `W.T @ sphered` -> 0.932, 0/32 above
+0.999 (a merely normalised+reordered W would give ~1.000 for all 32, since
+correlation quotients out scale/sign/permutation). `plot_topo_pdf` was CUT from
+Phase 4 over this. Do NOT hand-roll sources from an AmicaOutput until #159 is
+resolved. Three natural tests are degenerate here and will mislead you: the
+activation-mean test (fitted mixture is near-symmetric, so it matches trivially
+given E[sphered]=0), best-match correlation (shift-invariant, cannot see c at
+all), and histogram-vs-PDF L1 (too insensitive to a 20%-of-spread shift). Full
+evidence in the issue and `.context/issue-136/matlab_viz_verification.md`.
+
 ## Issue #136 (MIR/PMI visualizations): MATLAB gate for plots
 Same run-and-observe posture as #155, extended to figures. postAmicaUtility is GPL
 (pop_topohistplot.m / pop_modPMI.m carry explicit GPL-2.0-or-later headers), pyAMICA
