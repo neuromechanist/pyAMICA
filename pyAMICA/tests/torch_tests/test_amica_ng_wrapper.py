@@ -7,6 +7,7 @@ represent float64). Real sample EEG data only (no synthetic/mock).
 """
 
 import logging
+import math
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ import pytest
 import torch
 
 from pyAMICA.amica import AMICA
+from pyAMICA.metrics import mir, pairwise_mi
 
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"
@@ -466,6 +468,10 @@ def test_unfitted_output_raises_not_fitted():
         model.transform(np.zeros((NW, 16)))
     with pytest.raises(ValueError, match="fitted"):
         model.get_unmixing_matrix()
+    with pytest.raises(ValueError, match="fitted"):
+        model.mir(np.zeros((NW, 16)))
+    with pytest.raises(ValueError, match="fitted"):
+        model.pmi(np.zeros((NW, 16)))
 
 
 def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
@@ -496,6 +502,8 @@ def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
         lambda: model.save(str(tmp_path / "degenerate.pt")),
         lambda: model.write_amica_output(str(tmp_path / "degenerate_out")),
         lambda: model.variance_order(),
+        lambda: model.mir(real_data[:, :512]),
+        lambda: model.pmi(real_data[:, :512]),
     ):
         with pytest.raises(RuntimeError, match="degenerate.*nan_ll"):
             action()
@@ -505,4 +513,111 @@ def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
     with pytest.raises(RuntimeError, match="degenerate"):
         AMICA(n_models=1, n_mix=3, device="cpu", verbose=False).fit_transform(
             bad, max_iter=3, block_size=1024, seed=0
+        )
+
+
+# --- MIR / PMI wiring (issue #137) ------------------------------------------
+
+
+def test_mir_composes_unmixing_the_documented_way(fitted_ng, real_data):
+    """model.mir(X) must equal metrics.mir(get_unmixing_matrix(0) @ sphere, X)
+    exactly: this pins the W_fort @ sphere convention (issue #137 exists
+    precisely because that composition was gotten wrong by hand in Phase 4)."""
+    X = real_data[:, :4096]
+    sphere = fitted_ng.model_.sphere.cpu().numpy()
+    unmixing = fitted_ng.get_unmixing_matrix(0) @ sphere
+    expected = mir(unmixing, X)
+
+    actual = fitted_ng.mir(X)
+    assert actual == expected
+
+
+def test_pmi_matches_pairwise_mi_on_transform(fitted_ng, real_data):
+    """model.pmi(X) must equal pairwise_mi(model.transform(X)) exactly."""
+    X = real_data[:, :4096]
+    expected = pairwise_mi(fitted_ng.transform(X))
+
+    actual = fitted_ng.pmi(X)
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_mir_real_fitted_unmixing_is_large_and_positive(fitted_ng, real_data):
+    """A real fitted unmixing removes mutual information (mir > 0) and removes
+    more than the identity transform (mirrors
+    test_mir_real_fitted_unmixing_is_large_and_positive in test_metrics_mir.py)."""
+    X = real_data[:, :4096]
+    mir_nats, _ = fitted_ng.mir(X)
+    assert mir_nats > 0
+
+    identity_mir, _ = mir(np.eye(NW), X)
+    assert mir_nats > identity_mir
+
+
+def test_mir_step_populates_history_at_right_iterations(real_data):
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=5, block_size=1024, seed=42, mir_step=2)
+
+    iterations = [entry[0] for entry in model.mir_history_]
+    assert iterations == [0, 2, 4]
+    for _, mir_nats, variance in model.mir_history_:
+        assert math.isfinite(mir_nats)
+        assert math.isfinite(variance)
+
+
+def test_mir_step_zero_leaves_history_empty(real_data):
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=3, block_size=1024, seed=42, mir_step=0)
+
+    assert model.mir_history_ == []
+
+
+def test_mir_step_negative_raises(real_data):
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    with pytest.raises(ValueError, match="mir_step"):
+        model.fit(
+            real_data[:, :4096], max_iter=3, block_size=1024, seed=42, mir_step=-1
+        )
+
+
+def test_mir_step_zero_matches_omitted_argument(real_data):
+    """mir_step=0 (explicit) must leave fit() behaviour byte-for-byte identical
+    to not passing mir_step at all."""
+    X = real_data[:, :4096]
+    default_model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    default_model.fit(X, max_iter=3, block_size=1024, seed=42)
+
+    explicit_model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    explicit_model.fit(X, max_iter=3, block_size=1024, seed=42, mir_step=0)
+
+    assert default_model.ll_history_ == explicit_model.ll_history_
+    assert default_model.final_ll_ == explicit_model.final_ll_
+    np.testing.assert_array_equal(
+        default_model.get_unmixing_matrix(), explicit_model.get_unmixing_matrix()
+    )
+    assert default_model.mir_history_ == explicit_model.mir_history_ == []
+
+
+def test_mir_raises_under_pca_reduction(real_data):
+    """PCA reduction (pcakeep) leaves the sphere rank-deficient, so mir()'s
+    log-Jacobian term is undefined; the guard must name pcakeep."""
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=2, block_size=1024, seed=42, pcakeep=20)
+
+    with pytest.raises(ValueError, match="pcakeep"):
+        model.mir(real_data[:, :4096])
+
+
+def test_mir_step_raises_under_pca_reduction_up_front(real_data):
+    """mir_step > 0 under pcakeep is rejected before fitting starts, matching
+    the share_comps precedent, rather than failing mid-fit at the first
+    waypoint."""
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    with pytest.raises(ValueError, match="pcakeep"):
+        model.fit(
+            real_data[:, :4096],
+            max_iter=2,
+            block_size=1024,
+            seed=42,
+            pcakeep=20,
+            mir_step=1,
         )
