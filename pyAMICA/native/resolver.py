@@ -13,6 +13,7 @@ import hashlib
 import os
 import platform
 import stat
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -93,11 +94,8 @@ def verify_checksum(binary: Path, sha256_file: Path) -> None:
 
 
 def _download(url: str, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
     with urllib.request.urlopen(url) as r:  # noqa: S310 (fixed github.com host)
-        tmp.write_bytes(r.read())
-    tmp.replace(dest)
+        dest.write_bytes(r.read())
 
 
 def resolve(version: str = "latest", *, download: bool = True) -> Path:
@@ -109,14 +107,16 @@ def resolve(version: str = "latest", *, download: bool = True) -> Path:
     and cache (no network), raising if neither is present.
     """
     if override := os.environ.get(_ENV_BINARY):
-        path = Path(override)
+        # resolve() so a relative override still runs under the engine's tempdir cwd.
+        path = Path(override).resolve()
         if not path.exists():
             raise FileNotFoundError(f"{_ENV_BINARY}={override} does not exist.")
         return path
 
     tag = platform_tag()
     asset = asset_name(tag)
-    cached = _default_cache() / version / asset
+    # `version` is used as a path segment; guard against traversal ("../").
+    cached = _default_cache() / Path(version).name / asset
     if cached.exists():
         return cached
 
@@ -131,10 +131,20 @@ def resolve(version: str = "latest", *, download: bool = True) -> Path:
         if version == "latest"
         else f"https://github.com/{_REPO}/releases/download/{version}"
     )
-    _download(f"{base}/{asset}", cached)
     sha_asset = f"amica15-{_TAG_ALIAS.get(tag, tag)}.sha256"
-    sha_path = cached.with_name(sha_asset)
-    _download(f"{base}/{sha_asset}", sha_path)
-    verify_checksum(cached, sha_path)
-    cached.chmod(cached.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    # Download to a private staging dir on the SAME filesystem, verify, mark
+    # executable, then atomically move into place -- so a file only ever exists at
+    # `cached` (the path future calls return unchecked) once it has passed its
+    # SHA-256. A failed download/verify never lands there (no cache poisoning, no
+    # execute-before-verify on Windows), and the atomic rename makes concurrent
+    # cold-cache callers safe.
+    with tempfile.TemporaryDirectory(dir=cached.parent) as td:
+        staged = Path(td) / asset
+        staged_sha = Path(td) / sha_asset
+        _download(f"{base}/{asset}", staged)
+        _download(f"{base}/{sha_asset}", staged_sha)
+        verify_checksum(staged, staged_sha)
+        staged.chmod(staged.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        os.replace(staged, cached)
     return cached

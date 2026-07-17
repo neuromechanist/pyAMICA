@@ -149,7 +149,9 @@ class AMICANative:
         timeout: Optional[float] = None,
         **params: object,
     ) -> None:
-        self.binary = Path(binary) if binary is not None else None
+        # resolve() now: the subprocess runs with cwd set to a tempdir, so a
+        # relative binary path would pass the existence check but fail to launch.
+        self.binary = Path(binary).resolve() if binary is not None else None
         self.version = version
         self.threads = threads
         self.timeout = timeout
@@ -196,6 +198,8 @@ class AMICANative:
 
             outdir = work / "amicaout"
             outdir.mkdir()
+            # `files` must come first: amica15.f90 hard-stops if it parses other
+            # keys before the data file. Dict insertion order preserves that.
             param = {"files": "./data.fdt", "outdir": "./amicaout/", **merged}
             (work / "input.param").write_text(_render_param(param))
 
@@ -227,8 +231,11 @@ class AMICANative:
             # A collapsed fit writes NaN weights (and zero model probabilities);
             # loadmodout's pinv(W@S) would then fail with an opaque SVD error, so
             # detect it here and report it as the degenerate fit it is (cf. the
-            # #50 degenerate-fit contract for the Python backends).
-            if not np.all(np.isfinite(np.fromfile(outdir / "W"))):
+            # #50 degenerate-fit contract for the Python backends). An empty W
+            # (truncated write) is caught too -- an all-NaN check vacuously passes
+            # on a zero-length array.
+            w_raw = np.fromfile(outdir / "W")
+            if w_raw.size == 0 or not np.all(np.isfinite(w_raw)):
                 raise RuntimeError(
                     "native AMICA produced a degenerate fit (non-finite weights); "
                     "the run did not converge. Try more iterations, more data, or "

@@ -88,6 +88,47 @@ def test_resolve_no_download_without_cache(monkeypatch, tmp_path):
         resolver.resolve(download=False)
 
 
+def _fake_source(monkeypatch, tmp_path, *, content: bytes, good_sha: bool):
+    """Redirect the resolver's downloader to a local 'release' directory, so the
+    staging/verify/atomic-rename path is exercised with real files and no network."""
+    src = tmp_path / "release"
+    src.mkdir(exist_ok=True)
+    (src / "amica15-linux-x64").write_bytes(content)
+    digest = hashlib.sha256(content if good_sha else b"other").hexdigest()
+    (src / "amica15-linux-x64.sha256").write_text(f"{digest}  amica15-linux-x64\n")
+
+    def fake_download(url, dest):
+        dest.write_bytes((src / Path(url).name).read_bytes())
+
+    monkeypatch.setenv("PAMICA_NATIVE_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("PAMICA_NATIVE_BINARY", raising=False)
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    monkeypatch.setattr(resolver, "_download", fake_download)
+
+
+def test_resolve_download_verifies_and_caches(monkeypatch, tmp_path):
+    _fake_source(monkeypatch, tmp_path, content=b"binary-bytes", good_sha=True)
+    path = resolver.resolve("v1")
+    assert path.exists() and path.read_bytes() == b"binary-bytes"
+    assert os.access(path, os.X_OK)  # marked executable only after verifying
+    # second call hits the cache (same path, no re-download needed)
+    assert resolver.resolve("v1") == path
+
+
+def test_resolve_bad_checksum_does_not_poison_cache(monkeypatch, tmp_path):
+    _fake_source(monkeypatch, tmp_path, content=b"tampered", good_sha=False)
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        resolver.resolve("v1")
+    # The unverified binary must NOT have landed at the cache path (else future
+    # calls would return it unchecked -- the security bug this guards).
+    cached = tmp_path / "cache" / "v1" / "amica15-linux-x64"
+    assert not cached.exists()
+    # A subsequent good download still succeeds (cache slot not poisoned).
+    _fake_source(monkeypatch, tmp_path, content=b"good", good_sha=True)
+    assert resolver.resolve("v1").read_bytes() == b"good"
+
+
 # --------------------------------------------------------------------------
 # Engine end-to-end (real binary required)
 # --------------------------------------------------------------------------
