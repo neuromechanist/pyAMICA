@@ -1,0 +1,205 @@
+# Phase 4 MATLAB gate: MIR/PMI visualizations (issue #136, epic #133)
+
+> **OUTCOME (end of Phase 4): two plots shipped, `plot_topo_pdf` was CUT.**
+> `plot_pmi_heatmap` and `plot_model_probability` shipped, both fully pinned to
+> MATLAB (see the data gate below) with the visual gate accepted.
+> `plot_topo_pdf` is deferred to **#159**. It derives source activations from a
+> loaded `AmicaOutput`, and that turns out to rest on an unsettled `W`
+> convention: `loadmodout`'s `W` does not reproduce the live model's
+> `transform()` sources at high fidelity under EITHER orientation, even for a
+> single-model fit where `c` is identically zero (`W @ sphered` -> mean |corr|
+> 0.877; `W.T @ sphered` -> 0.932; **0/32** components above 0.999, where a
+> merely normalised + variance-reordered `W` would give ~1.000 for all 32, since
+> correlation already quotients out scale, sign and permutation). It is also the
+> only plot with **no MATLAB oracle** (`pop_topohistplot` is broken upstream,
+> trap 5), so nothing external could catch a wrong activation space. Shipping a
+> scalp map that renders plausibly but cannot be verified is precisely the
+> failure mode this epic kept hitting, so it was cut rather than documented-and-
+> shipped. The two plots that did ship touch neither raw data nor sources.
+>
+> Chasing this DID pay for itself: it uncovered a real, pre-existing, shipped
+> bug (`gammaln` for `gamma` in `numpy_impl/pdf.py`, trap 3b below).
+
+## The contract
+
+Same bidirectional standard as [issue #155](../issue-155/matlab_interop_verification.md),
+adapted to plots. Plots have no byte-level contract, so the gate has two levels:
+
+1. **Data gate**: every quantity we plot must match MATLAB's where an oracle exists.
+2. **Visual gate**: our figure and MATLAB's, rendered on the same real data, must be
+   a meaningful representation of the same thing (a human judgement call, made by
+   the user; accepted 2026-07-16).
+
+MATLAB cannot run in CI, so this is recorded rather than automated.
+
+## Licensing posture (why this gate exists at all)
+
+`pop_topohistplot.m` and `pop_modPMI.m` carry explicit **GPL-2.0-or-later** headers
+(Copyright Ozgur Baklan, SCCN, INC, UCSD). `modprobplot.m`, `minfojp.m`, `LLt2v.m`,
+`smooth_amica_prob.m` carry no header but sit inside that GPL plugin, so they are
+conservatively GPL too. pyAMICA is BSD-3-Clause, which is why Phase 2's PMI was a
+clean-room reimplementation.
+
+**Posture: run-and-observe only. No `.m` implementation source was read at any point.**
+Everything below came from MATLAB `help` text (public API documentation), rendered
+figures, and black-box input/output behaviour. That is what makes the MATLAB gate not
+merely a check but the *mechanism* that keeps the reimplementation clean: it lets us
+match observable behaviour without deriving from protected expression.
+
+`pre_ICA_cleaning/getMIR.m` is **Apache-2.0** and was legitimately read (Phase 1
+ported it with attribution; see `THIRD_PARTY_NOTICES.md`).
+
+## Data gate: results
+
+All on real bundled sample EEG (`eeglab_data.fdt`, 32ch x 30504, srate 128) and a
+real 2-model `AMICATorchNG` fit. Compared with `np.array_equal`/`corrcoef`, never
+`allclose` where an exact match was expected.
+
+| Quantity | MATLAB oracle | Result |
+|---|---|---|
+| `mir()` | `getMIR.m` (Apache-2.0) | **1.7e-15 relative** (33.110492656163046 vs ...103 at N=30504; 37.541867541278549 vs ...663 at N=4096) |
+| P(model \| data) | `LLt2v` | **1.4e-14** vs our `softmax(Lht)` |
+| `v` (log10 model odds) | `loadmodout15.m:284` | **bit-exact** (max diff 0.0) |
+| Hanning-smoothed probability | `smooth_amica_prob` | **r = 0.988577** (1 s), **r = 0.959376** (5 s); mean abs diff 0.014 / 0.045 |
+| `pairwise_mi` | `minfojp` via `pop_modPMI` (GPL, black-box) | **r = 0.9887** off-diagonal, on identical signals |
+
+Notes on the two correlation-rather-than-equality rows:
+
+- **Smoothing**: `max|diff|` is ~1.0 and that is expected, not alarming. Near a model
+  switch the probability is near-binary, so a sub-sample timing difference flips 0<->1.
+  Mean abs diff (0.014) and correlation are the meaningful measures. We deliberately do
+  not replicate MATLAB's endpoint convention (see divergences below).
+- **PMI**: our estimator is clean-room, so it is a *different* estimator. Correlation is
+  the right bar; equality would be suspicious. **Do not tune ours toward theirs** — that
+  would convert a clean-room reimplementation into a derivation.
+
+## Visual gate: accepted
+
+Side-by-side renders on the same data are committed here:
+
+- `cmp_modprob.png` — MATLAB `modprobplot` vs `pyAMICA.viz.plot_model_probability`
+  (1 s smoothing). Same two stacked panels, same switching times (~1.4, 3.4, 6.5, 9.3,
+  12.5, 15.7 s), same log-likelihood trace and range (-105 to -125), seconds axis.
+- `cmp_pmi.png` — MATLAB `pop_modPMI` vs `pyAMICA.viz.plot_pmi_heatmap`, rendered on
+  **identical signals** (MATLAB's own `EEG.icaact`) so the comparison isolates the
+  estimator and the ordering. Both show the same dependent-subspace cluster near the
+  centre with the same radiating cross pattern, at the same MI scale.
+
+Accepted deliberate differences: viridis vs jet, we add a colorbar (MATLAB has none),
+0-based component labels (pythonic; MATLAB is 1-based), and a different ordering
+algorithm (ours greedy nearest-neighbour chain vs MATLAB's iterative cost minimisation,
+`cost = 20.0533 -> 19.5856 -> 18.9268`).
+
+## Deliberate divergences (documented so nobody "fixes" them toward MATLAB)
+
+1. **Smoothing endpoints.** MATLAB pins the exact first/last sample to the raw
+   *unsmoothed* input value (a MATLAB `smooth()` idiom). We return a locally averaged
+   value there. Ours is arguably more correct (the first sample of a smoothed signal
+   should not be unsmoothed), and matching exactly would require reading GPL source.
+2. **MI diagonal.** MATLAB zeroes it. Our `pairwise_mi` diagonal is self-entropy
+   (~2.83 vs off-diagonal ~0.06), so `plot_pmi_heatmap` masks it (`mask_diagonal=True`).
+   Plotting it unmasked destroys the colour scale and hides all structure.
+3. **Negative MI.** MATLAB's bias correction yields small negatives (-0.006); ours is
+   strictly positive. Expected estimator difference, not a bug.
+
+## Traps found the hard way (re-read before touching this)
+
+1. **`mInfoMatrix` is stored ALREADY REORDERED** by `mInforOrders`. Comparing it raw
+   against a natural-order matrix gives **r = -0.13 and 0/8 overlap in top dependent
+   pairs**, which reads exactly like "our PMI is broken". Un-permuted it is **r = 0.9887**.
+   Always un-permute (`inv = np.argsort(order-1); mi[np.ix_(inv, inv)]`) first.
+2. **A naive Hanning smooth silently corrupts both plot edges.**
+   `np.convolve(row, w/w.sum(), mode="same")` zero-pads, and since `Lht ~= -108` (nowhere
+   near 0) the padding drags the first/last half-window toward zero: input[0] = -123.4701
+   became **-60.39**. After the softmax that yields confidently WRONG model probabilities
+   at the start and end of every plot — plausible-looking and completely wrong. Fix, used
+   in `viz.py`: divide by the window overlap (`np.convolve(np.ones_like(row), w, "same")`).
+3. **`W` means different things in different places, and an earlier version of this
+   document got it BACKWARDS.** The rule:
+
+   - **`AmicaOutput.W` (from `loadmodout`) is the EEGLAB convention: ROWS are
+     components.** Sources are `out.W[:, :, m] @ (sphere @ (X - mean))`. This is what
+     `pyAMICA/viz.py` does and it is CORRECT.
+   - **`AMICATorchNG.W` (the live model) is the internal convention: COLUMNS are
+     components.** Its `transform` therefore needs the transpose:
+     `self.W[:, :, m].T @ (sphere @ (X - mean) - c[:, m])`. Also correct, different matrix.
+
+   The two are transposes of each other; neither formula is portable to the other object.
+   Proof that `loadmodout`'s is row-convention, from `load.py` itself: it normalises `A`
+   by COLUMNS (`A[:, i] /= na`) but `W` by ROWS (`W[i, :] *= na`), alongside `mu *= na`
+   and `sbeta /= na`. All four are consistent only if `W`'s rows are the components, and
+   they keep `A`, `W`, `mu`, `sbeta` mutually consistent — which is exactly what
+   `plot_topo_pdf` needs, since it draws `A`'s column as a scalp map beside the histogram
+   of that component's activation and the mixture PDF from its `mu`/`sbeta`.
+
+   **This entry previously claimed the opposite** (that `W @ S @ (X - mean)` was wrong and
+   the transpose was "canonical"). That was false, it was written into this record, and a
+   PR reviewer reasonably escalated it as a critical bug in shipped, working code. Acting
+   on it would have broken `plot_topo_pdf`. Recording the bad reasoning so it is not
+   repeated:
+
+   - *Best-match correlation is a weak discriminator here.* Comparing candidate sources to
+     `transform()`'s output by per-row best |corr| gave 0.988 for the transpose vs 0.982
+     for the correct formula — both high, ranked the wrong way, because `loadmodout`
+     normalises and variance-reorders, so the bases legitimately differ.
+   - *"std(s_i) = ||W[:, i]|| for s = W.T x" proves nothing.* It is a true identity that
+     merely describes what `W.T x` computes; it is not evidence that `W.T x` is the
+     intended map.
+   - The check that actually settles it is consistency with `A`: `A @ (W @ sphered)`
+     reconstructs the centred data to 0.000000 relative error, the transpose form to 0.894.
+     (Partly circular, since `A := pinv(W @ S)` — but that circularity IS the point: `A`
+     and `W @ S` are inverse by construction, so they are the pair that belongs together.)
+
+   Standing lesson: verify a formula against the object's own invariants (does `A` invert
+   it? are `mu`/`sbeta` on that scale?), not against a similarly-named attribute on a
+   different class.
+3b. **A real, pre-existing `pdf.py` bug found while chasing trap 3 (fixed in this PR).**
+   `numpy_impl/pdf.py: compute_pdf` used `special.gammaln` where the generalized
+   Gaussian needs `special.gamma`:
+   `p(y) = exp(-|y|^rho) / (2 * Gamma(1 + 1/rho))`. Dividing by `log(Gamma(...))`
+   makes the "density" NEGATIVE for every rho outside the special-cased 1 and 2 — it
+   integrated to **-8.82 at the default `rho0=1.5`**. How it happened: the Fortran
+   computes this in LOG space (`- gamln(1+1/rho) - log(2)`, amica15.f90:1305-1306),
+   where log-gamma is right; the port transcribed `gamln` straight into a linear-space
+   expression. Blast radius:
+   - **The fit path was never affected.** `numpy_impl/core.py` has its own log-space
+     `_compute_log_pdf` mirroring the Fortran, and never imports `.pdf`. Parity is safe.
+   - The pre-existing `numpy_impl/viz.py: plot_pdf_fits` HAS been drawing wrong curves.
+   - `compute_log_pdf` inherited it (`np.log(pdf)` of a negative number -> NaN).
+   It survived because the only tests calling `compute_pdf` used rho=1.0 and rho=2.0 —
+   precisely the two special-cased branches that are correct. Guarded now by
+   `test_pdf_is_a_normalized_density_for_general_rho` (integrates to 1 for rho in
+   1.0..3.0, a property no restatement of the formula could fake) and
+   `test_pdf_general_branch_is_continuous_with_the_special_cases` (rho=2 vs rho=2+1e-9
+   must agree, since exact-equality dispatch sends them down different branches).
+
+4. **postAmicaUtility's own `loadmodout15.m` is broken on R2025b** (`Unmatched ']'`,
+   line 120). pyAMICA's bundled copy works. `addpath` `pyAMICA/sample_data` LAST so ours
+   shadows theirs, or the model never loads and every plot fails with a misleading
+   "No AMICA solution found".
+5. **`pop_topohistplot` is broken upstream** (`Unrecognized function or variable
+   'showhist'` on current EEGLAB), so there is **no visual reference** for the topo/PDF
+   plot. `plot_topo_pdf` is therefore a fresh design, which #136 already mandated.
+6. **Do not read the figures to settle numeric questions.** The maintainer twice
+   misread which model was active at t=0 from a low-res render and briefly believed the
+   models were swapped. Three numeric checks (correlation +0.9886, direct values at t=0,
+   and pixel-colour sampling showing orange's plateau starting at x=74 vs blue's at
+   x=120) all confirmed there was no swap. Trust the data gate over the visual one.
+
+## Reproducing
+
+MATLAB R2025b at `/Volumes/S1/Applications/MATLAB_R2025b.app/bin/matlab -batch`.
+References are NOT vendored (GPL); clone to a scratch dir:
+
+```
+git clone --depth 1 https://github.com/sccn/eeglab.git
+git clone --depth 1 https://github.com/sccn/postAmicaUtility.git     # GPL: run, never read
+git clone --depth 1 https://github.com/bigdelys/pre_ICA_cleaning.git # Apache-2.0: getMIR.m
+```
+
+Then: `addpath(genpath(eeglab)); addpath(postAmicaUtility); addpath(pyAMICA/sample_data)`
+(last, per trap 4); `eeglab nogui`; `pop_loadset` + `pop_loadmodout(EEG, <amicaout dir>)`;
+`modprobplot(EEG, 1:num_models, smooth_sec, [])` returns `[v2plot, llt2plot]` — the exact
+series it draws — and `pop_modPMI(EEG, 'models2plot', 1, 'order', true)` writes
+`mInfoMatrix`/`mInfoVar`/`mInforOrders` into `EEG.etc.amica`. Figures are uifigures; export
+with `exportapp`, not `print`.

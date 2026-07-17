@@ -45,6 +45,47 @@ python -m pyAMICA.amica_cli pyAMICA/sample_data/sample_params.json --verbose --o
 gfortran -O3 -fopenmp amica17.f90 funmod2.f90 -o amica -llapack -lblas
 ```
 
+## Issue #159 (loadmodout W convention): OPEN, blocks scalp-topography plots
+Deriving source activations from a loaded `AmicaOutput` is NOT settled.
+`loadmodout`'s W does not reproduce the live model's `transform()` sources at
+high fidelity under either orientation, even single-model with c identically
+zero: `W @ sphered` -> mean |corr| 0.877, `W.T @ sphered` -> 0.932, 0/32 above
+0.999 (a merely normalised+reordered W would give ~1.000 for all 32, since
+correlation quotients out scale/sign/permutation). `plot_topo_pdf` was CUT from
+Phase 4 over this. Do NOT hand-roll sources from an AmicaOutput until #159 is
+resolved. Three natural tests are degenerate here and will mislead you: the
+activation-mean test (fitted mixture is near-symmetric, so it matches trivially
+given E[sphered]=0), best-match correlation (shift-invariant, cannot see c at
+all), and histogram-vs-PDF L1 (too insensitive to a 20%-of-spread shift). Full
+evidence in the issue and `.context/issue-136/matlab_viz_verification.md`.
+
+## Issue #136 (MIR/PMI visualizations): MATLAB gate for plots
+Same run-and-observe posture as #155, extended to figures. postAmicaUtility is GPL
+(pop_topohistplot.m / pop_modPMI.m carry explicit GPL-2.0-or-later headers), pyAMICA
+is BSD-3-Clause, so its .m source was never read: the gate used only `help` text,
+rendered figures, and black-box I/O. Every plotted quantity is pinned to MATLAB
+(mir vs Apache-2.0 getMIR.m at 1.7e-15; P(model|data) vs LLt2v at 1.4e-14; v
+bit-exact; smoothed probability r=0.9886; pairwise_mi vs minfojp r=0.9887). Full
+record + traps + how to re-run: `.context/issue-136/matlab_viz_verification.md`.
+Three traps worth knowing before touching viz or metrics: (1) MATLAB's mInfoMatrix
+is stored ALREADY REORDERED -- compared raw it reads r=-0.13 and looks like our PMI
+is broken; un-permuted it is r=0.9887. (2) A naive `convolve(..., mode="same")`
+Hanning smooth zero-pads and silently corrupts both plot edges (Lht ~ -108 got
+dragged to -60), producing confidently wrong probabilities; divide by the window
+overlap. (3) `W` differs by object: `AmicaOutput.W` (loadmodout) is EEGLAB convention
+(ROWS = components) so sources are `out.W[:,:,m] @ sphere @ (x-mean)`, while the
+live `AMICATorchNG.W` is internal convention (COLUMNS = components) so its
+transform needs the transpose. They are transposes; neither formula ports to the
+other object. An earlier note here claimed the opposite and a reviewer escalated
+it as a critical bug in correct code -- see the doc for the bad reasoning, and
+verify formulas against the object's own invariants (does `A` invert it?).
+(4) Chasing that turned up a REAL pre-existing bug: `numpy_impl/pdf.py` used
+`gammaln` where the generalized Gaussian needs `gamma`, making compute_pdf return
+a NEGATIVE density for any rho outside {1,2} (integral -8.82 at the default
+rho0=1.5). Fit path unaffected (core.py has its own correct log-space version);
+the shipped `numpy_impl/viz.py: plot_pdf_fits` was drawing wrong curves. Survived
+because tests only ever covered rho=1.0/2.0, the special-cased correct branches.
+
 ## Issue #155 (LLt output): MATLAB interop re-verified for the new file
 `LLt` (per-timepoint, per-model log-likelihood) was added to the writer in PR
 #156, so it went through the same #92 MATLAB gate below. Result: real

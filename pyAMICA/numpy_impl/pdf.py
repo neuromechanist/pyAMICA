@@ -78,9 +78,18 @@ def compute_pdf(
             pdf = np.exp(-y * y) / np.sqrt(np.pi)
             dpdf = -2 * y * pdf
         else:
-            # General case
+            # General case: p(y) = exp(-|y|^rho) / (2 * Gamma(1 + 1/rho)).
+            # gamma, NOT gammaln: the Fortran reference computes this in LOG
+            # space (`- gamln(1+1/rho) - log(2)`, amica15.f90:1305-1306), where
+            # log-gamma is correct; transcribing that gamln into this
+            # linear-space expression divided by log(Gamma(...)) instead of
+            # Gamma(...). That is negative for every rho in (1, 2) -- at the
+            # default rho0=1.5 the "density" integrated to -8.82 -- so the
+            # curve was wrong for every rho outside the special-cased 1 and 2.
+            # The fit path was never affected: it uses core.py's own log-space
+            # _compute_log_pdf, which mirrors the Fortran correctly.
             pdf = np.exp(-np.power(np.abs(y), rho)) / (
-                2.0 * special.gammaln(1.0 + 1.0 / rho)
+                2.0 * special.gamma(1.0 + 1.0 / rho)
             )
             dpdf = -rho * np.power(np.abs(y), rho - 1) * np.sign(y) * pdf
 

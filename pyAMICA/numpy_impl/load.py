@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Union, Optional
 from dataclasses import dataclass
 from scipy.special import gamma
+from scipy.io import loadmat
 
 
 @dataclass
@@ -398,3 +399,69 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
         origord=origord,
         v=v,
     )
+
+
+def read_eeglab_set_metadata(path: Union[str, Path]) -> dict:
+    """Read sample rate, channel positions, and labels from an EEGLAB ``.set`` file.
+
+    pyAMICA has no notion of sampling rate or channel geometry anywhere in its
+    own data structures (`AmicaOutput`, `load_data_file`, `load_results` all
+    lack it); the top-level `pyAMICA.viz` plots need both for a seconds x-axis
+    and scalp topography maps. This is a minimal `scipy.io.loadmat` reader for
+    exactly those three fields, not a general EEGLAB-format loader.
+
+    Parameters
+    ----------
+    path : str or path-like
+        Path to an EEGLAB ``.set`` file (MATLAB v5/v7 format; ``-v7.3`` ``.set``
+        files are HDF5 and are not supported by `scipy.io.loadmat`).
+
+    Returns
+    -------
+    dict
+        ``{"srate": float, "positions": ndarray of shape (n_channels, 3),
+        "labels": list[str]}``. ``positions`` columns are EEGLAB's
+        ``chanlocs`` ``X``, ``Y``, ``Z`` fields.
+
+    Raises
+    ------
+    ValueError
+        If any channel is missing ``X``/``Y``/``Z`` position data (EEGLAB
+        itself allows unlocalized channels; this minimal reader does not,
+        since scalp-map plotting cannot use them).
+    """
+    mat = loadmat(str(path), struct_as_record=False, squeeze_me=True)
+    eeg = mat["EEG"]
+    chanlocs = np.atleast_1d(eeg.chanlocs)
+    if len(chanlocs) == 0:
+        # Guard explicitly: the non-finite check below uses np.any(np.isnan(...)),
+        # which is False on an empty array, so a .set with no chanlocs would sail
+        # through and return an empty (0, 3) positions array. That only surfaces
+        # later as a confusing channel-count mismatch in a caller, far from the
+        # actual cause.
+        raise ValueError(
+            f"read_eeglab_set_metadata: {path} has no channel locations "
+            "(EEG.chanlocs is empty); scalp topographies need per-channel X/Y/Z."
+        )
+
+    positions = np.full((len(chanlocs), 3), np.nan)
+    labels = []
+    for i, ch in enumerate(chanlocs):
+        labels.append(str(ch.labels))
+        for j, axis in enumerate(("X", "Y", "Z")):
+            val = getattr(ch, axis)
+            if isinstance(val, np.ndarray) and val.size == 0:
+                continue  # empty MATLAB [] on an unlocalized channel
+            positions[i, j] = float(val)
+
+    if np.any(np.isnan(positions)):
+        missing = [
+            labels[i] for i in range(len(labels)) if np.any(np.isnan(positions[i]))
+        ]
+        raise ValueError(
+            f"read_eeglab_set_metadata: channel(s) {missing} are missing "
+            "X/Y/Z position data; this reader requires all channels to be "
+            "localized."
+        )
+
+    return {"srate": float(eeg.srate), "positions": positions, "labels": labels}

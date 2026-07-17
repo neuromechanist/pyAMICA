@@ -3,6 +3,21 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pyAMICA/releases).
 
+## Unreleased
+
+- Visualization module (`pyAMICA.viz`): `plot_pmi_heatmap` and
+  `plot_model_probability`, backend-agnostic views over `AmicaOutput` that return
+  a `Figure` (and accept an optional `ax`/`axes`) rather than mutating pyplot
+  global state, plus `read_eeglab_set_metadata` for the sample rate pyAMICA
+  itself has no notion of. Both plots are verified against the MATLAB reference:
+  the smoothed model probability matches `smooth_amica_prob` at r=0.9886, and
+  `pairwise_mi` matches `minfojp` at r=0.9887 (#136).
+- Fixed `numpy_impl.pdf.compute_pdf` using `gammaln` where the generalized
+  Gaussian needs `gamma`, which made the returned density negative for every
+  `rho` outside the special-cased 1 and 2 (it integrated to -8.82 at the default
+  `rho0=1.5`). Affected `numpy_impl.viz.plot_pdf_fits`; the fit path was never
+  affected, as it uses its own log-space implementation (#136).
+
 ## 0.1.2
 
 Outlier-rejection parity in the NumPy backend, repo-wide type-checking, and the
