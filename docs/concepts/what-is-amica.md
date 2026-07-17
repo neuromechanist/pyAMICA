@@ -51,7 +51,7 @@ An adaptive source density (solid) as a weighted sum of generalized Gaussian
 mixture components (dashed).
 ///
 
-pyAMICA supports all five source-density families of the reference
+pamica supports all five source-density families of the reference
 implementation (generalized Gaussian is the default), plus an extended-Infomax
 switcher that flips each source between super- and sub-Gaussian by the sign of
 its kurtosis.

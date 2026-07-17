@@ -1,5 +1,5 @@
 """VALIDATED reference prototype for the issue #21 fix (do not ship as-is; port
-these methods into amica_torch_ng.py and pyAMICA.py -- see handoff.md).
+these methods into amica_torch_ng.py and pamica.py -- see handoff.md).
 
 `CorrectedNG` subclasses the shipped `AMICATorchNG` and overrides the M-step with the
 Fortran-faithful version that this session validated:
@@ -22,12 +22,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from pyAMICA.torch_impl import AMICATorchNG
-from pyAMICA.torch_impl.amica_torch_ng import _score
-from pyAMICA.torch_impl.utils import load_eeglab_data
+from pamica.torch_impl import AMICATorchNG
+from pamica.torch_impl.amica_torch_ng import _score
+from pamica.torch_impl.utils import load_eeglab_data
 
 NW, FIELD, SEED = 32, 30504, 42
-SAMPLE = Path(__file__).resolve().parents[2] / "pyAMICA" / "sample_data"
+SAMPLE = Path(__file__).resolve().parents[2] / "pamica" / "sample_data"
 AO = SAMPLE / "amicaout"
 
 

@@ -23,14 +23,14 @@ from pathlib import Path
 import numpy as np
 from scipy import stats
 
-from pyAMICA.torch_impl import AMICATorchNG
-from pyAMICA.torch_impl.utils import load_eeglab_data
+from pamica.torch_impl import AMICATorchNG
+from pamica.torch_impl.utils import load_eeglab_data
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-BIN = REPO / "pyAMICA/sample_data/amica15mac"
-FDT = REPO / "pyAMICA/sample_data/eeglab_data.fdt"
-FIXTURE = REPO / "pyAMICA/tests/torch_tests/_ng_e2e_tmp/fortran_run/input.param"
+BIN = REPO / "pamica/sample_data/amica15mac"
+FDT = REPO / "pamica/sample_data/eeglab_data.fdt"
+FIXTURE = REPO / "pamica/tests/torch_tests/_ng_e2e_tmp/fortran_run/input.param"
 NW, FIELD = 32, 30504
 DELTA_LL = 0.01  # TOST equivalence margin on the mean LL (per sample-channel)
 

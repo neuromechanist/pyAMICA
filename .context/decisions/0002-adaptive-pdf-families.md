@@ -24,7 +24,7 @@ sub-Gaussian cosh+, and `pdftype=1` = the extended-Infomax adaptive switcher (Fo
 sub-Gaussian (code 4) cosh densities by kurtosis sign on the `kurt_start`/`num_kurt`/
 `kurt_int` schedule. `rho` is frozen for every non-GG family (`amica15.f90:3682`), and the
 single-component families 1/4 require `n_mix=1`. The ground-truth `amica15.f90`/
-`amica15_header.f90` are copied into `pyAMICA/`.
+`amica15_header.f90` are copied into `pamica/`.
 
 ## Consequences
 
@@ -51,7 +51,7 @@ single-component families 1/4 require `n_mix=1`. The ground-truth `amica15.f90`/
 
 ## Receipts
 
-- `pyAMICA/amica15.f90` select-cases at :1277 (likelihood) / :1449 (score); `dorho=.false.`
+- `pamica/amica15.f90` select-cases at :1277 (likelihood) / :1449 (score); `dorho=.false.`
   at :3682; `do_choose_pdfs` at :594; the `m2sum`/`m4sum` moment buffers are allocated/zeroed
   (:590-591) but never accumulated, confirming the dynamic switch is dead code in the binary.
 - The extended-Infomax intent comes from the upstream AMICA MATLAB wrapper `runamica15.m`
@@ -63,6 +63,6 @@ single-component families 1/4 require `n_mix=1`. The ground-truth `amica15.f90`/
   ```
   and defaults `pdftype=0; kurt_start=3; num_kurt=5; kurt_int=1;`. The super/sub-Gaussian
   scores `y +/- tanh(y)` (amica15 codes 1/4) are the classic extended-Infomax nonlinearities.
-- `pyAMICA/torch_impl/amica_torch_ng.py`: `_log_pdf_and_deriv`, `_score`, `_choose_pdfs`.
-- `pyAMICA/tests/torch_tests/test_ng_pdf_families.py` (formula parity + real-data + opt-in
+- `pamica/torch_impl/amica_torch_ng.py`: `_log_pdf_and_deriv`, `_score`, `_choose_pdfs`.
+- `pamica/tests/torch_tests/test_ng_pdf_families.py` (formula parity + real-data + opt-in
   binary integration behind `AMICA_RUN_FORTRAN=1`).

@@ -1,4 +1,4 @@
-# pyAMICA Design Ideas
+# pamica Design Ideas
 
 High-level PyTorch design decisions and library options for the AMICA port.
 

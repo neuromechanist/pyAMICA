@@ -6,7 +6,7 @@ auto_examples/
 gen_api/
 
 # Ignore everything in the egg-info directory
-pyAMICA.egg-info/*
+pamica.egg-info/*
 
 # Generated run/validation output
 output/
@@ -25,8 +25,8 @@ coverage.xml
 htmlcov/
 
 # Temp output from NG e2e test (Fortran run artifacts)
-pyAMICA/tests/torch_tests/_ng_e2e_tmp/
-pyAMICA/tests/torch_tests/_ng_e2e_json_tmp/
+pamica/tests/torch_tests/_ng_e2e_tmp/
+pamica/tests/torch_tests/_ng_e2e_json_tmp/
 
 # Benchmark run artifacts
 benchmarks/results/

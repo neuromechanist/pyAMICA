@@ -9,7 +9,7 @@ in the repository root.
 
 ```bash
 git clone https://github.com/sccn/pyAMICA.git
-cd pyAMICA
+cd pamica
 uv sync                 # install the project and dependencies
 uv run pytest           # run the test suite
 ```

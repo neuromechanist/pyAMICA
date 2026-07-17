@@ -37,7 +37,7 @@ MATLAB cannot run in CI, so this is recorded rather than automated.
 `pop_topohistplot.m` and `pop_modPMI.m` carry explicit **GPL-2.0-or-later** headers
 (Copyright Ozgur Baklan, SCCN, INC, UCSD). `modprobplot.m`, `minfojp.m`, `LLt2v.m`,
 `smooth_amica_prob.m` carry no header but sit inside that GPL plugin, so they are
-conservatively GPL too. pyAMICA is BSD-3-Clause, which is why Phase 2's PMI was a
+conservatively GPL too. pamica is BSD-3-Clause, which is why Phase 2's PMI was a
 clean-room reimplementation.
 
 **Posture: run-and-observe only. No `.m` implementation source was read at any point.**
@@ -77,10 +77,10 @@ Notes on the two correlation-rather-than-equality rows:
 
 Side-by-side renders on the same data are committed here:
 
-- `cmp_modprob.png` — MATLAB `modprobplot` vs `pyAMICA.viz.plot_model_probability`
+- `cmp_modprob.png` — MATLAB `modprobplot` vs `pamica.viz.plot_model_probability`
   (1 s smoothing). Same two stacked panels, same switching times (~1.4, 3.4, 6.5, 9.3,
   12.5, 15.7 s), same log-likelihood trace and range (-105 to -125), seconds axis.
-- `cmp_pmi.png` — MATLAB `pop_modPMI` vs `pyAMICA.viz.plot_pmi_heatmap`, rendered on
+- `cmp_pmi.png` — MATLAB `pop_modPMI` vs `pamica.viz.plot_pmi_heatmap`, rendered on
   **identical signals** (MATLAB's own `EEG.icaact`) so the comparison isolates the
   estimator and the ordering. Both show the same dependent-subspace cluster near the
   centre with the same radiating cross pattern, at the same MI scale.
@@ -193,7 +193,7 @@ algorithm (ours greedy nearest-neighbour chain vs MATLAB's iterative cost minimi
    must agree, since exact-equality dispatch sends them down different branches).
 
 4. **postAmicaUtility's own `loadmodout15.m` is broken on R2025b** (`Unmatched ']'`,
-   line 120). pyAMICA's bundled copy works. `addpath` `pyAMICA/sample_data` LAST so ours
+   line 120). pamica's bundled copy works. `addpath` `pamica/sample_data` LAST so ours
    shadows theirs, or the model never loads and every plot fails with a misleading
    "No AMICA solution found".
 5. **`pop_topohistplot` is broken upstream** (`Unrecognized function or variable
@@ -216,7 +216,7 @@ git clone --depth 1 https://github.com/sccn/postAmicaUtility.git     # GPL: run,
 git clone --depth 1 https://github.com/bigdelys/pre_ICA_cleaning.git # Apache-2.0: getMIR.m
 ```
 
-Then: `addpath(genpath(eeglab)); addpath(postAmicaUtility); addpath(pyAMICA/sample_data)`
+Then: `addpath(genpath(eeglab)); addpath(postAmicaUtility); addpath(pamica/sample_data)`
 (last, per trap 4); `eeglab nogui`; `pop_loadset` + `pop_loadmodout(EEG, <amicaout dir>)`;
 `modprobplot(EEG, 1:num_models, smooth_sec, [])` returns `[v2plot, llt2plot]` — the exact
 series it draws — and `pop_modPMI(EEG, 'models2plot', 1, 'order', true)` writes

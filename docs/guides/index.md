@@ -1,6 +1,6 @@
 # User Guide
 
-The user guide covers how to run pyAMICA in practice and how its results relate
+The user guide covers how to run pamica in practice and how its results relate
 to the reference implementation.
 
 - **[Backends & Devices](backends.md)** — the available compute backends

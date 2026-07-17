@@ -29,8 +29,8 @@ from scipy.optimize import linear_sum_assignment
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
-from pyAMICA import AMICA  # noqa: E402
-from pyAMICA.torch_impl.utils import load_eeglab_data  # noqa: E402
+from pamica import AMICA  # noqa: E402
+from pamica.torch_impl.utils import load_eeglab_data  # noqa: E402
 
 
 def xcorr(Wa, Wb):
@@ -62,9 +62,9 @@ def amari_distance(Wa, Wb):
 def run_fortran(data_dim, max_iter, seed, work_dir):
     work_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(
-        REPO / "pyAMICA/sample_data/eeglab_data.fdt", work_dir / "eeglab_data.fdt"
+        REPO / "pamica/sample_data/eeglab_data.fdt", work_dir / "eeglab_data.fdt"
     )
-    template = (REPO / "pyAMICA/sample_data/input.param").read_text().splitlines()
+    template = (REPO / "pamica/sample_data/input.param").read_text().splitlines()
     lines = []
     for line in template:
         if line.startswith("files"):
@@ -81,7 +81,7 @@ def run_fortran(data_dim, max_iter, seed, work_dir):
     (work_dir / "fortran_output").mkdir(exist_ok=True)
 
     result = subprocess.run(
-        [str(REPO / "pyAMICA/sample_data/amica15mac"), "input.param"],
+        [str(REPO / "pamica/sample_data/amica15mac"), "input.param"],
         cwd=work_dir,
         capture_output=True,
         text=True,
@@ -116,13 +116,13 @@ def main():
     )
     seeds = list(range(301, 301 + n_seeds))
 
-    with open(REPO / "pyAMICA/sample_data/sample_params.json") as f:
+    with open(REPO / "pamica/sample_data/sample_params.json") as f:
         params = json.load(f)
     data_dim = params["data_dim"]
     field_dim = params["field_dim"][0]
 
     data = load_eeglab_data(
-        str(REPO / "pyAMICA/sample_data/eeglab_data.fdt"),
+        str(REPO / "pamica/sample_data/eeglab_data.fdt"),
         data_dim=data_dim,
         field_dim=field_dim,
         dtype=np.float32,

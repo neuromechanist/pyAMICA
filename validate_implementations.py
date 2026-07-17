@@ -17,9 +17,9 @@ import shutil
 import argparse
 from typing import Dict, Tuple, Optional
 
-from pyAMICA import AMICA
-from pyAMICA.torch_impl import AMICATorchNG
-from pyAMICA.torch_impl.utils import load_eeglab_data
+from pamica import AMICA
+from pamica.torch_impl import AMICATorchNG
+from pamica.torch_impl.utils import load_eeglab_data
 
 # Constructor kwargs accepted by AMICATorchNG, used to filter the sample
 # params.json down to what the natural-gradient backend understands.
@@ -60,7 +60,7 @@ def set_all_seeds(seed: int):
 
 def load_sample_data() -> Tuple[np.ndarray, Dict]:
     """Load the sample EEG data and parameters."""
-    sample_dir = Path("pyAMICA/sample_data")
+    sample_dir = Path("pamica/sample_data")
     data_file = sample_dir / "eeglab_data.fdt"
     params_file = sample_dir / "sample_params.json"
 
@@ -85,7 +85,7 @@ def run_fortran_amica(
 ) -> Optional[Dict]:
     """Run Fortran AMICA binary and collect results."""
     # Use the macOS binary in sample_data directory
-    binary_path = Path("pyAMICA/sample_data/amica15mac")
+    binary_path = Path("pamica/sample_data/amica15mac")
     if not binary_path.exists():
         print(
             f"Warning: Fortran binary not found at {binary_path}. Skipping Fortran comparison."
@@ -97,12 +97,12 @@ def run_fortran_amica(
     fortran_dir.mkdir(exist_ok=True)
 
     # Copy the sample data file to working directory
-    sample_data_file = Path("pyAMICA/sample_data/eeglab_data.fdt")
+    sample_data_file = Path("pamica/sample_data/eeglab_data.fdt")
     working_data_file = fortran_dir / "eeglab_data.fdt"
     shutil.copy(sample_data_file, working_data_file)
 
     # Copy and modify the parameter file
-    sample_param_file = Path("pyAMICA/sample_data/input.param")
+    sample_param_file = Path("pamica/sample_data/input.param")
     working_param_file = fortran_dir / "input.param"
 
     with open(sample_param_file, "r") as f:

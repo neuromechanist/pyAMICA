@@ -2,7 +2,7 @@
 
 Runs every backend to a full decomposition (2000 iters) on real EEG, then compares the
 recovered independent components across backends. Answers the question the whole epic is
-built on: **is pyAMICA (and the native-Fortran build) a drop-in replacement for EEGLAB AMICA
+built on: **is pamica (and the native-Fortran build) a drop-in replacement for EEGLAB AMICA
 -- do all backends recover the same sources?**
 
 `benchmarks/benchmark_decompose.py` fits each backend, saves total wall-clock + final LL +
@@ -16,7 +16,7 @@ Full ds002718 sub-002 recording is 747,750 frames (~50 min @ 250 Hz). Phase 3 us
 frames = **k = 30 at 70ch** (frames / ch^2 = the EEGLAB data-adequacy rule, minimum ~20-30).
 numpy is excluded (too slow, not a recommended backend).
 
-## Result 1: pyAMICA is device- and precision-invariant (the headline)
+## Result 1: pamica is device- and precision-invariant (the headline)
 
 Cross-backend mean Hungarian-matched |corr| @ 70ch, 2000 iters (see
 `benchmarks/figures/phase3_equivalence_matrix_70ch.png`):
@@ -24,7 +24,7 @@ Cross-backend mean Hungarian-matched |corr| @ 70ch, 2000 iters (see
 **Every torch/MLX backend is identical to each other at 1.000** -- torch-cpu (both machines),
 torch-cuda, torch-mps, and MLX, across **both f32 and f64** (8 backend/precision/device
 combinations). Same decomposition on any device at any precision. This is the definitive
-"f32 == f64" and "GPU == CPU" result: pyAMICA gives the same ICs regardless of where or how it
+"f32 == f64" and "GPU == CPU" result: pamica gives the same ICs regardless of where or how it
 runs.
 
 The two native-Fortran runs (Mac arm64 + Linux x86_64) agree with each other at 0.972 and with

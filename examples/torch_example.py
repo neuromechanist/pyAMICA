@@ -2,7 +2,7 @@
 """
 Example of using the PyTorch AMICA implementation.
 
-Uses the public :class:`~pyAMICA.AMICA` interface, which wraps the
+Uses the public :class:`~pamica.AMICA` interface, which wraps the
 natural-gradient EM backend (``AMICATorchNG``) that matches the Fortran
 reference.
 
@@ -18,8 +18,8 @@ from pathlib import Path
 import numpy as np
 
 # Public AMICA interface (wraps the natural-gradient EM backend)
-from pyAMICA import AMICA
-from pyAMICA.torch_impl.utils import load_eeglab_data, compare_with_fortran
+from pamica import AMICA
+from pamica.torch_impl.utils import load_eeglab_data, compare_with_fortran
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +29,7 @@ def main():
     """Run PyTorch AMICA on sample data."""
 
     # Paths
-    sample_dir = Path(__file__).parent.parent / "pyAMICA" / "sample_data"
+    sample_dir = Path(__file__).parent.parent / "pamica" / "sample_data"
     data_file = sample_dir / "eeglab_data.fdt"
     params_file = sample_dir / "sample_params.json"
     fortran_output = sample_dir / "amicaout"

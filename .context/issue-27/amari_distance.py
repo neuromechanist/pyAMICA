@@ -127,7 +127,7 @@ def per_run_detail(Fs, Gs, metric):
         between = np.mean([metric(Gs[i], Fs[j]) for j in range(n)])
         rows.append(
             {
-                "implementation": "pyAMICA",
+                "implementation": "pamica",
                 "run": i,
                 "within": within,
                 "between": between,
@@ -151,14 +151,14 @@ def main():
         p = perm_test_not_worse(Fs, Gs, metric, higher_is_worse)
         summary[name] = {
             "within_Fortran": {"mean": within_F.mean(), "sd": within_F.std()},
-            "within_pyAMICA": {"mean": within_G.mean(), "sd": within_G.std()},
+            "within_pamica": {"mean": within_G.mean(), "sd": within_G.std()},
             "between": {"mean": between.mean(), "sd": between.std()},
             "perm_p_not_worse": p,
         }
         print(f"\n==== {name} (N={n} each) ====")
         for grp, a in [
             ("within-Fortran", within_F),
-            ("within-pyAMICA", within_G),
+            ("within-pamica", within_G),
             ("between", between),
         ]:
             print(f"{grp:16s} mean={a.mean():.4f} sd={a.std():.4f}")

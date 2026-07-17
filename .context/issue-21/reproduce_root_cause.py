@@ -21,11 +21,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import pyAMICA.torch_impl.amica_torch_ng as ng_mod
-from pyAMICA.torch_impl import AMICATorchNG
-from pyAMICA.torch_impl.utils import load_eeglab_data
+import pamica.torch_impl.amica_torch_ng as ng_mod
+from pamica.torch_impl import AMICATorchNG
+from pamica.torch_impl.utils import load_eeglab_data
 
-SAMPLE = Path(__file__).resolve().parents[2] / "pyAMICA" / "sample_data"
+SAMPLE = Path(__file__).resolve().parents[2] / "pamica" / "sample_data"
 NW, FIELD, SEED = 32, 30504, 42
 
 _orig = ng_mod._log_pdf_and_deriv

@@ -19,10 +19,10 @@ from scipy.optimize import linear_sum_assignment
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
-from pyAMICA.torch_impl import AMICATorchNG  # noqa: E402
+from pamica.torch_impl import AMICATorchNG  # noqa: E402
 
-BIN = REPO / "pyAMICA/sample_data/amica15_linux"
-INPUT_PARAM = REPO / "pyAMICA/sample_data/input.param"
+BIN = REPO / "pamica/sample_data/amica15_linux"
+INPUT_PARAM = REPO / "pamica/sample_data/input.param"
 
 
 def xcorr(Wa, Wb):

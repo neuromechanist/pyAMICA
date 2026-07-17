@@ -114,12 +114,12 @@ jobs:
           ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
           bin="$PWD/dist/amica15-${{ matrix.target }}$ext"
           run="$(mktemp -d)"; cd "$run"
-          cp "$GITHUB_WORKSPACE/pyAMICA/sample_data/eeglab_data.fdt" .
+          cp "$GITHUB_WORKSPACE/pamica/sample_data/eeglab_data.fdt" .
           mkdir -p out
           sed -e 's#^files .*#files ./eeglab_data.fdt#' \
               -e 's#^outdir .*#outdir ./out/#' \
               -e 's#^max_iter .*#max_iter 2#' -e 's#^writestep .*#writestep 2#' \
-              "$GITHUB_WORKSPACE/pyAMICA/sample_data/input.param" > p.param
+              "$GITHUB_WORKSPACE/pamica/sample_data/input.param" > p.param
           OMP_NUM_THREADS=2 "$bin" p.param | tee run.log
           # Extract the last iteration's LL. A finite negative number (starts with
           # "-<digit>") = a working decomposition; a blank, "NaN" or "Infinity"

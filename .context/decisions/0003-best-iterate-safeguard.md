@@ -70,8 +70,8 @@ changes across iterations and per-iteration LLs are not comparable.
 
 ## Receipts
 
-- `pyAMICA/torch_impl/amica_torch_ng.py` (`keep_best`, `_snapshot_params`/
+- `pamica/torch_impl/amica_torch_ng.py` (`keep_best`, `_snapshot_params`/
   `_restore_params`, `final_ll_`, `_KEEP_BEST_TOL`).
-- `pyAMICA/tests/torch_tests/test_ng_backend.py::test_keep_best_*`.
+- `pamica/tests/torch_tests/test_ng_backend.py::test_keep_best_*`.
 - `.context/issue-51/ensemble_ll.py` (Fortran-vs-NG LL ensemble, real data).
-- Fortran schedule: `pyAMICA/amica15.f90:1038-1058` (anneal-on-decrease).
+- Fortran schedule: `pamica/amica15.f90:1038-1058` (anneal-on-decrease).

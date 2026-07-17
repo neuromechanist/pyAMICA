@@ -1,13 +1,13 @@
 # Third-Party Notices
 
-pyAMICA is BSD-3-Clause (see `LICENSE`). This file lists source code ported
+pamica is BSD-3-Clause (see `LICENSE`). This file lists source code ported
 into the package from third-party projects under other licenses, and
 reproduces the license text required by each, per that license's
 redistribution terms.
 
 ## MIR (Mutual Information Reduction) metric
 
-`pyAMICA/metrics/mir.py` is ported from `getMIR.m` (and its nested
+`pamica/metrics/mir.py` is ported from `getMIR.m` (and its nested
 `getent4`) in Arnaud Delorme's
 [`bigdelys/pre_ICA_cleaning`](https://github.com/bigdelys/pre_ICA_cleaning)
 repository, at

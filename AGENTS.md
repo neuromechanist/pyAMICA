@@ -1,4 +1,4 @@
-# pyAMICA Instructions
+# pamica Instructions
 
 ## Project Context
 **Purpose:** Python implementation of AMICA (Adaptive Mixture Independent Component Analysis) that reproduces the results of the reference Fortran binary. Targets EEG/EMG source separation with GPU/MPS/CPU support.
@@ -7,7 +7,7 @@
 
 ## Architecture Map
 ```
-pyAMICA/
+pamica/
 ├── amica.py                 # Main scikit-learn-style AMICA interface (wraps AMICATorchNG)
 ├── __init__.py              # Exposes AMICA (PyTorch), AMICA_NumPy (legacy), numpy_impl, torch_impl
 ├── torch_impl/              # PyTorch backend
@@ -25,10 +25,10 @@ pyAMICA/
 validate_implementations.py  # Runs both implementations, Hungarian component matching, reports
 ```
 Module names are topic-based (`core`/`newton`/`pdf`/`data`/... under `numpy_impl/`,
-`core`/`utils` under `torch_impl/`); the old `pyAMICA.py`/`amica_*.py`/`amica_torch_ng.py`
+`core`/`utils` under `torch_impl/`); the old `pamica.py`/`amica_*.py`/`amica_torch_ng.py`
 prefixes were dropped in issue #34. The public import surface is stable:
-`from pyAMICA import AMICA, AMICA_NumPy, AMICATorchNG`. The optional MLX backend is
-imported separately (`from pyAMICA.mlx_impl import AMICAMLXNG`) so `import pyAMICA` never
+`from pamica import AMICA, AMICA_NumPy, AMICATorchNG`. The optional MLX backend is
+imported separately (`from pamica.mlx_impl import AMICAMLXNG`) so `import pamica` never
 requires MLX; install it with `uv pip install mlx` or the `mlx` extra (Apple Silicon only).
 
 ## Environment Setup
@@ -66,13 +66,13 @@ Multi-model MLX (#81) also wins (~5x over torch-CPU; MPS still loses); the remai
 is component sharing.
 
 ## Key Files
-- **Main interface:** `pyAMICA/amica.py` (thin wrapper over `AMICATorchNG`)
-- **PyTorch backend:** `pyAMICA/torch_impl/core.py` (`AMICATorchNG`, natural-gradient EM,
+- **Main interface:** `pamica/amica.py` (thin wrapper over `AMICATorchNG`)
+- **PyTorch backend:** `pamica/torch_impl/core.py` (`AMICATorchNG`, natural-gradient EM,
   Fortran-parity; ADR `.context/decisions/0001-torch-backend-natural-gradient-em.md`). This is the
   only PyTorch backend; the basic `AMICATorch`/`AMICATorchV2` paths were removed in #32.
 - **Validation harness:** `validate_implementations.py`
-- **Fortran reference binary:** `pyAMICA/sample_data/amica15mac`
-- **Sample data:** `pyAMICA/sample_data/`
+- **Fortran reference binary:** `pamica/sample_data/amica15mac`
+- **Sample data:** `pamica/sample_data/`
 
 ## Current Status
 - PyTorch backend with GPU/MPS/CPU support; the `AMICATorchNG` natural-gradient EM backend now
@@ -100,7 +100,7 @@ source-density families via `pdftype`: 0 generalized Gaussian (default, unchange
 3 logistic, 4 sub-Gaussian cosh+, and the extended-Infomax adaptive switcher (`pdftype=1`, which
 flips each source between super-Gaussian code 1 and sub-Gaussian code 4 by kurtosis sign on the
 `kurt_start`/`num_kurt`/`kurt_int` schedule). Key correction to the earlier "no oracle" finding: the
-validation binary is `amica15mac` = `amica15.f90` (now copied into `pyAMICA/`), which *does*
+validation binary is `amica15mac` = `amica15.f90` (now copied into `pamica/`), which *does*
 implement the families; the repo's `amica17.f90` is a later GG-only trim, and the reference binary
 was never amica17. The fixed families are bit-exact vs the literal Fortran `z0`/`fp` (~1e-15) and
 converge to the binary within ~0.005 LL (Newton-matched). The dynamic `do_choose_pdfs` switch is

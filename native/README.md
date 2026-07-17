@@ -19,7 +19,7 @@ framework, always present) and static reference LAPACK/OpenBLAS on Linux/Windows
 
 ## The single-rank MPI shim
 
-`amica15.f90` is an MPI + OpenMP + LAPACK program, but pyAMICA always runs it as
+`amica15.f90` is an MPI + OpenMP + LAPACK program, but pamica always runs it as
 one process. Every MPI collective it uses (`BCAST`, `REDUCE`, `ALLREDUCE`,
 `BARRIER`, `GATHER`, `COMM_SPLIT`, ...) is trivial for a single rank: broadcast is
 a no-op, reduce/gather is a copy, barrier is a no-op. `mpi_single.f90` supplies

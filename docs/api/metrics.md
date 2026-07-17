@@ -1,4 +1,4 @@
-# Separation metrics (pyAMICA.metrics)
+# Separation metrics (pamica.metrics)
 
 Quality metrics for a decomposition, as free functions over plain arrays. They
 are backend-agnostic and independent of any fitted model object, so they work on
@@ -23,7 +23,7 @@ unmixing from somewhere else. To plot a `pairwise_mi` matrix, see
 masks the entropy diagonal.
 
 ```python
-from pyAMICA.metrics import mir, pairwise_mi, block_diagonal_order
+from pamica.metrics import mir, pairwise_mi, block_diagonal_order
 ```
 
 ## Provenance
@@ -35,13 +35,13 @@ with the original to 1.7e-15 relative on the bundled sample data.
 
 `pairwise_mi` and `block_diagonal_order` are a clean-room reimplementation. The
 comparable MATLAB code (`minfojp.m` in postAmicaUtility) is GPL-2.0-or-later and
-pyAMICA is BSD-3-Clause, so that source was never read; the implementation works
+pamica is BSD-3-Clause, so that source was never read; the implementation works
 from the published description in Delorme et al. (2012), "Independent EEG
 sources are dipolar", PLoS ONE. It agrees with that reference at r=0.9887 on
 identical signals.
 
-::: pyAMICA.metrics.mir
+::: pamica.metrics.mir
 
-::: pyAMICA.metrics.pairwise_mi
+::: pamica.metrics.pairwise_mi
 
-::: pyAMICA.metrics.block_diagonal_order
+::: pamica.metrics.block_diagonal_order

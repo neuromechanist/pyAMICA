@@ -6,9 +6,9 @@ against the torch / mlx / numpy backends.
 
 ## Why build from source (not `amica15mac`)
 
-The bundled `pyAMICA/sample_data/amica15mac` is an **x86_64** binary. On Apple Silicon
+The bundled `pamica/sample_data/amica15mac` is an **x86_64** binary. On Apple Silicon
 it only runs under Rosetta 2, so its timing is not representative of native hardware.
-The benchmark therefore builds `amica15` from `pyAMICA/{funmod2,amica15}.f90` natively on
+The benchmark therefore builds `amica15` from `pamica/{funmod2,amica15}.f90` natively on
 each host -- the x86 Linux/CUDA host *and* Apple Silicon -- and times *that*. Both are
 honest native-CPU rows. (`amica15mac` is still fine for structural smoke-testing of the
 adapter on a Mac; it is just not a timing reference.)
@@ -107,5 +107,5 @@ tracked reference source** (it patches a build copy under `build/src/`):
    vendor SIMD math library could make the exp/log-heavy E-step somewhat faster, so treat
    this as a portable-baseline timing, not a max-tuned one.
 
-These are generic gfortran-portability fixes (not pyAMICA-specific) and are candidates to
+These are generic gfortran-portability fixes (not pamica-specific) and are candidates to
 upstream to [sccn/amica](https://github.com/sccn/amica).

@@ -73,13 +73,13 @@ $$
 
 - **Newton update.** Once the iterates are close, AMICA switches the unmixing
   update to a **Newton step** (using the per-source curvature of the
-  likelihood), which sharpens convergence near the optimum. pyAMICA keeps this
+  likelihood), which sharpens convergence near the optimum. pamica keeps this
   step positive-definite for stability.
 
 ### Convergence and the returned solution
 
 Each EM iteration increases the log-likelihood until it converges. Because the
-learning-rate schedule is not strictly monotone, pyAMICA returns the
+learning-rate schedule is not strictly monotone, pamica returns the
 **highest-likelihood iterate** it visited (the *best-iterate* safeguard) rather
 than the last one, and reports its likelihood as `final_ll_`.
 
@@ -91,7 +91,7 @@ and converges toward the reference solution.
 
 ## Relationship to the Fortran reference
 
-Every M-step update in pyAMICA is derived to match the AMICA reference Fortran
+Every M-step update in pamica is derived to match the AMICA reference Fortran
 implementation, and on real sample EEG the natural-gradient backend reaches the
 same solution (log-likelihood and Hungarian-matched component correlation). See
 [Validation & Parity](../guides/validation.md) for the acceptance criteria and

@@ -6,7 +6,7 @@ Adds a `native-fortran-f64` backend to `benchmarks/benchmark_dimsweep.py` that t
 ## gfortran build portability (source targets ifort + MKL)
 
 `amica15.f90` assumes Intel's toolchain. A plain `gfortran` + LAPACK build needs three
-fixes, applied by `build_amica.sh` to a **build copy** (the tracked `pyAMICA/amica15.f90`
+fixes, applied by `build_amica.sh` to a **build copy** (the tracked `pamica/amica15.f90`
 reference is never modified):
 
 1. `-cpp` -- resolve the `#ifdef MKL` guards so `include 'mkl_vml.f90'` is skipped.

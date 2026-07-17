@@ -22,7 +22,7 @@ proven to machine precision and fixed. See `root_cause_Aupdate.py` (self-contain
   so `corrected_mstep_prototype.py::fixed_point_test` passed while the free-running fit descended.
 
 **PORTED TO PRODUCTION & VALIDATED (2026-07-03).** All fixes are in the shipped backends
-`torch_impl/amica_torch_ng.py` (`AMICATorchNG`) and `pyAMICA.py` (`AMICA_NumPy`): the A-update
+`torch_impl/amica_torch_ng.py` (`AMICATorchNG`) and `pamica.py` (`AMICA_NumPy`): the A-update
 transpose, exact-EM mu/beta (`fp` not `dpdf`), the digamma rho update (Bugs 1+2), the symmetric-ZCA
 sphere (cov/N), the Newton-path orientation (`A -= lrate*H^T @ A`), the W/A output transpose
 (get_*_matrix / transform), and the NumPy Jacobian LL (`sldet` + `logsumexp`, previously positive).
@@ -144,13 +144,13 @@ but a non-MKL recompile from this source would compute the wrong score. Flag bef
       It must be `A_cols - lrate*((I - dWtmp.T/dgm) @ A_cols)` (transpose `dWtmp`, LEFT-multiply),
       because `A` is stored as Fortran's `A^T`. Proven machine-exact; flips the fit from descending
       (-3.4974) to ascending (-3.4265, corr 0.648 vs Fortran 0.645). Mirror in shipped
-      `amica_torch_ng.py::_update_parameters` and `pyAMICA.py`. **Also audit the Newton path**: it
+      `amica_torch_ng.py::_update_parameters` and `pamica.py`. **Also audit the Newton path**: it
       builds the Newton direction from the same untransposed `dA_h` and right-multiplies
       (`corrected_mstep_prototype.py:171-197`), so it needs the matching orientation fix + the
       `dA(i,k)`/`dA(k,i)` term order (Fortran `:1825`) before Newton is wired in.
 - [ ] **Bug 1 (rho factor)** -- `corrected_mstep_prototype.py:102-110`: `drho_n` term must be
       `rho_h * |y|^rho * ln|y|` (add the leading `rho`). Mirror in the shipped
-      `amica_torch_ng.py` rho path and `pyAMICA.py`. (Confirmed bit-exact with the fix.)
+      `amica_torch_ng.py` rho path and `pamica.py`. (Confirmed bit-exact with the fix.)
 - [ ] **Bug 2 (rho mask)** -- `corrected_mstep_prototype.py:104-108`: drop the per-component
       `(rho!=1)&(rho!=2)` mask; keep only a per-sample underflow guard (Fortran `:1570`).
 - [ ] **Sphere (cosmetic parity)** -- `corrected_mstep_prototype.py::_preprocess` (and shipped

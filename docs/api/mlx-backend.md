@@ -8,14 +8,14 @@ fastest option on Apple hardware; see [Backends & Devices](../guides/backends.md
 for the performance comparison.
 
 MLX is an optional dependency (Apple Silicon only), so it is imported separately
-and is not part of the default `import pyAMICA` surface:
+and is not part of the default `import pamica` surface:
 
 ```python
-from pyAMICA.mlx_impl import AMICAMLXNG  # requires the `mlx` extra
+from pamica.mlx_impl import AMICAMLXNG  # requires the `mlx` extra
 ```
 
-Install it with `uv pip install mlx` or the `mlx` extra (`pip install pyAMICA[mlx]`).
+Install it with `uv pip install mlx` or the `mlx` extra (`pip install pamica[mlx]`).
 Because it computes in float32, use the [PyTorch backend](torch-backend.md) on
 CUDA/CPU for float64 Fortran-parity runs.
 
-::: pyAMICA.mlx_impl.AMICAMLXNG
+::: pamica.mlx_impl.AMICAMLXNG

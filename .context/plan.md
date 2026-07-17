@@ -1,4 +1,4 @@
-# pyAMICA Development Plan
+# pamica Development Plan
 
 ## Project Overview
 **Goal:** Python (PyTorch) implementation of AMICA that reproduces the Fortran binary's results within tolerance.
@@ -22,7 +22,7 @@
 - [x] Port outlier rejection (`do_reject` / `reject_data`) to the torch backend (done in `AMICATorchNG`)
 - [x] Wire up / stabilize Newton for the torch backend (done in `AMICATorchNG`, posdef, issue #24)
 - [x] Adaptive PDF selection for `AMICATorchNG` (issue #26). Corrected the "no oracle" finding:
-      the reference binary is `amica15mac` = `amica15.f90` (now copied into `pyAMICA/`), which
+      the reference binary is `amica15mac` = `amica15.f90` (now copied into `pamica/`), which
       implements five `pdtype` density families; the repo's `amica17.f90` is a later GG-only trim.
       Ported all five (0 GG default, 2 Gaussian, 3 logistic, 4 sub-G cosh+, 1 super-G cosh-) plus the
       extended-Infomax kurtosis auto-switcher (`pdftype=1`). Fixed families are bit-exact vs the
@@ -101,7 +101,7 @@ will be hosted at `eeglab.org/pyAMICA`.
       built in #97; README de-WIP'd and modernized in #102. `site_url:
       https://eeglab.org/pyAMICA/` (numpy docstrings, git-revision-date fallback).
 - [ ] **Standup (needs the transfer):** deploy Pages at `eeglab.org/pyAMICA` under the
-      sccn org custom domain (`sccn/pyAMICA` project Pages at the `/pyAMICA` subpath).
+      sccn org custom domain (`sccn/pyAMICA` project Pages at the `/pamica` subpath).
 
 ### Phase R3: Transfer to github.com/sccn — REMAINS (user)
 - [ ] GitHub repo transfer (preserves issues/PRs/stars/history; auto-redirects old
@@ -117,8 +117,8 @@ will be hosted at `eeglab.org/pyAMICA`.
 ### Remaining before actual JOSS submission (user)
 - [ ] R3 transfer + R2 docs standup (above).
 - [ ] Archived release (Zenodo/Software Heritage) with a matching version.
-- [ ] PyPI distribution name (the name `pyamica`/`pyAMICA` is taken on PyPI; the
-      `import pyAMICA` name is unaffected; deferred to release).
+- [ ] PyPI distribution name (the name `pyamica`/`pamica` is taken on PyPI; the
+      `import pamica` name is unaffected; deferred to release).
 - [ ] Fill the `paper.md` corresponding-author ORCID / confirm co-author details at
       submission (ORCIDs set: Shirazi 0000-0001-5557-259X, Delorme 0000-0002-0799-3557,
       Makeig 0000-0002-9048-8438).

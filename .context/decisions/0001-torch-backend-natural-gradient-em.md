@@ -11,7 +11,7 @@ The default PyTorch backend (`torch_impl/amica_torch.py`, and the experimental
 reparameterized tensors" (`softmax`/`exp`/`sigmoid` on `alpha`, `beta`, `rho`), driven by
 autograd. AMICA is fundamentally an EM / natural-gradient fixed-point iteration with
 closed-form sufficient-statistic updates; the Fortran reference (`amica17.f90`) and the legacy
-NumPy `pyAMICA.py` implement it that way. The reframing follows a different optimization
+NumPy `pamica.py` implement it that way. The reframing follows a different optimization
 trajectory and converges to a different fixed point, which is the primary cause of the poor
 component correlation with Fortran (~0.46-0.9 vs target >0.95). It also blocks scaling: the
 autograd path materializes all-sample intermediates and retains the graph, so peak memory grows
@@ -23,7 +23,7 @@ binary is the definition of done for this project.
 Rewrite the PyTorch backend as a direct, vectorized port of the NumPy/Fortran natural-gradient
 (and Newton) update rules. Parameterize `W` directly (no `pinv(A.T).T` per forward), broadcast
 the E-step over `(model, mix, source, block)` instead of Python loops, accumulate sufficient
-statistics block-wise, and drop Adam/autograd for the parameter updates. The NumPy `pyAMICA.py`
+statistics block-wise, and drop Adam/autograd for the parameter updates. The NumPy `pamica.py`
 `_get_block_updates` / `_update_parameters` are the reference spec; validation runs in float64.
 
 ## Consequences
@@ -60,7 +60,7 @@ partition matching is tracked in #27, adaptive-PDF in #26.
 
 - Fortran LL normalization: `amica17.f90:1866` (`LL = LLtmp2 / (num_samples*nw)`).
 - Fortran per-source mixture reduction: `amica17.f90:1313-1360`.
-- NumPy reference updates: `pyAMICA.py:505-730` (block updates, natural-gradient + Newton).
+- NumPy reference updates: `pamica.py:505-730` (block updates, natural-gradient + Newton).
 - Bug catalog and perf/memory analysis: `.context/research.md` (2026-07-02 design review).
 
 ## Addendum (2026-07-04, issue #32)

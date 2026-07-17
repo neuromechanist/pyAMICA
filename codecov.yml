@@ -16,7 +16,7 @@ coverage:
 # macOS x86_64 reference), so their code paths are reported via local runs, not
 # Codecov. Keep the report focused on the package.
 ignore:
-  - "pyAMICA/tests/**"
+  - "pamica/tests/**"
   - "validate_implementations.py"
   - "benchmarks/**"
 

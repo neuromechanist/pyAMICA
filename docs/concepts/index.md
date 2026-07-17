@@ -1,6 +1,6 @@
 # Background
 
-This section explains the ideas behind pyAMICA from the ground up, for readers
+This section explains the ideas behind pamica from the ground up, for readers
 new to independent component analysis.
 
 - **[What is ICA?](what-is-ica.md)** — the blind source separation problem, the

@@ -2,14 +2,14 @@
 
 ## Installation
 
-pyAMICA uses [UV](https://docs.astral.sh/uv/) for environment and dependency
+pamica uses [UV](https://docs.astral.sh/uv/) for environment and dependency
 management.
 
 ### From source
 
 ```bash
 git clone https://github.com/sccn/pyAMICA.git
-cd pyAMICA
+cd pamica
 uv sync            # install the project and its dependencies into .venv
 ```
 
@@ -19,7 +19,7 @@ install from source as above.
 ### Optional Apple-Silicon GPU backend
 
 The MLX backend is Apple-only and is therefore an optional extra; `import
-pyAMICA` never requires it.
+pamica` never requires it.
 
 ```bash
 uv sync --extra mlx   # or, in an existing environment: uv pip install mlx
@@ -32,7 +32,7 @@ which wraps the natural-gradient EM backend.
 
 ```python
 import numpy as np
-from pyAMICA import AMICA
+from pamica import AMICA
 
 # X is (n_channels, n_samples); use real EEG/EMG rather than random data
 # for a meaningful decomposition.

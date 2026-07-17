@@ -16,7 +16,7 @@ data scaling, and init are fine; only the M-step *update direction* is broken.
 This overturns:
 - the earlier note "Newton is posdef 50/50 / the cause is outside the update equations"
   (memory `amica-ng-fixed-point-gap`, now corrected);
-- AGENTS.md's premise that the NumPy `pyAMICA.py` "is the faithful spec" -- it shares the
+- AGENTS.md's premise that the NumPy `pamica.py` "is the faithful spec" -- it shares the
   bug, which is why `test_ng_backend.py::test_sufficient_stats_match_numpy_reference`
   passes (it only asserts NG == NumPy, never NG == Fortran).
 
@@ -33,7 +33,7 @@ uses the **score** `fp = rho*sign(y)*|y|^(rho-1)`:
 
 Since `p'(y) = -fp(y)*p(y)` for the generalized Gaussian, substituting `dpdf` for `fp`
 **flips the update sign** -> descent. (Phase 4 already fixed exactly this for the *Newton*
-curvature terms, `pyAMICA.py:726` "use the score fp ... NOT dpdf", but never fixed the
+curvature terms, `pamica.py:726` "use the score fp ... NOT dpdf", but never fixed the
 first-order terms.)
 
 **Proof:** monkeypatching `_log_pdf_and_deriv` to return `(_log_pdf, _score)` turns
@@ -123,6 +123,6 @@ M-step to localize the drift). Fix recipe, ordered:
    but must be rechecked once the first-order params are on-track).
 4. Fortran-faithful lrate control (hold 0.05 in the NG phase, ramp to `newtrate` under Newton,
    ratchet only after `max_decs`).
-5. Apply the same fixes to `pyAMICA.py`; re-baseline `test_ng_backend.py` tests against
+5. Apply the same fixes to `pamica.py`; re-baseline `test_ng_backend.py` tests against
    Fortran, not the (buggy) NumPy reference.
 6. Fix the validation-harness metric to compare `W@sphere`.

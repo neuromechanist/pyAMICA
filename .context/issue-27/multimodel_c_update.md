@@ -3,7 +3,7 @@
 ## What was done
 Ported the update gated by Fortran's `update_c` flag (numerator accumulation at
 amica17.f90:1423-1429, division at :1899-1901) into both `AMICATorchNG` and the
-legacy NumPy `pyAMICA.py`:
+legacy NumPy `pamica.py`:
 
 - `c[i,h] = dc_numer[i,h] / dc_denom[i,h]`, with
   `dc_numer[i,h] = sum_t v_h(t) * x(i,t)` (sphered-data space) and

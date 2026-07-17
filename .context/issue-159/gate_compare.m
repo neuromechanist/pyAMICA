@@ -1,13 +1,13 @@
 % MATLAB gate for issue #159 (run after gate_prep.py, before gate_check.py).
-% Loads the genuine single-model Fortran fixture and the pyAMICA-written 2-model
+% Loads the genuine single-model Fortran fixture and the pamica-written 2-model
 % output with EEGLAB's real loadmodout15.m, and saves W/A/sbeta/rho so the Python
 % companion can check they match what Python loadmodout read. This is the only
-% test that pins direction (2) of the interop contract: EEGLAB reads pyAMICA's
-% (and Fortran's) bytes correctly. A pyAMICA write->read round trip cannot.
+% test that pins direction (2) of the interop contract: EEGLAB reads pamica's
+% (and Fortran's) bytes correctly. A pamica write->read round trip cannot.
 
 here = fileparts(mfilename('fullpath'));
 root = fullfile(here, '..', '..');
-sample = fullfile(root, 'pyAMICA', 'sample_data');
+sample = fullfile(root, 'pamica', 'sample_data');
 
 % addpath sample_data LAST so its working loadmodout15.m shadows any broken
 % copy elsewhere on the path (postAmicaUtility's has a syntax error on R2025b).

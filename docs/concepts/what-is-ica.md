@@ -79,7 +79,7 @@ In practice the data are first **centered** (mean removed) and **whitened**
 (also called *sphering*): linearly transformed so the channels are uncorrelated
 and have unit variance. Whitening removes all second-order structure, reducing
 the remaining ICA problem to finding an orthogonal rotation, which is both
-faster and better conditioned. pyAMICA uses a symmetric (ZCA) whitening that
+faster and better conditioned. pamica uses a symmetric (ZCA) whitening that
 matches the Fortran reference.
 
 ## What ICA cannot pin down
@@ -92,7 +92,7 @@ irreducible:
   scalar can move between a column of $\mathbf{A}$ and the corresponding source.
 
 These do not affect the usefulness of the components; they only mean component
-*indices* and *scaling* are conventions, not ground truth. pyAMICA follows the
+*indices* and *scaling* are conventions, not ground truth. pamica follows the
 EEGLAB conventions for ordering and sign where it matters (see
 [Validation & Parity](../guides/validation.md)).
 

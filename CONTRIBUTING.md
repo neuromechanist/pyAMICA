@@ -1,6 +1,6 @@
-# Contributing to pyAMICA
+# Contributing to pamica
 
-Thanks for your interest in contributing. pyAMICA is a Python implementation of
+Thanks for your interest in contributing. pamica is a Python implementation of
 Adaptive Mixture Independent Component Analysis (AMICA) that reproduces the
 reference Fortran implementation. Because **numerical parity with the Fortran
 reference is the definition of correctness**, contributions are held to that
@@ -10,17 +10,17 @@ standard rather than to "it converges."
 
 - **Questions, bugs, and feature requests:** please open an issue on the
   [GitHub issue tracker](https://github.com/sccn/pyAMICA/issues).
-- When reporting a bug, include the pyAMICA version, platform, device
+- When reporting a bug, include the pamica version, platform, device
   (CPU/CUDA/MPS/MLX), precision (float32/float64), and a minimal example.
 
 ## Development setup
 
-pyAMICA uses [UV](https://docs.astral.sh/uv/) for environment and dependency
+pamica uses [UV](https://docs.astral.sh/uv/) for environment and dependency
 management.
 
 ```bash
 git clone https://github.com/sccn/pyAMICA.git
-cd pyAMICA
+cd pamica
 uv sync                 # install the project and dependencies
 uv run pytest           # run the test suite
 ```
@@ -31,7 +31,7 @@ support.
 ## Testing
 
 - **Real data only.** Correctness tests use the real sample EEG and the Fortran
-  binary shipped in `pyAMICA/sample_data/`. Do not use mocks, stubs, or synthetic
+  binary shipped in `pamica/sample_data/`. Do not use mocks, stubs, or synthetic
   data as the basis for a correctness test: no test is better than a fake passing
   test.
 - Run with coverage: `uv run pytest --cov`.

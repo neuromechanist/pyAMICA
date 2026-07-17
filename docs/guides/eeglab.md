@@ -1,6 +1,6 @@
 # EEGLAB interoperability
 
-pyAMICA is a drop-in replacement for EEGLAB's AMICA: a fit written to disk loads
+pamica is a drop-in replacement for EEGLAB's AMICA: a fit written to disk loads
 directly with the same reader EEGLAB uses (`loadmodout15.m`), with the components
 in the same order and orientation, so no manual re-sorting, sign-flipping, or
 reformatting is needed.
@@ -10,7 +10,7 @@ reformatting is needed.
 After a fit, call `write_amica_output` with a destination directory:
 
 ```python
-from pyAMICA import AMICA
+from pamica import AMICA
 
 model = AMICA(n_models=1, n_mix=3)
 model.fit(X)                      # X is (n_channels, n_samples)
@@ -55,7 +55,7 @@ mod = loadmodout15('amicaout');
 
 `loadmodout15` applies the EEGLAB conventions on load: it orders components by
 back-projected variance (IC1 has the highest), derives the sensor-space mixing
-`A = pinv(W * S)`, and normalizes each map to unit norm. Because pyAMICA writes
+`A = pinv(W * S)`, and normalizes each map to unit norm. Because pamica writes
 the same format, the components you get in EEGLAB match a native AMICA run.
 
 ## Variance ordering in Python
@@ -75,6 +75,6 @@ Pass `return_svar=True` to also get the per-component variances.
 
 Single-model output is byte-identical to the Fortran reference. For
 `n_models > 1` the per-model axis layout is self-consistent (it round-trips
-through `loadmodout15` and pyAMICA's own reader) but is not byte-identical to a
+through `loadmodout15` and pamica's own reader) but is not byte-identical to a
 native multi-model AMICA run; see the multi-model equivalence discussion in
 [Validation & Parity](validation.md).
