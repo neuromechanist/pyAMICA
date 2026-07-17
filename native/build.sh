@@ -20,7 +20,10 @@ mode="${MPI_MODE:-shim}"
 build_dir="$here/build_$mode"
 out="${OUT:-$here/amica15_$mode}"
 os="$(uname -s)"
-cc="${CC:-cc}"
+# `cc` is not always present (MSYS2 mingw ships `gcc`, not `cc`); fall back.
+cc="${CC:-$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || echo cc)}"
+# patch_sources.py needs a Python; MSYS2 mingw calls it `python`, not `python3`.
+python="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)}"
 
 if [[ "$mode" == "shim" ]]; then
   fc="${FC:-gfortran}"
@@ -53,7 +56,7 @@ work="$build_dir/src"
 cp "$src_dir/funmod2.f90" "$src_dir/amica15.f90" "$src_dir/amica15_header.f90" "$work/"
 
 # --- Patch the build copy only (the tracked sources stay the parity reference).
-python3 "$here/patch_sources.py" "$work/amica15.f90" "$work/amica15_header.f90"
+"$python" "$here/patch_sources.py" "$work/amica15.f90" "$work/amica15_header.f90"
 
 set -x
 # Vector-math shim (vrda_exp/vrda_log as libm loops); portable, no AMD LibM.

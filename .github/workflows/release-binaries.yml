@@ -72,10 +72,12 @@ jobs:
           update: true
           # OpenBLAS provides both BLAS and LAPACK. The package prefix differs by
           # environment (mingw-w64-x86_64-* vs mingw-w64-clang-aarch64-*).
+          # gcc-fortran (gfortran + gcc/cc), openblas (BLAS+LAPACK), python (for
+          # patch_sources.py). Package prefix differs by environment.
           install: >-
             ${{ matrix.msystem == 'CLANGARM64'
-              && 'mingw-w64-clang-aarch64-gcc-fortran mingw-w64-clang-aarch64-openblas'
-              || 'mingw-w64-x86_64-gcc-fortran mingw-w64-x86_64-openblas' }}
+              && 'mingw-w64-clang-aarch64-gcc-fortran mingw-w64-clang-aarch64-openblas mingw-w64-clang-aarch64-python'
+              || 'mingw-w64-x86_64-gcc-fortran mingw-w64-x86_64-openblas mingw-w64-x86_64-python' }}
 
       # --- Build -----------------------------------------------------------
       - name: Build native binary
@@ -90,7 +92,7 @@ jobs:
               ;;
             linux-*)
               # Static LAPACK/BLAS + Fortran runtime; glibc stays dynamic.
-              export LAPACK_LIBS="-l:liblapack.a -l:lblas.a"
+              export LAPACK_LIBS="-l:liblapack.a -l:libblas.a"
               export EXTRA_LDFLAGS="-static-libquadmath"
               ;;
             windows-*)
