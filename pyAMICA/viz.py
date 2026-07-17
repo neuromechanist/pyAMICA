@@ -9,12 +9,18 @@ written amicaout directory -- and **return a `Figure`**, accepting an optional
 crash". ``numpy_impl/viz.py`` is left untouched; this module is not a
 replacement for it.
 
-The three plots mirror ``postAmicaUtility``'s ``modprobplot``/``pop_modPMI``
-MATLAB behaviour (observed by running the real GPL-licensed functions and
-reading their rendered output/``help`` text -- never their source, per the
-project's clean-room posture for GPL code) plus a fresh design for the
-topography/PDF view, which has no working upstream reference
-(``pop_topohistplot`` is broken on current EEGLAB).
+Both plots mirror ``postAmicaUtility``'s ``modprobplot``/``pop_modPMI`` MATLAB
+behaviour, observed by running the real GPL-licensed functions and reading
+their rendered output and ``help`` text, never their source, per the project's
+clean-room posture for GPL code. Every quantity they draw is pinned to a MATLAB
+oracle; see ``.context/issue-136/matlab_viz_verification.md``.
+
+A per-component scalp-topography view is deliberately NOT here yet: deriving
+source activations from a loaded ``AmicaOutput`` depends on a ``W`` convention
+that turned out to be broken in the loader itself, tracked as issue #159. It
+was also the only planned plot with no working upstream reference
+(``pop_topohistplot`` is broken on current EEGLAB), so nothing external could
+have caught a wrong activation space. It is cut rather than shipped unverified.
 """
 
 from collections.abc import Sequence

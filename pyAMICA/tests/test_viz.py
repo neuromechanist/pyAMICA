@@ -87,6 +87,42 @@ def _close_figures():
     plt.close("all")
 
 
+def test_read_eeglab_set_metadata_tolerates_unlocalized_channels(tmp_path):
+    """An unlocalized channel must not block the sample rate.
+
+    This reader originally rejected any file with a channel missing X/Y/Z,
+    because its only consumer was a scalp-topography plot that genuinely could
+    not use them. That plot was cut (issue #159), so the sole remaining consumer
+    wants `srate` and nothing else. Refusing the whole file over a field nobody
+    reads would block the sample rate for any dataset with an unlocalized
+    channel, and EOG channels commonly are unlocalized.
+
+    Built by blanking one channel's coordinates in a copy of the REAL bundled
+    .set, matching this repo's existing precedent for degenerate edge cases
+    (see test_amari_distance.py); the file, its srate and its other 31 channels
+    stay real.
+    """
+    from scipy.io import loadmat, savemat
+
+    mat = loadmat(str(SET_FILE), struct_as_record=False, squeeze_me=True)
+    eeg = mat["EEG"]
+    for axis in ("X", "Y", "Z"):
+        setattr(eeg.chanlocs[1], axis, np.array([]))  # EOG1: unlocalized
+    doctored = tmp_path / "unlocalized.set"
+    savemat(str(doctored), {"EEG": eeg})
+
+    meta = read_eeglab_set_metadata(doctored)
+
+    # The sample rate, the point of the call, still comes back.
+    assert meta["srate"] == 128.0
+    assert len(meta["labels"]) == NW
+    # The unlocalized channel is a visible NaN, not a silent zero.
+    assert np.all(np.isnan(meta["positions"][1]))
+    # Every other channel keeps its real coordinates.
+    others = np.delete(meta["positions"], 1, axis=0)
+    assert np.all(np.isfinite(others))
+
+
 # --- plot_pmi_heatmap -------------------------------------------------------
 
 

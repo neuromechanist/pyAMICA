@@ -406,9 +406,9 @@ def read_eeglab_set_metadata(path: Union[str, Path]) -> dict:
 
     pyAMICA has no notion of sampling rate or channel geometry anywhere in its
     own data structures (`AmicaOutput`, `load_data_file`, `load_results` all
-    lack it); the top-level `pyAMICA.viz` plots need both for a seconds x-axis
-    and scalp topography maps. This is a minimal `scipy.io.loadmat` reader for
-    exactly those three fields, not a general EEGLAB-format loader.
+    lack it); `pyAMICA.viz.plot_model_probability` needs the sample rate for a
+    seconds x-axis. This is a minimal `scipy.io.loadmat` reader for exactly
+    those fields, not a general EEGLAB-format loader.
 
     Parameters
     ----------
@@ -421,14 +421,15 @@ def read_eeglab_set_metadata(path: Union[str, Path]) -> dict:
     dict
         ``{"srate": float, "positions": ndarray of shape (n_channels, 3),
         "labels": list[str]}``. ``positions`` columns are EEGLAB's
-        ``chanlocs`` ``X``, ``Y``, ``Z`` fields.
+        ``chanlocs`` ``X``, ``Y``, ``Z`` fields, and are ``NaN`` for any
+        channel EEGLAB left unlocalized (EOG channels commonly are). Callers
+        that actually use ``positions`` must check for those; ``srate`` and
+        ``labels`` are unaffected.
 
     Raises
     ------
     ValueError
-        If any channel is missing ``X``/``Y``/``Z`` position data (EEGLAB
-        itself allows unlocalized channels; this minimal reader does not,
-        since scalp-map plotting cannot use them).
+        If the file has no ``chanlocs`` at all.
     """
     mat = loadmat(str(path), struct_as_record=False, squeeze_me=True)
     eeg = mat["EEG"]
@@ -454,14 +455,12 @@ def read_eeglab_set_metadata(path: Union[str, Path]) -> dict:
                 continue  # empty MATLAB [] on an unlocalized channel
             positions[i, j] = float(val)
 
-    if np.any(np.isnan(positions)):
-        missing = [
-            labels[i] for i in range(len(labels)) if np.any(np.isnan(positions[i]))
-        ]
-        raise ValueError(
-            f"read_eeglab_set_metadata: channel(s) {missing} are missing "
-            "X/Y/Z position data; this reader requires all channels to be "
-            "localized."
-        )
-
+    # Unlocalized channels are left as NaN rather than raising. This reader
+    # originally rejected them, because its only consumer was a scalp-topography
+    # plot that genuinely could not use them. That plot was cut (issue #159), so
+    # the sole remaining consumer wants `srate` and nothing else -- and refusing
+    # the whole file over a field nobody reads would block the sample rate for
+    # any dataset with an unlocalized channel, which EOG channels commonly are.
+    # A caller that does use `positions` must check for NaN itself; the docstring
+    # says so, and NaN is visible rather than silently plausible.
     return {"srate": float(eeg.srate), "positions": positions, "labels": labels}
