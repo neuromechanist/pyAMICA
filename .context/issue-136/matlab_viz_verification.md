@@ -114,45 +114,64 @@ algorithm (ours greedy nearest-neighbour chain vs MATLAB's iterative cost minimi
    became **-60.39**. After the softmax that yields confidently WRONG model probabilities
    at the start and end of every plot — plausible-looking and completely wrong. Fix, used
    in `viz.py`: divide by the window overlap (`np.convolve(np.ones_like(row), w, "same")`).
-3. **`W` means different things in different places, and an earlier version of this
-   document got it BACKWARDS.** The rule:
+3. **Do NOT derive sources from an `AmicaOutput` yet -- the loader is broken (#159).**
+   `loadmodout` reads `W` (load.py:174), `sbeta` (:278) and `rho` (:292) in C order,
+   while `write_amicaout` writes all of them `order="F"` and only `alpha`/`mu` are
+   read back correctly. So `out.W`/`out.sbeta`/`out.rho` are wrong for GENUINE
+   Fortran output, and `out.A`/`out.svar`/`out.origord` are wrong too since they are
+   derived from the mis-read `W`. There is no correct activation formula on the
+   shipped loader; fix #159 first.
 
-   - **`AmicaOutput.W` (from `loadmodout`) is the EEGLAB convention: ROWS are
-     components.** Sources are `out.W[:, :, m] @ (sphere @ (X - mean))`. This is what
-     `pyAMICA/viz.py` does and it is CORRECT.
-   - **`AMICATorchNG.W` (the live model) is the internal convention: COLUMNS are
-     components.** Its `transform` therefore needs the transpose:
-     `self.W[:, :, m].T @ (sphere @ (X - mean) - c[:, m])`. Also correct, different matrix.
+   Proven by an EXTERNAL, non-circular oracle: recompute the bundled Fortran
+   fixture's OWN reported converged LL from its OWN written parameters. LL is not
+   transpose-symmetric, so it discriminates.
 
-   The two are transposes of each other; neither formula is portable to the other object.
-   Proof that `loadmodout`'s is row-convention, from `load.py` itself: it normalises `A`
-   by COLUMNS (`A[:, i] /= na`) but `W` by ROWS (`W[i, :] *= na`), alongside `mu *= na`
-   and `sbeta /= na`. All four are consistent only if `W`'s rows are the components, and
-   they keep `A`, `W`, `mu`, `sbeta` mutually consistent — which is exactly what
-   `plot_topo_pdf` needs, since it draws `A`'s column as a scalp map beside the histogram
-   of that component's activation and the mixture PDF from its `mu`/`sbeta`.
+   | W order | mixture order | recomputed LL | \|diff vs its own LL file\| |
+   |---|---|---|---|
+   | **F** | **F** | **-3.4018468** | **0.00003** |
+   | C | F | -3.5167152 | 0.115 |
+   | F | C | -3.5024789 | 0.101 |
+   | C | C | -3.5539805 | 0.152 |
 
-   **This entry previously claimed the opposite** (that `W @ S @ (X - mean)` was wrong and
-   the transpose was "canonical"). That was false, it was written into this record, and a
-   PR reviewer reasonably escalated it as a critical bug in shipped, working code. Acting
-   on it would have broken `plot_topo_pdf`. Recording the bad reasoning so it is not
-   repeated:
+   (The fixture's `LL` file reports -3.4018730; the 3e-5 residual is the Fortran's
+   own block truncation.) Confirmed independently for the mixture params by a
+   pairing test, `loaded[:, i] == live[:, origord[i]]`: `alpha` (read `order="F"`)
+   matches exactly, `rho` (read C) does not, max diff **0.969**.
 
-   - *Best-match correlation is a weak discriminator here.* Comparing candidate sources to
-     `transform()`'s output by per-row best |corr| gave 0.988 for the transpose vs 0.982
-     for the correct formula — both high, ranked the wrong way, because `loadmodout`
-     normalises and variance-reorders, so the bases legitimately differ.
-   - *"std(s_i) = ||W[:, i]|| for s = W.T x" proves nothing.* It is a true identity that
-     merely describes what `W.T x` computes; it is not evidence that `W.T x` is the
-     intended map.
-   - The check that actually settles it is consistency with `A`: `A @ (W @ sphered)`
-     reconstructs the centred data to 0.000000 relative error, the transpose form to 0.894.
-     (Partly circular, since `A := pinv(W @ S)` — but that circularity IS the point: `A`
-     and `W @ S` are inverse by construction, so they are the pair that belongs together.)
+   Once #159 lands, `c` SHOULD be subtracted (`out.W @ (sphered - out.c[:, m])`),
+   and `c` is sphered-channel indexed (Fortran computes `wc = W @ c`,
+   amica15.f90:1979, and maps it through the sphering pseudo-inverse at :2280), so
+   `loadmodout` not variance-reordering `c` is correct.
 
-   Standing lesson: verify a formula against the object's own invariants (does `A` invert
-   it? are `mu`/`sbeta` on that scale?), not against a similarly-named attribute on a
-   different class.
+   **THIS ENTRY WAS WRONG TWICE, in opposite directions.** v1 claimed
+   `W @ S @ (X-mean)` was wrong and the transpose canonical. v2 "corrected" it to
+   claim `AmicaOutput.W` is row-convention so `out.W @ sphered` is right. Both were
+   asserted from reasoning and self-consistency checks; both were wrong; a reviewer
+   escalated v1 as a critical bug in correct code. Record of what misled, so nobody
+   repeats it:
+
+   - **`A @ (W @ sphered) == centered` is circular** -- `A := pinv(W @ S)`, so the
+     identity is a tautology. A completely RANDOM `W` passes it at 2e-15.
+   - **Best-match correlation vs `transform()` cannot see `c`** -- Pearson
+     correlation is shift-invariant, returning bit-identical numbers with and
+     without it.
+   - **The activation-mean test is degenerate** -- the fitted mixture is
+     near-symmetric (`sum(alpha*mu) ~= 0.01`) and `E[sphered] = 0`, so the no-c
+     formula matches trivially regardless of correctness. (The mixture tracks the
+     RESPONSIBILITY-WEIGHTED mean, which is 0 by construction since `c` is itself
+     the `v_h`-weighted mean; comparing against the unweighted mean compares
+     different quantities.)
+   - **Histogram-vs-PDF L1 is insensitive AND was pooled wrongly** -- the per-model
+     mixture describes only model h's own samples weighted by `v_h`; pooling all
+     samples misaligns it. Responsibility-weighting flips the verdict.
+   - **`A @ W == I` cannot discriminate the W order** -- `A@W=I` implies
+     `A_transposed @ W_transposed = I`, so both conventions satisfy it.
+
+   Standing lesson: **do not assert a byte-order or convention from reasoning or
+   from any self-consistency check.** Only an external oracle settles it -- the
+   Fortran's own reported LL, its own written `A`, MATLAB reading our bytes, or a
+   constraint the data must satisfy (e.g. alpha's simplex).
+
 3b. **A real, pre-existing `pdf.py` bug found while chasing trap 3 (fixed in this PR).**
    `numpy_impl/pdf.py: compute_pdf` used `special.gammaln` where the generalized
    Gaussian needs `special.gamma`:
