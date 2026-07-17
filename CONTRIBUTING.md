@@ -20,7 +20,7 @@ management.
 
 ```bash
 git clone https://github.com/sccn/pyAMICA.git
-cd pamica
+cd pyAMICA
 uv sync                 # install the project and dependencies
 uv run pytest           # run the test suite
 ```

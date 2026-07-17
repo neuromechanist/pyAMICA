@@ -34,7 +34,7 @@ The canonical environment is [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/sccn/pyAMICA.git
-cd pamica
+cd pyAMICA
 uv sync                     # install dependencies into a managed venv
 uv run pytest               # optional: run the tests
 ```

@@ -9,7 +9,7 @@ management.
 
 ```bash
 git clone https://github.com/sccn/pyAMICA.git
-cd pamica
+cd pyAMICA
 uv sync            # install the project and its dependencies into .venv
 ```
 
