@@ -34,6 +34,44 @@ class AmicaOutput:
     origord: np.ndarray  # original order prior to var order
     v: Optional[np.ndarray]  # log10 posterior model odds
 
+    def sources(self, X: np.ndarray, model: int = 0) -> np.ndarray:
+        """Source activations for ``model`` from raw data, the loaded-fit
+        counterpart of the live model's ``transform`` (issue #159/#137).
+
+        Applies AMICA's own pipeline: sphere (with the data mean removed), then
+        the per-model unmixing about its center, ``b = W (S(x - mean) - c)``
+        (Fortran ``b = W(x - c)`` in sphered-channel space, amica15.f90). ``c``
+        is sphered-channel indexed (not variance-reordered), matching ``W``'s
+        columns; ``W``'s rows are variance-reordered, so the returned rows are in
+        the same order as ``origord``/``A``/the mixture params.
+
+        Deriving sources this way requires the loader's byte order to be correct;
+        before issue #159 ``W`` was read transposed and this could not reproduce
+        the live sources under any orientation.
+
+        Parameters
+        ----------
+        X : ndarray, shape (data_dim, n_samples)
+            Raw (un-centered, un-sphered) data, same channel order as the fit.
+        model : int, default 0
+            Model index in ``0 .. num_models - 1``.
+
+        Returns
+        -------
+        ndarray, shape (num_pcs, n_samples)
+            Source activations for the requested model, variance-ordered.
+        """
+        if not 0 <= model < self.num_models:
+            raise ValueError(f"model must be in 0..{self.num_models - 1}, got {model}")
+        X = np.asarray(X)
+        if X.ndim != 2 or X.shape[0] != self.data_mean.shape[0]:
+            raise ValueError(
+                f"X must be (data_dim={self.data_mean.shape[0]}, n_samples); "
+                f"got {X.shape}"
+            )
+        sphered = self.S[: self.num_pcs] @ (X - self.data_mean[:, None])
+        return self.W[:, :, model] @ (sphered - self.c[:, model][:, None])
+
 
 def read_binary_file(
     filepath: Union[str, Path], dtype=np.float64, shape=None
@@ -75,11 +113,15 @@ def write_amicaout(
     (when given) ``LLt``. This is the write counterpart of :func:`loadmodout`,
     so a pyAMICA fit (either backend) drops into an EEGLAB workflow (issue #92).
 
-    Both backends store these arrays in the same convention, so for a single
-    model the bytes are identical to the Fortran reference's ``amicaout`` files;
-    for ``num_models > 1`` the per-model axis nesting is self-consistent (it
-    round-trips through :func:`loadmodout`) but not byte-identical to genuine
-    multi-model Fortran output (issue #27).
+    Both backends store these arrays in the same convention. Single-model output
+    is byte-identical to the Fortran reference's ``amicaout`` files. Multi-model
+    output is written in genuine Fortran layout too: each EEGLAB-read file (``W``
+    3-D column-major with the model axis slowest; ``c``/``comp_list`` and the
+    ``(num_mix, num_comps)`` mixture params column-major) is laid out so EEGLAB's
+    ``loadmodout15.m`` reads it correctly. The earlier model-interleaved ``W``
+    layout, which round-tripped through :func:`loadmodout` but was not
+    MATLAB-readable, was fixed in #159. (``A`` is exempt: ``loadmodout15`` derives
+    it from ``W``/``S`` and ignores the file; see below.)
 
     Parameters
     ----------
@@ -111,14 +153,32 @@ def write_amicaout(
         # layout so real EEGLAB ``loadmodout15.m`` reads the file correctly.
         np.asarray(arr, dtype=dtype).ravel(order=order).tofile(outdir / name)
 
+    # W carries the on-disk model-count and is the array whose 3-D layout the
+    # #159 fix depends on; validate it up front so a malformed W fails with a
+    # clear message here rather than as a bare numpy transpose/reshape error (on
+    # write) or, worse, a silently-misordered read later.
+    gm = np.asarray(gm)
+    W = np.asarray(W)
+    if W.ndim != 3 or W.shape[0] != W.shape[1]:
+        raise ValueError(f"W must be 3-D (nw, nw, num_models); got shape {W.shape}")
+    if W.shape[2] != gm.size:
+        raise ValueError(
+            f"W has {W.shape[2]} models but gm has {gm.size}; num_models disagree"
+        )
+
     _w("gm", gm)
     if A is not None:
         _w("A", A)
-    # W is byte-identical to Fortran in C order: the internal-vs-true-unmixing
-    # transpose (issue #24) cancels against Fortran's column-major storage, so a
-    # square W written C-order equals the Fortran/EEGLAB column-major bytes. The
-    # symmetric sphere S is order-agnostic; mean/gm/LL are 1-D.
-    _w("W", W)
+    # W is the internal-backend unmixing (b = W.T @ x); Fortran/EEGLAB store the
+    # true unmixing W_fortran = W.T with the model axis slowest, column-major
+    # within each model. Moving the model axis to the front and writing C-order
+    # (`transpose(2, 0, 1)`) lays each model's slice out column-major and
+    # contiguous -- genuine Fortran bytes for any num_models. For num_models == 1
+    # this is byte-identical to the old plain C-order write, so single-model
+    # output stays byte-compatible with the Fortran reference (issue #92); the
+    # multi-model interleave it replaces was never MATLAB-readable (issue #159).
+    # The symmetric sphere S is order-agnostic; mean/gm/LL are 1-D.
+    _w("W", np.asarray(W).transpose(2, 0, 1))
     _w("S", sphere)
     _w("mean", mean)
     # The (num_mix, num_comps) mixture params and (num_comps, num_models) c /
@@ -165,13 +225,20 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
         print("No gm present, setting num_models to 1")
         gm = np.array([1.0])
 
-    # Read weights
+    # Read weights. Fortran/EEGLAB store W(nw, nw, num_models) column-major with
+    # the model axis slowest, so reshape order="F" (matches loadmodout15.m's
+    # `reshape(W, nw, nw, num_models)`, which is MATLAB column-major, and the
+    # write_amicaout writer below). A C-order read returns the transpose of the
+    # true unmixing, which then corrupts A = pinv(W @ S), svar and origord too
+    # (issue #159). This is the EEGLAB-convention W (b = W @ sphered); the
+    # separate load_results reader deliberately returns the transposed
+    # internal-backend W for the NumPy viz helpers.
     W = read_binary_file(outdir / "W")
     if W is None:
         raise FileNotFoundError("No W present, cannot continue")
     nw2 = len(W) // num_models
     nw = int(np.sqrt(nw2))
-    W = W.reshape(nw, nw, num_models)
+    W = W.reshape(nw, nw, num_models, order="F")
 
     # Read mean and sphere
     mn = read_binary_file(outdir / "mean")
@@ -275,7 +342,9 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
 
     sbeta_tmp = read_binary_file(outdir / "sbeta")
     if sbeta_tmp is not None:
-        sbeta_tmp = sbeta_tmp.reshape(num_mix, nw * num_models)
+        # Column-major like the other mixture params (issue #159): a C-order read
+        # scrambles the (num_mix, num_comps) layout whenever num_mix > 1.
+        sbeta_tmp = sbeta_tmp.reshape(num_mix, nw * num_models, order="F")
         sbeta = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):
@@ -289,7 +358,9 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
 
     rho_tmp = read_binary_file(outdir / "rho")
     if rho_tmp is not None:
-        rho_tmp = rho_tmp.reshape(num_mix, nw * num_models)
+        # Column-major like the other mixture params (issue #159): a C-order read
+        # scrambles the (num_mix, num_comps) layout whenever num_mix > 1.
+        rho_tmp = rho_tmp.reshape(num_mix, nw * num_models, order="F")
         rho = np.zeros((num_mix, nw, num_models))
         for h in range(num_models):
             for i in range(nw):

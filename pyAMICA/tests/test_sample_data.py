@@ -43,6 +43,113 @@ def test_loadmodout_llt_reshape_order():
     np.testing.assert_allclose(out.Lt.mean(), nw * final_ll, rtol=1e-3)
 
 
+def _fixture_loglik(out, X):
+    """Recompute the mean per-sample-per-channel log-likelihood of the bundled
+    Fortran fixture from a loaded ``AmicaOutput``. Mirrors the Fortran E-step
+    (amica15.f90): ``b = W(x - c)`` in sphered-channel space, a generalized-
+    Gaussian mixture per source in log space, plus the ``log|det W| + log|det S|``
+    Jacobian. Single model (the fixture)."""
+    from scipy.special import gammaln
+
+    b = out.sources(X, 0)  # (nw, N) -- the loader's own W and c
+    nw, n = b.shape
+    alpha, mu, sbeta, rho = (
+        out.alpha[:, :, 0],
+        out.mu[:, :, 0],
+        out.sbeta[:, :, 0],
+        out.rho[:, :, 0],
+    )
+    logdet_w = np.linalg.slogdet(out.W[:, :, 0])[1]
+    sldet = np.linalg.slogdet(out.S[:nw])[1]
+    tot = np.zeros(n)
+    for i in range(nw):
+        z = np.empty((alpha.shape[0], n))
+        for j in range(alpha.shape[0]):
+            y = sbeta[j, i] * (b[i] - mu[j, i])
+            z[j] = (
+                np.log(alpha[j, i])
+                + np.log(sbeta[j, i])
+                - np.abs(y) ** rho[j, i]
+                - gammaln(1.0 + 1.0 / rho[j, i])
+                - np.log(2.0)
+            )
+        m = z.max(axis=0)
+        tot += m + np.log(np.exp(z - m).sum(axis=0))
+    return (tot.sum() + n * (logdet_w + sldet)) / (n * nw)
+
+
+def test_loadmodout_reproduces_fortran_reported_ll():
+    """External, non-circular oracle for the loader byte order (issue #159):
+    recompute the bundled Fortran fixture's OWN reported converged log-likelihood
+    from the parameters ``loadmodout`` reads back, and require it to land within
+    1e-3 of the fixture's ``LL`` file.
+
+    Log-likelihood is not transpose-symmetric, so unlike ``A @ W == I`` (which
+    both byte orders satisfy) this discriminates the orientation of ``W`` and the
+    ``(num_mix, num_comps)`` layout of ``sbeta``/``rho``. On the C-order read this
+    ships with, it lands ~0.11 off (-3.517 vs -3.402); only the correct
+    column-major read reproduces the fixture's number. A write->read round trip
+    cancels the error, so no self-consistency test could have caught it -- this
+    one recomputes an externally fixed target (the Fortran binary's own output).
+    """
+    out = loadmodout(amicaout_dir)
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )
+    recomputed = _fixture_loglik(out, data)
+    reported = float(out.LL[-1])
+    assert abs(recomputed - reported) < 1e-3, (
+        f"recomputed LL {recomputed:.7f} disagrees with the fixture's own "
+        f"reported {reported:.7f} by {abs(recomputed - reported):.5f}; loadmodout "
+        "is reading W/sbeta/rho in the wrong byte order (issue #159)."
+    )
+
+
+def test_amicaoutput_sources_contract_and_c_subtraction():
+    """``AmicaOutput.sources`` contract (issue #159). Numerical correctness of the
+    activation is pinned externally by ``test_loadmodout_reproduces_fortran_
+    reported_ll`` (which feeds ``sources`` into the fixture's own LL) and against
+    a live model by the multi-model round-trip in the torch wrapper tests; here we
+    guard shape/finiteness, the input validation, and that ``c`` is actually
+    subtracted (so a future refactor cannot silently drop it).
+    """
+    out = loadmodout(amicaout_dir)
+    data = load_data_file(eeglab_data_file, 32, 30504, dtype=np.float32).astype(
+        np.float64
+    )
+    b0 = out.sources(data, 0)
+    assert b0.shape == (out.num_pcs, data.shape[1])
+    assert np.all(np.isfinite(b0))
+
+    # With the fixture's own c == 0 the accessor spheres (mean removed, S applied)
+    # and unmixes: b == W @ S(x - mean). This pins the sphering/num_pcs handling.
+    sphered = out.S[: out.num_pcs] @ (data - out.data_mean[:, None])
+    np.testing.assert_allclose(b0, out.W[:, :, 0] @ sphered, atol=1e-9)
+
+    # Injecting a nonzero c must subtract it in sphered-channel space, shifting
+    # the activation to W @ (sphered - c) -- proving the subtraction path runs and
+    # a future refactor cannot silently drop it.
+    c_probe = np.arange(1, out.num_pcs + 1, dtype=np.float64)
+    out.c[:, 0] = c_probe  # out is a fresh load per test; safe to mutate
+    b1 = out.sources(data, 0)
+    np.testing.assert_allclose(
+        b1, out.W[:, :, 0] @ (sphered - c_probe[:, None]), atol=1e-9
+    )
+    assert not np.allclose(b0, b1), "c subtraction had no effect"
+
+    # Input validation: out-of-range and negative model, wrong data_dim, and a
+    # non-2D X (a single 1-D sample vector) must all raise, not silently produce
+    # garbage.
+    with pytest.raises(ValueError, match="model must be in"):
+        out.sources(data, out.num_models)
+    with pytest.raises(ValueError, match="model must be in"):
+        out.sources(data, -1)
+    with pytest.raises(ValueError, match="data_dim"):
+        out.sources(data[:16], 0)
+    with pytest.raises(ValueError, match="data_dim"):
+        out.sources(data[:, 0], 0)  # 1-D X
+
+
 @pytest.mark.slow
 @pytest.mark.xfail(
     reason="uses a per-row corrcoef of the internal W (= Fortran W^T, so rows are "

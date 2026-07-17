@@ -5,6 +5,27 @@ Release notes are also published on the
 
 ## Unreleased
 
+- Fixed `loadmodout` reading `W`, `sbeta` and `rho` in the wrong byte order:
+  it used C order where the writer, genuine Fortran output and EEGLAB's
+  `loadmodout15.m` all use column-major (F order). The consequence was that
+  `AmicaOutput.W` came back transposed, silently corrupting genuine Fortran
+  output and everything derived from it (`A`, `svar`, `origord`), and
+  `sbeta`/`rho` were scrambled whenever `num_mix > 1` (the default). A
+  write-then-read round trip cancels the error, so no self-consistency test
+  could catch it; the fix is pinned by recomputing the bundled Fortran
+  fixture's own reported log-likelihood from the loaded parameters (an external
+  oracle). The writer's multi-model `W` layout, which interleaved models and was
+  not EEGLAB-readable, is corrected to genuine Fortran (model axis slowest);
+  single-model output is byte-identical to before. `AmicaOutput` gains a
+  supported `sources(X, model=0)` accessor (the loaded-fit counterpart of the
+  live model's `transform`) so downstream source derivations no longer hand-roll
+  the sphere/unmixing composition (#159). Migration note: a *multi-model*
+  `amicaout` directory written by an earlier pyAMICA (whose `W` used the old
+  model-interleaved layout) must be regenerated with `write_amica_output`, not
+  just re-loaded; there is no version marker to detect the old layout (genuine
+  Fortran output carries none either), and the pre-fix multi-model `W` was never
+  in the correct convention regardless. Single-model directories are unaffected
+  (byte-identical before and after).
 - Separation-quality metrics (`pyAMICA.metrics`): `mir` (Mutual Information
   Reduction, in nats) measures how much mutual information a fitted unmixing
   removes from the data. A direct port of `getMIR.m` from bigdelys/pre_ICA_cleaning

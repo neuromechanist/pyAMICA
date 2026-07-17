@@ -305,6 +305,175 @@ def test_write_amica_output_llt_multimodel(real_data, tmp_path):
     np.testing.assert_allclose(out.Lt, logsumexp(out.Lht, axis=0), rtol=1e-10)
 
 
+def test_loadmodout_sources_reproduce_live_transform_multimodel(real_data, tmp_path):
+    """``loadmodout(written).sources(X, k)`` reproduces the live model's own
+    ``transform`` for every model, up to the per-component sign/scale/variance-
+    reorder and gm model-reorder that ``loadmodout`` legitimately applies (issue
+    #159). Real 2-model fit, seed=4 (gives a non-identity gm ordering, so the
+    model remap is actually exercised).
+
+    This is the derivation the issue reported was impossible before the fix (its
+    single-model table showed no component reaching |corr| ~ 1 under either
+    orientation of the C-order ``W``, because the loader returned the transpose
+    and, for multi-model, the interleaved layout). Sabotage-checked: reverting
+    just the reader to C-order drops the min matched |corr| here to ~0.02. With
+    the byte order corrected, best-|corr| matching -- which quotients out exactly
+    the sign/scale/variance-reorder loadmodout applies -- hits ~1.0 for every
+    component of both models.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=8, block_size=1024, seed=4)
+    if not model.is_fitted_:
+        pytest.skip("aggressive short fit ended degenerate; not the case under test")
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+    out = loadmodout(outdir)
+    assert out.num_models == 2
+
+    ng = model.model_
+    assert ng is not None and ng.gm is not None
+    gm = ng.gm.detach().cpu().numpy()
+    gm_ord = np.argsort(gm)[::-1]  # loadmodout sorts models by gm descending
+    assert not np.array_equal(gm_ord, np.arange(2)), (
+        "seed must give a non-identity gm ordering, or the model remap is untested"
+    )
+
+    X = real_data[:, :4096]
+    for k in range(out.num_models):
+        live = model.transform(X, model_idx=int(gm_ord[k]))  # (nw, N)
+        loaded = out.sources(X, k)  # (nw, N)
+        # Best-|corr| matching is invariant to the per-component sign, scale and
+        # variance-reordering loadmodout introduces, so a correct W/c round trip
+        # gives ~1.0 for every component.
+        a = live - live.mean(1, keepdims=True)
+        b = loaded - loaded.mean(1, keepdims=True)
+        a /= np.linalg.norm(a, axis=1, keepdims=True)
+        b /= np.linalg.norm(b, axis=1, keepdims=True)
+        corr = np.abs(a @ b.T)
+        rows, cols = linear_sum_assignment(1.0 - corr)
+        matched = corr[rows, cols]
+        assert matched.min() > 0.999, (
+            f"model {k} (live {gm_ord[k]}): min matched |corr| {matched.min():.4f}"
+        )
+        assert len(np.unique(cols)) == out.num_pcs, "component matching not 1-to-1"
+
+
+def test_written_w_bytes_are_genuine_fortran_layout(real_data, tmp_path):
+    """The raw on-disk ``W`` file is genuine Fortran layout: model axis slowest,
+    column-major within each model (issue #159). This pins the writer's byte
+    format directly, independent of any reader -- the round-trip tests pass a
+    reader and writer that were changed in lockstep, so only a direct byte-layout
+    assertion (or the manual MATLAB gate) proves the writer alone is correct.
+    """
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=5, block_size=1024, seed=7)
+    if not model.is_fitted_:
+        pytest.skip("short fit ended degenerate; not the case under test")
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+
+    ng = model.model_
+    assert ng is not None and ng.W is not None
+    internal_w = ng.W.detach().cpu().numpy()  # (nw, nw, num_models), internal
+    nw, _, num_models = internal_w.shape
+
+    raw = np.fromfile(outdir / "W", dtype=np.float64)
+    # Genuine Fortran W_fortran[:, :, h] = internal_w[:, :, h].T, stored per model
+    # contiguous and column-major; equivalently each model's slice is the internal
+    # slice raveled C-order, concatenated model-slowest.
+    expected = np.concatenate(
+        [internal_w[:, :, h].ravel(order="C") for h in range(num_models)]
+    )
+    assert raw.size == nw * nw * num_models
+    np.testing.assert_array_equal(raw, expected)
+
+
+def test_load_results_returns_internal_w_multimodel(real_data, tmp_path):
+    """``load_results`` returns the internal-backend ``W`` (its NumPy-viz
+    contract) for multi-model output. The writer's ``W`` layout and ``load_results``
+    were changed together in #159, so this guards them staying in lockstep: a
+    future writer-layout change not mirrored in ``load_results`` breaks it
+    (sabotage-checked -- reverting just the writer to plain C-order fails this at
+    99.9% mismatch). The on-disk format itself is pinned by
+    ``test_written_w_bytes_are_genuine_fortran_layout``.
+    """
+    from pyAMICA.numpy_impl.data import load_results
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=5, block_size=1024, seed=7)
+    if not model.is_fitted_:
+        pytest.skip("short fit ended degenerate; not the case under test")
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+
+    ng = model.model_
+    assert ng is not None and ng.W is not None
+    internal_w = ng.W.detach().cpu().numpy()  # (nw, nw, num_models), internal
+
+    r = load_results(str(outdir))
+    assert r["W"].shape == internal_w.shape
+    npt.assert_allclose(r["W"], internal_w, atol=1e-12)
+
+
+def test_loadmodout_sources_roundtrip_with_share_comps(real_data, tmp_path):
+    """The byte-order fix composes correctly with component sharing (issue #159 x
+    #60): with ``share_comps`` on, ``comp_list`` is non-identity (components merged
+    across models), so ``write_amica_output``/``loadmodout``/``sources`` must index
+    the mixture params through the merged ``comp_list``. A short 2-model fit whose
+    seed reliably merges; ``sources`` must still reproduce the live ``transform``
+    per gm-matched model.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(
+        real_data[:, :4096],
+        max_iter=16,
+        block_size=1024,
+        seed=0,
+        share_comps=True,
+        share_start=3,
+        share_iter=7,
+        comp_thresh=0.85,
+    )
+    if not model.is_fitted_:
+        pytest.skip("short share_comps fit ended degenerate; not the case under test")
+    ng = model.model_
+    assert ng is not None and ng.comp_list is not None and ng.gm is not None
+    comp_list = ng.comp_list.detach().cpu().numpy()
+    if len(np.unique(comp_list)) == comp_list.size:
+        pytest.skip("no merge fired for this build; the sharing path is not exercised")
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+    out = loadmodout(outdir)
+
+    gm = ng.gm.detach().cpu().numpy()
+    gm_ord = np.argsort(gm)[::-1]
+    X = real_data[:, :4096]
+    for k in range(out.num_models):
+        live = model.transform(X, model_idx=int(gm_ord[k]))
+        loaded = out.sources(X, k)
+        a = live - live.mean(1, keepdims=True)
+        b = loaded - loaded.mean(1, keepdims=True)
+        a /= np.linalg.norm(a, axis=1, keepdims=True)
+        b /= np.linalg.norm(b, axis=1, keepdims=True)
+        corr = np.abs(a @ b.T)
+        rows, cols = linear_sum_assignment(1.0 - corr)
+        assert corr[rows, cols].min() > 0.999, (
+            f"share_comps model {k}: min matched |corr| {corr[rows, cols].min():.4f}"
+        )
+
+
 def test_loadmodout_llt_gm_reorder_alignment(real_data, tmp_path):
     """``loadmodout`` must permute ``Lht`` by the SAME ``gm_ord`` it applies to
     ``W``/``mod_prob``/``comp_list``/etc, not leave it in on-disk order (issue
