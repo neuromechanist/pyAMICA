@@ -52,6 +52,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from ..metrics import mir as mir_metric
+from ..metrics import pairwise_mi
 from .utils import setup_device
 
 logger = logging.getLogger(__name__)
@@ -589,6 +591,14 @@ class AMICATorchNG:
         # the iterate fit() actually kept -- use this, not ``ll_history[-1]``, as
         # the model's fitted log-likelihood. Set by fit().
         self.final_ll_: Optional[float] = None
+        # MIR waypoint trajectory (issue #137), populated by fit() when
+        # mir_step > 0: (iteration, mir_nats, variance) tuples from the
+        # CURRENT (mid-fit) W/sphere. Like ll_history, this is a true
+        # trajectory that a keep_best restore does NOT rewrite -- the
+        # fit-end MIR is mir() on the returned parameters, not
+        # mir_history_[-1]. Not part of state_dict(): it's a diagnostic,
+        # not a fitted parameter.
+        self.mir_history_: list[tuple[int, float, float]] = []
 
         # Outlier-rejection bookkeeping (set up in fit()).
         self.numrej = 0
@@ -1592,7 +1602,11 @@ class AMICATorchNG:
     # Public API
     # ------------------------------------------------------------------
     def fit(
-        self, X: np.ndarray, max_iter: int = 100, verbose: bool = True
+        self,
+        X: np.ndarray,
+        max_iter: int = 100,
+        verbose: bool = True,
+        mir_step: int = 0,
     ) -> "AMICATorchNG":
         """Fit the model to data.
 
@@ -1604,6 +1618,16 @@ class AMICATorchNG:
             Number of natural-gradient EM iterations.
         verbose : bool, default=True
             Show a tqdm progress bar.
+        mir_step : int, default=0
+            If > 0, compute MIR (issue #137) from the current ``W``/``sphere``
+            every ``mir_step`` iterations and append it to ``mir_history_`` as
+            ``(iteration, mir_nats, variance)``. ``0`` (default) disables the
+            waypoints and leaves fit behaviour byte-for-byte unchanged.
+            ``mir_history_`` is a true trajectory like ``ll_history``: a
+            ``keep_best`` (issue #51) restore does not rewrite it, so the
+            fit-end MIR is ``self.mir(X)`` on the returned parameters, not
+            ``mir_history_[-1]``. Incompatible with PCA reduction
+            (``pcakeep``/``pcadb``), same as :meth:`mir` itself.
 
         Returns
         -------
@@ -1617,12 +1641,22 @@ class AMICATorchNG:
             raise ValueError(
                 f"X has {X.shape[0]} channels, model expects {self.n_channels}"
             )
+        if mir_step < 0:
+            raise ValueError(f"mir_step must be >= 0, got {mir_step}")
+        if mir_step > 0 and self._pca_reduced():
+            raise ValueError(
+                "mir_step > 0 is incompatible with PCA reduction "
+                "(pcakeep/pcadb): the sphere is rank-deficient, so MIR's "
+                "log-Jacobian term is undefined. Rejected up front rather "
+                "than failing mid-fit at the first waypoint."
+            )
 
         X_t = self._preprocess(X)
         n_total = X_t.shape[1]
 
         self._initialize_parameters()
         self.ll_history = []
+        self.mir_history_ = []
         self.numrej = 0
         self.n_newton_fallbacks = 0
         self._spinv = None  # rebuild the de-sphering metric for this fit's sphere
@@ -1747,6 +1781,14 @@ class AMICATorchNG:
                     self._update_unmixing_matrices()
 
             self.ll_history.append(ll)
+
+            # MIR waypoint (issue #137), following the NumPy backend's
+            # writestep/histstep idiom (numpy_impl/core.py). Computed from the
+            # CURRENT W/sphere (just rebuilt above by _update_parameters /
+            # the share_comps block) against the raw, un-preprocessed X.
+            if mir_step > 0 and it % mir_step == 0:
+                mir_nats, mir_var = self.mir(X)
+                self.mir_history_.append((it, mir_nats, mir_var))
 
             # Learning-rate control, ported from Fortran (amica17.f90:1062-1108).
             # Natural-gradient/Newton ascent is not monotonic at a fixed rate:
@@ -1926,6 +1968,85 @@ class AMICATorchNG:
                 "fit() first."
             )
         return self.W[:, :, model_idx].T.cpu().numpy()
+
+    def _pca_reduced(self) -> bool:
+        """Whether PCA reduction is active (``pcakeep``/``pcadb``), which leaves
+        the sphere rank-deficient."""
+        return self.pcakeep is not None or self.pcadb is not None
+
+    def mir(
+        self, X: np.ndarray, *, model_idx: int = 0, nbins: Optional[int] = None
+    ) -> Tuple[float, float]:
+        """Mutual Information Reduction (issue #137) of this model's unmixing on ``X``.
+
+        Composes the full raw-data-to-sources transform ``W_fort @ sphere`` --
+        i.e. ``get_unmixing_matrix(model_idx) @ sphere`` -- and delegates to
+        :func:`pyAMICA.metrics.mir`. MIR is shift-invariant, so the data-space
+        mean/``c`` centering ``transform`` applies is irrelevant here.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+        model_idx : int, default=0
+            Which model's unmixing to use.
+        nbins : int, optional
+            Histogram bin count; see :func:`pyAMICA.metrics.mir`.
+
+        Returns
+        -------
+        mir_nats : float
+        variance : float
+
+        Raises
+        ------
+        RuntimeError
+            If the model is unfitted.
+        ValueError
+            If PCA reduction (``pcakeep``/``pcadb``) is active: it leaves the
+            sphere rank-deficient, so MIR's log-Jacobian term is undefined.
+        """
+        if self.A is None or self.W is None or self.sphere is None:
+            raise RuntimeError(
+                "AMICATorchNG.mir() requires a fitted model; call fit() first."
+            )
+        if self._pca_reduced():
+            raise ValueError(
+                "mir() is incompatible with PCA reduction (pcakeep/pcadb): "
+                "the sphere is rank-deficient, so MIR's log-Jacobian term is "
+                "undefined for the resulting non-square/non-invertible "
+                "unmixing."
+            )
+        unmixing = (self.W[:, :, model_idx].T @ self.sphere).cpu().numpy()
+        return mir_metric(unmixing, X, nbins)
+
+    def pmi(
+        self, X: np.ndarray, *, model_idx: int = 0, nbins: Optional[int] = None
+    ) -> np.ndarray:
+        """Pairwise Mutual Information (issue #137) between this model's sources on ``X``.
+
+        Delegates to :func:`pyAMICA.metrics.pairwise_mi` on
+        ``transform(X, model_idx)``.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+        model_idx : int, default=0
+            Which model's sources to use.
+        nbins : int, optional
+            Histogram bin count; see :func:`pyAMICA.metrics.pairwise_mi`.
+
+        Returns
+        -------
+        mi_matrix : np.ndarray of shape (n_sources, n_sources)
+
+        Raises
+        ------
+        RuntimeError
+            If the model is unfitted (via ``transform``).
+        """
+        return pairwise_mi(self.transform(X, model_idx=model_idx), nbins)
 
     # ------------------------------------------------------------------
     # EEGLAB drop-in output (issue #92)
