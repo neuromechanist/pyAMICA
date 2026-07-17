@@ -154,7 +154,7 @@ def write_amicaout(
         np.asarray(arr, dtype=dtype).ravel(order=order).tofile(outdir / name)
 
     # W carries the on-disk model-count and is the array whose 3-D layout the
-    # #159 fix depends on; validate it up front so a mis-shaped W fails with a
+    # #159 fix depends on; validate it up front so a malformed W fails with a
     # clear message here rather than as a bare numpy transpose/reshape error (on
     # write) or, worse, a silently-misordered read later.
     gm = np.asarray(gm)
