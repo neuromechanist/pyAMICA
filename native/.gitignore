@@ -1,0 +1,6 @@
+# Build artifacts (binaries + object/module dirs); recreate with build.sh
+build_*/
+amica15_shim
+amica15_mpi
+*.o
+*.mod
