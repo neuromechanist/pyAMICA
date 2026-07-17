@@ -5,6 +5,26 @@ Release notes are also published on the
 
 ## Unreleased
 
+- Separation-quality metrics (`pyAMICA.metrics`): `mir` (Mutual Information
+  Reduction, in nats) measures how much mutual information a fitted unmixing
+  removes from the data. A direct port of `getMIR.m` from bigdelys/pre_ICA_cleaning
+  (Apache-2.0; see `THIRD_PARTY_NOTICES.md`), verified against the original at
+  1.7e-15 relative on the bundled sample EEG (#134).
+- `pairwise_mi` and `block_diagonal_order` (`pyAMICA.metrics`): the pairwise
+  mutual-information matrix between fitted sources, plus a greedy
+  nearest-neighbour-chain ordering that clusters dependent components near the
+  diagonal. A clean-room reimplementation: the reference (`minfojp.m` in
+  postAmicaUtility) is GPL-2.0-or-later and pyAMICA is BSD-3-Clause, so its
+  source was never read. Agrees with that reference at r=0.9887 on identical
+  signals (#135).
+- `LLt` output parity with the Fortran reference: both backends now write the
+  per-timepoint, per-model log-likelihood file that the reference binary
+  produces on every run, and `loadmodout` reads it with the correct column-major
+  layout (it previously used C order, scrambling `Lht`/`Lt`). Verified
+  bit-exactly in both directions against EEGLAB's real `loadmodout15.m`. Under
+  `do_reject`, rejected samples are written as exactly `0.0`, matching Fortran:
+  those zeros are load-bearing, since its `load_rej` reconstructs the rejection
+  mask from them (#155).
 - `AMICATorchNG`/`AMICA` gain `mir()`/`pmi()` accessors that compose the
   fitted unmixing the documented way (`get_unmixing_matrix(model_idx) @
   sphere` for MIR, `transform(X, model_idx)` for PMI) and delegate to
