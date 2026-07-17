@@ -77,11 +77,15 @@ fi
 common_f=(-O3 -fopenmp -cpp -ffree-line-length-none -std=legacy
           -fallow-argument-mismatch -J"$build_dir" "${mpi_mod_inc[@]}" -I"$work")
 "$fc" "${common_f[@]}" -c "$work/funmod2.f90" -o "$build_dir/funmod2.o"
-# shellcheck disable=SC2086  # $lapack_libs must word-split into separate flags
+# -static-libgfortran/-libgcc bundle the Fortran/GCC runtime so the binary does
+# not need a matching gfortran install. EXTRA_LDFLAGS carries per-platform static
+# linkage from the release matrix (e.g. -static-libquadmath, static OpenBLAS, or a
+# full -static on Linux); LAPACK_LIBS is the LAPACK/BLAS linkage.
+# shellcheck disable=SC2086  # $lapack_libs/$EXTRA_LDFLAGS must word-split
 "$fc" "${common_f[@]}" \
   "$work/amica15.f90" "$build_dir/funmod2.o" "${extra_obj[@]}" \
   -o "$out" \
-  -static-libgfortran -static-libgcc $lapack_libs
+  -static-libgfortran -static-libgcc ${EXTRA_LDFLAGS:-} $lapack_libs
 set +x
 
 # Self-verify the shim build links NO real MPI runtime (the whole point). Uses
