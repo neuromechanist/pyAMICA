@@ -5,6 +5,17 @@ Release notes are also published on the
 
 ## Unreleased
 
+- Native Fortran run engine (`AMICANative`), the fourth backend alongside NumPy,
+  PyTorch and MLX. It runs the AMICA Fortran reference itself and returns an
+  `AmicaOutput` with the usual accessors, so it is the parity oracle the Python
+  backends are checked against. The reference is now built dependency-free (a
+  single-rank MPI shim removes the Open MPI runtime, on top of sccn/amica PR
+  \#53's no-MKL recipe; proven identical to real Open MPI at machine epsilon) and
+  released as a self-contained binary for macOS arm64, Linux x64/arm64 and Windows
+  x64 (Windows arm64 runs the x64 binary via emulation until a native toolchain
+  exists, issue #173). The binary is resolved for the host and downloaded from the
+  release on first use (SHA-256 verified); `python -m pyAMICA.native` installs it
+  explicitly, or set `PAMICA_NATIVE_BINARY` to a local build (epic #165).
 - Fixed `loadmodout` reading `W`, `sbeta` and `rho` in the wrong byte order:
   it used C order where the writer, genuine Fortran output and EEGLAB's
   `loadmodout15.m` all use column-major (F order). The consequence was that

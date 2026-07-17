@@ -25,10 +25,14 @@ from .viz import plot_model_probability, plot_pmi_heatmap
 # issue #34); AMICA_NumPy is its scikit-learn-style interface.
 from .numpy_impl import AMICA as AMICA_NumPy
 
+# Native Fortran run engine (epic #165): runs the dependency-free reference binary.
+from .native import AMICANative
+
 __all__ = [
     "AMICA",
     "AMICATorchNG",
     "AMICA_NumPy",
+    "AMICANative",
     "metrics",
     "numpy_impl",
     "torch_impl",
