@@ -84,5 +84,21 @@ common_f=(-O3 -fopenmp -cpp -ffree-line-length-none -std=legacy
   -static-libgfortran -static-libgcc $lapack_libs
 set +x
 
+# Self-verify the shim build links NO real MPI runtime (the whole point). Uses
+# whichever inspector the host has; a hit means a stray system MPI leaked onto
+# the search path and shadowed the shim, so fail loudly rather than ship it.
+if [[ "$mode" == "shim" ]]; then
+  deps=""
+  if command -v otool >/dev/null 2>&1; then deps="$(otool -L "$out" 2>/dev/null)"
+  elif command -v ldd >/dev/null 2>&1; then deps="$(ldd "$out" 2>/dev/null)"
+  elif command -v objdump >/dev/null 2>&1; then deps="$(objdump -p "$out" 2>/dev/null | grep -i 'DLL Name\|NEEDED')"
+  fi
+  if [[ -n "$deps" ]] && grep -qiE 'libmpi|msmpi|open-mpi|mpich' <<<"$deps"; then
+    echo "ERROR: shim build links a real MPI runtime (should link none):" >&2
+    grep -iE 'libmpi|msmpi|open-mpi|mpich' <<<"$deps" >&2
+    exit 1
+  fi
+fi
+
 echo
 echo "built: $out"

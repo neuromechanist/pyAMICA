@@ -54,5 +54,6 @@ LL max|diff| = 8.9e-16,  W/A = 1.7e-18,  all params <= 5e-16   (PASS, tol 1e-12)
 One iteration is the discriminating window: AMICA's optimizer chaotically amplifies
 last-bit differences over iterations (cf. #51/#27), so a genuine shim bug would
 show as an O(1) iter-1 difference, while the residual here is compile-driver
-roundoff (`gfortran` direct vs the `mpif90` wrapper). The shim binary links no
-`libmpi` (verified with `otool -L`/`ldd`).
+roundoff (`gfortran` direct vs the `mpif90` wrapper). `build.sh` self-verifies the
+shim binary links no real MPI runtime (`otool -L`/`ldd`/`objdump`, per host) and
+fails the build if one leaked onto the search path.

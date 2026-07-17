@@ -31,10 +31,10 @@ build() {  # build <mode> <fc> -> $work/amica_<mode>
   local mode="$1" fc="$2" d="$work/b_$1"
   mkdir -p "$d"
   cp "$repo_root/pyAMICA"/{funmod2,amica15,amica15_header}.f90 "$d/"
-  python3 "$here/patch_sources.py" "$d/amica15.f90" "$d/amica15_header.f90" >/dev/null
-  # Pin the RNG seed (replace the clock read) so the two builds seed identically.
-  perl -0pi -e 's/call system_clock\(c1\)/c1 = 987654321/' "$d/amica15.f90"
-  grep -q 'c1 = 987654321' "$d/amica15.f90" || { echo "seed-pin patch failed" >&2; exit 1; }
+  # --pin-seed drops the clock term from the RNG seed so the shim and mpif90
+  # builds seed identically and can be compared bit-for-bit. Scoped to the seed
+  # formula inside patch_sources.py (not a loose whole-file regex).
+  python3 "$here/patch_sources.py" --pin-seed "$d/amica15.f90" "$d/amica15_header.f90" >/dev/null
   cc -O3 -c "$here/vmath_shim.c" -o "$d/vmath.o"
   local extra=("$d/vmath.o")
   if [[ "$mode" == shim ]]; then

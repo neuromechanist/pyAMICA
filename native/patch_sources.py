@@ -44,10 +44,24 @@ def patch(path, old, new, marker, label):
 
 
 def main():
-    amica15, header = sys.argv[1], sys.argv[2]
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    pin_seed = "--pin-seed" in sys.argv[1:]
+    amica15, header = args[0], args[1]
+
+    new_seed = NEW_SEED
+    if pin_seed:
+        # Determinism for validate_shim.sh: drop the clock term (c1) so the shim
+        # and mpif90 builds seed identically and can be compared bit-for-bit.
+        # Scoped to the seed formula only -- the clock is still read for timing.
+        if "c1 +" not in NEW_SEED:
+            sys.exit("ERROR: --pin-seed anchor 'c1 +' not found in NEW_SEED")
+        new_seed = NEW_SEED.replace("seedvec(jj) = c1 +", "seedvec(jj) = 987654321 +")
+
     patch(header, HDR_ANCHOR, HDR_ADD, "INTEGER :: nseed", "header seedvec decl")
-    patch(amica15, OLD_SEED, NEW_SEED, "call random_seed(size = nseed)", "random_seed")
-    print("patched: portable random_seed + seedvec declarations")
+    patch(amica15, OLD_SEED, new_seed, "call random_seed(size = nseed)", "random_seed")
+    print(
+        f"patched: portable random_seed + seedvec declarations{' (pinned)' if pin_seed else ''}"
+    )
 
 
 if __name__ == "__main__":
