@@ -241,7 +241,14 @@ def load_results(indir: Union[str, Path], compressed: bool = False) -> dict:
     nw = int(round(np.sqrt(len(W) / num_models)))
     num_comps = nw * num_models
 
-    results = {"gm": gm, "W": W.reshape(nw, nw, num_models)}
+    # On disk W is genuine-Fortran: W_fortran(nw, nw, num_models), model axis
+    # slowest, column-major within each model. Unlike loadmodout (which returns
+    # that EEGLAB-convention W_fortran), load_results returns the internal-backend
+    # W = W_fortran.T for the NumPy viz helpers, so read F-order and transpose the
+    # first two axes back. For num_models == 1 this equals the old plain C-order
+    # read; for num_models > 1 the old read scrambled the model axis (issue #159).
+    W_fortran = W.reshape(nw, nw, num_models, order="F")
+    results = {"gm": gm, "W": np.transpose(W_fortran, (1, 0, 2))}
 
     A = _read("A")
     if A is not None:
