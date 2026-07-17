@@ -1633,14 +1633,12 @@ class AMICA:
         ``load_results`` reads back), so pyAMICA output is loadable by the same
         reader as the Fortran reference (issue #30).
 
-        For ``num_models == 1`` (the CLI/sample-data case) the bytes are
-        identical to the Fortran ``amicaout`` ``W``/``c``/``comp_list`` files, so
-        the two are directly comparable. For ``num_models > 1`` the per-model
-        axis nesting differs from genuine Fortran column-major storage: the
-        output stays self-consistent (``loadmodout``/``load_results`` recover it
-        losslessly, matching ``loadmodout``'s own C-order model-axis convention),
-        but is not byte-identical to multi-model Fortran output. Multi-model
-        Fortran interop is out of scope here (see #27).
+        This shares the ``write_amicaout`` writer with the torch backend, so its
+        on-disk guarantees apply here too: single-model output is byte-identical
+        to the Fortran ``amicaout`` files, and since #159 multi-model output is
+        written in genuine Fortran layout as well (each array's model axis
+        slowest, column-major within a model), so EEGLAB's ``loadmodout15.m``
+        reads both correctly. See :func:`pyAMICA.numpy_impl.load.write_amicaout`.
 
         Also writes ``LLt`` (issue #155) via ``_compute_full_posterior_ll``,
         which is called on every ``_write_results`` call -- including every

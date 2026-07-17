@@ -137,11 +137,17 @@ def test_amicaoutput_sources_contract_and_c_subtraction():
     )
     assert not np.allclose(b0, b1), "c subtraction had no effect"
 
-    # Input validation.
+    # Input validation: out-of-range and negative model, wrong data_dim, and a
+    # non-2D X (a single 1-D sample vector) must all raise, not silently produce
+    # garbage.
     with pytest.raises(ValueError, match="model must be in"):
         out.sources(data, out.num_models)
+    with pytest.raises(ValueError, match="model must be in"):
+        out.sources(data, -1)
     with pytest.raises(ValueError, match="data_dim"):
         out.sources(data[:16], 0)
+    with pytest.raises(ValueError, match="data_dim"):
+        out.sources(data[:, 0], 0)  # 1-D X
 
 
 @pytest.mark.slow

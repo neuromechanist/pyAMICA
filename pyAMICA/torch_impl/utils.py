@@ -201,13 +201,13 @@ def compare_with_fortran(
 
     metrics = {}
 
-    # Compare unmixing matrices
+    # Compare unmixing matrices. Callers pass the true unmixing (rows =
+    # components) via get_unmixing_matrix(); since #159, loadmodout returns W in
+    # that same genuine-Fortran convention, so the two compare directly with no
+    # transpose.
     if "W" in pytorch_results and hasattr(fortran_results, "W"):
         W_pytorch = pytorch_results["W"]
-        # loadmodout returns the EEGLAB-convention unmixing (b = W @ sphered),
-        # which is the transpose of the internal-backend W the PyTorch results
-        # carry (issue #159). Transpose back so this compares like with like.
-        W_fortran = fortran_results.W[:, :, 0].T  # First model, internal convention
+        W_fortran = fortran_results.W[:, :, 0]  # First model, true unmixing
 
         # Compute correlation matrix
         corr_matrix = compute_correlation_matrix(W_pytorch, W_fortran)

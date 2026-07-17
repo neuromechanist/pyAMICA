@@ -19,7 +19,13 @@ Release notes are also published on the
   single-model output is byte-identical to before. `AmicaOutput` gains a
   supported `sources(X, model=0)` accessor (the loaded-fit counterpart of the
   live model's `transform`) so downstream source derivations no longer hand-roll
-  the sphere/unmixing composition (#159).
+  the sphere/unmixing composition (#159). Migration note: a *multi-model*
+  `amicaout` directory written by an earlier pyAMICA (whose `W` used the old
+  model-interleaved layout) must be regenerated with `write_amica_output`, not
+  just re-loaded; there is no version marker to detect the old layout (genuine
+  Fortran output carries none either), and the pre-fix multi-model `W` was never
+  in the correct convention regardless. Single-model directories are unaffected
+  (byte-identical before and after).
 - Separation-quality metrics (`pyAMICA.metrics`): `mir` (Mutual Information
   Reduction, in nats) measures how much mutual information a fitted unmixing
   removes from the data. A direct port of `getMIR.m` from bigdelys/pre_ICA_cleaning

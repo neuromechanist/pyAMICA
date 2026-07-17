@@ -115,10 +115,13 @@ def write_amicaout(
 
     Both backends store these arrays in the same convention. Single-model output
     is byte-identical to the Fortran reference's ``amicaout`` files. Multi-model
-    output is written in genuine Fortran layout too (each array's model axis is
-    slowest, column-major within a model), so EEGLAB's ``loadmodout15.m`` reads it
-    correctly; the earlier model-interleaved ``W`` layout, which round-tripped
-    through :func:`loadmodout` but was not MATLAB-readable, was fixed in #159.
+    output is written in genuine Fortran layout too: each EEGLAB-read file (``W``
+    3-D column-major with the model axis slowest; ``c``/``comp_list`` and the
+    ``(num_mix, num_comps)`` mixture params column-major) is laid out so EEGLAB's
+    ``loadmodout15.m`` reads it correctly. The earlier model-interleaved ``W``
+    layout, which round-tripped through :func:`loadmodout` but was not
+    MATLAB-readable, was fixed in #159. (``A`` is exempt: ``loadmodout15`` derives
+    it from ``W``/``S`` and ignores the file; see below.)
 
     Parameters
     ----------
@@ -149,6 +152,19 @@ def write_amicaout(
         # Fortran dumps arrays column-major; ``order="F"`` reproduces that byte
         # layout so real EEGLAB ``loadmodout15.m`` reads the file correctly.
         np.asarray(arr, dtype=dtype).ravel(order=order).tofile(outdir / name)
+
+    # W carries the on-disk model-count and is the array whose 3-D layout the
+    # #159 fix depends on; validate it up front so a mis-shaped W fails with a
+    # clear message here rather than as a bare numpy transpose/reshape error (on
+    # write) or, worse, a silently-misordered read later.
+    gm = np.asarray(gm)
+    W = np.asarray(W)
+    if W.ndim != 3 or W.shape[0] != W.shape[1]:
+        raise ValueError(f"W must be 3-D (nw, nw, num_models); got shape {W.shape}")
+    if W.shape[2] != gm.size:
+        raise ValueError(
+            f"W has {W.shape[2]} models but gm has {gm.size}; num_models disagree"
+        )
 
     _w("gm", gm)
     if A is not None:
