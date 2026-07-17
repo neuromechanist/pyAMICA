@@ -1,0 +1,168 @@
+name: Release binaries
+
+# Builds the dependency-free native AMICA binary (epic #165) for every supported
+# target and attaches the checksummed binaries to the GitHub release. Each target
+# builds NATIVELY on its own runner via native/build.sh (the single-rank MPI shim
+# means no MPI runtime is needed) and is smoke-tested on real sample EEG before
+# upload, so a binary that cannot run on its platform fails the job.
+#
+# Run manually (workflow_dispatch) to validate without cutting a release; assets
+# are only attached when triggered by a published release.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # upload release assets
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            runner: macos-14
+            shell: bash
+          - target: linux-x64
+            runner: ubuntu-latest
+            shell: bash
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            shell: bash
+          - target: windows-x64
+            runner: windows-latest
+            shell: 'msys2 {0}'
+            msystem: MINGW64
+          - target: windows-arm64
+            runner: windows-11-arm
+            shell: 'msys2 {0}'
+            msystem: CLANGARM64
+            experimental: true
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Toolchain per platform ------------------------------------------
+      - name: Set up toolchain (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install gcc  # gfortran + libgomp; LAPACK via Accelerate
+
+      - name: Set up toolchain (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          # gfortran + static reference LAPACK/BLAS (.a) for a self-contained binary.
+          sudo apt-get install -y gfortran liblapack-dev libblas-dev
+
+      - name: Set up toolchain (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          # OpenBLAS provides both BLAS and LAPACK. The package prefix differs by
+          # environment (mingw-w64-x86_64-* vs mingw-w64-clang-aarch64-*).
+          install: >-
+            ${{ matrix.msystem == 'CLANGARM64'
+              && 'mingw-w64-clang-aarch64-gcc-fortran mingw-w64-clang-aarch64-openblas'
+              || 'mingw-w64-x86_64-gcc-fortran mingw-w64-x86_64-openblas' }}
+
+      # --- Build -----------------------------------------------------------
+      - name: Build native binary
+        run: |
+          set -euo pipefail
+          case "${{ matrix.target }}" in
+            macos-*)
+              # Accelerate is a system framework (always present); static Fortran
+              # runtime leaves only Accelerate + libSystem as dependencies.
+              export LAPACK_LIBS="-framework Accelerate"
+              export EXTRA_LDFLAGS="-static-libquadmath"
+              ;;
+            linux-*)
+              # Static LAPACK/BLAS + Fortran runtime; glibc stays dynamic.
+              export LAPACK_LIBS="-l:liblapack.a -l:lblas.a"
+              export EXTRA_LDFLAGS="-static-libquadmath"
+              ;;
+            windows-*)
+              # OpenBLAS (static archive) supplies BLAS+LAPACK; -static bundles the
+              # MinGW runtime so the .exe has no MSYS2 DLL dependencies.
+              export LAPACK_LIBS="-l:libopenblas.a"
+              export EXTRA_LDFLAGS="-static"
+              ;;
+          esac
+          bash native/build.sh
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          mkdir -p dist
+          cp "native/amica15_shim$ext" "dist/amica15-${{ matrix.target }}$ext"
+
+      # --- Smoke test: the binary must actually run on this platform --------
+      - name: Smoke test on sample EEG
+        run: |
+          set -euo pipefail
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          bin="$PWD/dist/amica15-${{ matrix.target }}$ext"
+          run="$(mktemp -d)"; cd "$run"
+          cp "$GITHUB_WORKSPACE/pyAMICA/sample_data/eeglab_data.fdt" .
+          mkdir -p out
+          sed -e 's#^files .*#files ./eeglab_data.fdt#' \
+              -e 's#^outdir .*#outdir ./out/#' \
+              -e 's#^max_iter .*#max_iter 2#' -e 's#^writestep .*#writestep 2#' \
+              "$GITHUB_WORKSPACE/pyAMICA/sample_data/input.param" > p.param
+          OMP_NUM_THREADS=2 "$bin" p.param | tee run.log
+          # Extract the last iteration's LL. A finite negative number (starts with
+          # "-<digit>") = a working decomposition; a blank, "NaN" or "Infinity"
+          # extraction, or a positive value, fails the pattern below.
+          ll="$(grep -oE 'LL = *-?[0-9.]+' run.log | tail -1 | grep -oE '\-?[0-9.]+$' || true)"
+          echo "final LL = '$ll'"
+          case "$ll" in
+            -[0-9]*) echo "smoke test OK (LL=$ll)" ;;
+            *) echo "smoke test FAILED: LL='$ll' (expected finite negative)"; exit 1 ;;
+          esac
+
+      # --- Checksum + upload -----------------------------------------------
+      - name: Checksum
+        run: |
+          set -euo pipefail
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum amica15-* > "amica15-${{ matrix.target }}.sha256"
+          else
+            shasum -a 256 amica15-* > "amica15-${{ matrix.target }}.sha256"
+          fi
+          cat "amica15-${{ matrix.target }}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amica15-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    name: Attach binaries to release
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -R dist
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/amica15-* --clobber --repo "${{ github.repository }}"
