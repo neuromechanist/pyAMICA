@@ -7,13 +7,17 @@ represent float64). Real sample EEG data only (no synthetic/mock).
 """
 
 import logging
+import math
 from pathlib import Path
 
 import numpy as np
+import numpy.testing as npt
 import pytest
 import torch
 
 from pyAMICA.amica import AMICA
+from pyAMICA.metrics import mir, pairwise_mi
+from pyAMICA.torch_impl.core import AMICATorchNG
 
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"
@@ -255,6 +259,182 @@ def test_write_amica_output_ll_matches_kept_iterate(real_data, tmp_path):
     assert len(ll) < len(ng.ll_history)  # the later overshoot is dropped
 
 
+def test_write_amica_output_llt_roundtrip(fitted_ng, tmp_path):
+    """A real (short but genuine) single-model NG fit writes an ``LLt`` file
+    that round-trips through ``loadmodout`` (issue #155).
+
+    ``Lht[0]`` must equal ``Lt`` exactly for a single model. ``Lt.mean()`` (the
+    per-sample total log-density, summed over channels) should be close to
+    ``nw * final_ll_`` -- the NG backend's ``final_ll_`` is already the
+    per-sample-per-channel normalized log-likelihood, matching the Fortran
+    ``LL`` file convention directly.
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    outdir = tmp_path / "amicaout"
+    fitted_ng.write_amica_output(str(outdir))
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, 4096)
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+
+    assert fitted_ng.final_ll_ is not None
+    np.testing.assert_allclose(out.Lt.mean(), NW * fitted_ng.final_ll_, rtol=1e-2)
+
+
+def test_write_amica_output_llt_multimodel(real_data, tmp_path):
+    """A small real 2-model NG fit's ``LLt`` satisfies its definitional
+    relationship: the total per-sample log-likelihood is the log-sum-exp of
+    the per-model log-likelihoods over models (issue #155). Few iterations --
+    this exercises the multi-model LLt code path, not convergence."""
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=5, block_size=1024, seed=7)
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (2, 4096)
+
+    from scipy.special import logsumexp
+
+    np.testing.assert_allclose(out.Lt, logsumexp(out.Lht, axis=0), rtol=1e-10)
+
+
+def test_loadmodout_llt_gm_reorder_alignment(real_data, tmp_path):
+    """``loadmodout`` must permute ``Lht`` by the SAME ``gm_ord`` it applies to
+    ``W``/``mod_prob``/``comp_list``/etc, not leave it in on-disk order (issue
+    #155 review Addition B).
+
+    ``test_write_amica_output_llt_multimodel``'s ``Lt == logsumexp(Lht,
+    axis=0)`` check is permutation-invariant over the model axis, so it
+    cannot detect a model-axis misalignment between ``Lht`` and ``W``/``gm``.
+    This test instead reads the raw on-disk ``gm``/``LLt`` bytes directly,
+    computes the permutation by hand, and checks ``loadmodout``'s ``Lht``
+    against it.
+
+    Requires a genuinely non-identity ``gm_ord`` (model 1 outweighing model
+    0), or this degenerates into a tautology that passes regardless of
+    whether the permutation is applied; seed=4 gives exactly that on real
+    sample EEG.
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=8, block_size=1024, seed=4)
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+
+    gm_raw = np.fromfile(outdir / "gm", dtype=np.float64)
+    num_models = gm_raw.size
+    gm_ord = np.argsort(gm_raw)[::-1]
+    assert not np.array_equal(gm_ord, np.arange(num_models)), (
+        "fixture must give a non-identity gm ordering, or this test is a tautology"
+    )
+
+    LLt_raw = np.fromfile(outdir / "LLt", dtype=np.float64)
+    n_samples = LLt_raw.size // (num_models + 1)
+    LLt_raw = LLt_raw.reshape(num_models + 1, n_samples, order="F")
+    Lht_raw = LLt_raw[:num_models]
+
+    out = loadmodout(outdir)
+    assert out.Lht is not None
+    np.testing.assert_array_equal(out.Lht, Lht_raw[gm_ord])
+    assert not np.array_equal(out.Lht, Lht_raw), (
+        "Lht must actually be permuted by gm_ord, not left in on-disk order"
+    )
+
+
+def test_write_amica_output_llt_reject_zeroes_rejected_samples(real_data, tmp_path):
+    """Under ``do_reject``, rejected samples must be exactly zero in the
+    written ``LLt`` (issue #155 Fix 1): Fortran zeroes a rejected sample's
+    ``modloglik``/``loglik`` on write (amica15.f90:2211-2216) and its
+    ``load_rej`` reader reconstructs the rejection mask from that exact zero
+    sentinel (``sum(modloglik(:,i)) == 0.0``, amica15.f90:887-896). Good
+    samples must stay non-zero and finite.
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(
+        real_data[:, :4096],
+        max_iter=15,
+        block_size=1024,
+        seed=1,
+        do_reject=True,
+        rejstart=2,
+        rejint=3,
+        maxrej=3,
+        rejsig=2.0,
+    )
+    ng = model.model_
+    assert ng is not None and ng.good_idx is not None
+    assert ng.good_idx.numel() < 4096, "fixture must reject something"
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+
+    good = np.zeros(4096, dtype=bool)
+    good[ng.good_idx.detach().cpu().numpy()] = True
+
+    np.testing.assert_array_equal(out.Lht[:, ~good], 0.0)
+    np.testing.assert_array_equal(out.Lt[~good], 0.0)
+    assert np.all(out.Lht[:, good] != 0.0)
+    assert np.all(np.isfinite(out.Lht[:, good]))
+    assert np.all(out.Lt[good] != 0.0)
+    assert np.all(np.isfinite(out.Lt[good]))
+
+
+def test_write_amica_output_llt_partial_final_block(real_data, tmp_path):
+    """The block loop's remainder branch (``end = min(start + block_size,
+    n_samples)``) is exercised by a sample count NOT evenly divisible by
+    ``block_size`` (issue #155 Fix 6d -- the existing LLt tests all used
+    exactly-divisible counts, e.g. 4096/1024, so this branch was untested).
+    """
+    from pyAMICA.numpy_impl.load import loadmodout
+
+    n = 4100
+    assert n % 1024 != 0, "fixture must not be block_size-divisible"
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :n], max_iter=5, block_size=1024, seed=1)
+
+    outdir = tmp_path / "amicaout"
+    model.write_amica_output(str(outdir))
+    out = loadmodout(outdir)
+    assert out.Lht is not None and out.Lt is not None
+    assert out.Lht.shape == (1, n)
+    np.testing.assert_array_equal(out.Lht[0], out.Lt)
+    assert np.all(np.isfinite(out.Lt))
+
+
+def test_from_state_dict_write_amica_output_omits_llt(fitted_ng, tmp_path, caplog):
+    """A model restored via ``from_state_dict`` (the ``AMICA.load`` path) has
+    no training data to recompute ``LLt`` from (issue #155 Fix 2/3): a warning
+    must fire and no ``LLt`` file must be written, while the rest of the
+    output is unaffected."""
+    path = str(tmp_path / "model.pt")
+    fitted_ng.save(path)
+    loaded = AMICA.load(path, device="cpu")
+
+    outdir = tmp_path / "amicaout"
+    with caplog.at_level(logging.WARNING, logger="pyAMICA.torch_impl.core"):
+        loaded.write_amica_output(str(outdir))
+
+    assert not (outdir / "LLt").exists()
+    assert (outdir / "W").exists()  # the rest of the output is unaffected
+    assert any(
+        "LLt" in r.getMessage() and "restored" in r.getMessage().lower()
+        for r in caplog.records
+    )
+
+
 def test_ng_wrapper_fit_transform_real_data(fitted_ng, real_data):
     assert fitted_ng.is_fitted_
     assert len(fitted_ng.ll_history_) >= 1
@@ -290,6 +470,10 @@ def test_unfitted_output_raises_not_fitted():
         model.transform(np.zeros((NW, 16)))
     with pytest.raises(ValueError, match="fitted"):
         model.get_unmixing_matrix()
+    with pytest.raises(ValueError, match="fitted"):
+        model.mir(np.zeros((NW, 16)))
+    with pytest.raises(ValueError, match="fitted"):
+        model.pmi(np.zeros((NW, 16)))
 
 
 def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
@@ -320,6 +504,8 @@ def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
         lambda: model.save(str(tmp_path / "degenerate.pt")),
         lambda: model.write_amica_output(str(tmp_path / "degenerate_out")),
         lambda: model.variance_order(),
+        lambda: model.mir(real_data[:, :512]),
+        lambda: model.pmi(real_data[:, :512]),
     ):
         with pytest.raises(RuntimeError, match="degenerate.*nan_ll"):
             action()
@@ -329,4 +515,238 @@ def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
     with pytest.raises(RuntimeError, match="degenerate"):
         AMICA(n_models=1, n_mix=3, device="cpu", verbose=False).fit_transform(
             bad, max_iter=3, block_size=1024, seed=0
+        )
+
+
+# --- MIR / PMI wiring (issue #137) ------------------------------------------
+
+
+def test_mir_composes_unmixing_the_documented_way(fitted_ng, real_data):
+    """`model.mir(X)` must match `metrics.mir(get_unmixing_matrix(0) @ sphere, X)`.
+
+    This pins the `W_fort @ sphere` composition, which is the whole reason issue
+    #137 exists: that composition was gotten wrong by hand during Phase 4, and
+    the wrong answer was *plausible* rather than obviously broken (dropping the
+    `.T` gives 42.4688 where the truth is 42.5486, only 0.19% off).
+
+    `rtol=1e-12` rather than exact equality: `mir()` composes `W.T @ sphere` in
+    torch while this test composes it in numpy, and the two BLAS paths differ in
+    the last bits (exact `==` passed locally and failed on CI). The tolerance is
+    still nine orders of magnitude tighter than the 1.9e-3 error it guards
+    against, so it catches a wrong composition comfortably.
+    """
+    X = real_data[:, :4096]
+    sphere = fitted_ng.model_.sphere.cpu().numpy()
+    unmixing = fitted_ng.get_unmixing_matrix(0) @ sphere
+    expected_mir, expected_var = mir(unmixing, X)
+
+    actual_mir, actual_var = fitted_ng.mir(X)
+    npt.assert_allclose(actual_mir, expected_mir, rtol=1e-12)
+    npt.assert_allclose(actual_var, expected_var, rtol=1e-12)
+
+
+def test_pmi_matches_pairwise_mi_on_transform(fitted_ng, real_data):
+    """`model.pmi(X)` must match `pairwise_mi(model.transform(X))`.
+
+    `rtol=1e-12` for the same reason as the MIR test above: both sides run the
+    identical estimator, but the sources reach it via different float paths.
+    """
+    X = real_data[:, :4096]
+    expected = pairwise_mi(fitted_ng.transform(X))
+
+    actual = fitted_ng.pmi(X)
+    npt.assert_allclose(actual, expected, rtol=1e-12)
+
+
+def test_mir_and_pmi_honour_model_idx(real_data):
+    """`model_idx` must actually reach the backend, for both methods.
+
+    Coverage gap found by sabotage: hardcoding `model_idx=0` inside `mir()` and
+    `pmi()` left every other test passing, because the shared fixture is
+    single-model and the wiring tests default to model 0 on both sides. Needs a
+    genuine 2-model fit whose models differ.
+    """
+    X = real_data[:, :4096]
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(X, max_iter=3, block_size=1024, seed=7)
+
+    # The two models are genuinely different, so their metrics must differ.
+    mir0, _ = model.mir(X, model_idx=0)
+    mir1, _ = model.mir(X, model_idx=1)
+    assert mir0 != mir1, "model_idx=1 returned model 0's MIR"
+
+    pmi0 = model.pmi(X, model_idx=0)
+    pmi1 = model.pmi(X, model_idx=1)
+    assert not np.array_equal(pmi0, pmi1), "model_idx=1 returned model 0's PMI"
+
+    # And each matches the free function composed for THAT model.
+    assert model.model_ is not None and model.model_.sphere is not None
+    sphere = model.model_.sphere.cpu().numpy()
+    for m in (0, 1):
+        expected, _ = mir(model.get_unmixing_matrix(m) @ sphere, X)
+        actual, _ = model.mir(X, model_idx=m)
+        npt.assert_allclose(actual, expected, rtol=1e-12)
+
+
+def test_mir_and_pmi_honour_nbins(fitted_ng, real_data):
+    """`nbins` must actually reach the metric, for both methods.
+
+    Coverage gap found by sabotage: hardcoding `nbins=None` in both methods left
+    every test passing, since none passed a non-default value.
+    """
+    X = real_data[:, :4096]
+    sphere = fitted_ng.model_.sphere.cpu().numpy()
+    unmixing = fitted_ng.get_unmixing_matrix(0) @ sphere
+
+    # A non-default nbins changes the estimate, and must match the free function
+    # given the same nbins.
+    default_mir, _ = fitted_ng.mir(X)
+    tuned_mir, _ = fitted_ng.mir(X, nbins=20)
+    assert default_mir != tuned_mir, "nbins was ignored by mir()"
+    expected_mir, _ = mir(unmixing, X, nbins=20)
+    npt.assert_allclose(tuned_mir, expected_mir, rtol=1e-12)
+
+    default_pmi = fitted_ng.pmi(X)
+    tuned_pmi = fitted_ng.pmi(X, nbins=20)
+    assert not np.array_equal(default_pmi, tuned_pmi), "nbins was ignored by pmi()"
+    npt.assert_allclose(
+        tuned_pmi, pairwise_mi(fitted_ng.transform(X), nbins=20), rtol=1e-12
+    )
+
+
+def test_mir_real_fitted_unmixing_is_large_and_positive(fitted_ng, real_data):
+    """A real fitted unmixing removes mutual information (mir > 0) and removes
+    more than the identity transform (mirrors
+    test_mir_real_fitted_unmixing_is_large_and_positive in test_metrics_mir.py)."""
+    X = real_data[:, :4096]
+    mir_nats, _ = fitted_ng.mir(X)
+    assert mir_nats > 0
+
+    identity_mir, _ = mir(np.eye(NW), X)
+    assert mir_nats > identity_mir
+
+
+def test_mir_step_populates_history_at_right_iterations(real_data):
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=5, block_size=1024, seed=42, mir_step=2)
+
+    iterations = [entry[0] for entry in model.mir_history_]
+    assert iterations == [0, 2, 4]
+    for _, mir_nats, variance in model.mir_history_:
+        assert math.isfinite(mir_nats)
+        assert math.isfinite(variance)
+
+
+def test_mir_step_zero_leaves_history_empty(real_data):
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=3, block_size=1024, seed=42, mir_step=0)
+
+    assert model.mir_history_ == []
+
+
+def test_mir_step_negative_raises(real_data):
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    with pytest.raises(ValueError, match="mir_step"):
+        model.fit(
+            real_data[:, :4096], max_iter=3, block_size=1024, seed=42, mir_step=-1
+        )
+
+
+def test_failing_mir_waypoint_does_not_kill_the_fit(real_data, monkeypatch, caplog):
+    """A diagnostic must never destroy a decomposition.
+
+    `metrics.mir` raises on a near-singular unmixing, and a near-singular W
+    mid-fit is a transient the natural gradient can pass through (the training
+    path only warns about it). Before this guard, that ValueError propagated
+    straight out of `fit()` and threw away the whole fit -- turning on a
+    waypoint could lose hours of training over a condition the optimiser was
+    about to recover from.
+
+    Forcing the raise via monkeypatch is deliberate and is not mocked data: the
+    real trigger is a transient that cannot be induced on demand from real
+    input, and what is under test is the fit's response to a raising waypoint,
+    not any numerical claim. The fit's own inputs and arithmetic stay real
+    throughout.
+    """
+    real_mir = AMICATorchNG.mir
+    calls = {"n": 0}
+
+    def flaky_mir(self, X, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:  # fail on the second waypoint, mid-fit
+            raise ValueError("mir(): unmixing matrix is singular or near-singular")
+        return real_mir(self, X, **kwargs)
+
+    monkeypatch.setattr(AMICATorchNG, "mir", flaky_mir)
+
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    with caplog.at_level(logging.WARNING, logger="pyAMICA.torch_impl.core"):
+        model.fit(real_data[:, :4096], max_iter=4, block_size=1024, seed=42, mir_step=1)
+
+    # The fit survived and is usable.
+    assert model.is_fitted_
+    assert model.converged_
+    assert model.final_ll_ is not None
+    assert math.isfinite(model.final_ll_)
+
+    # The failed waypoint is recorded as a visible NaN gap, not silently dropped.
+    iters = [row[0] for row in model.mir_history_]
+    assert iters == [0, 1, 2, 3], iters
+    values = [row[1] for row in model.mir_history_]
+    assert math.isnan(values[1]), "failed waypoint must be a visible NaN"
+    assert all(math.isfinite(v) for i, v in enumerate(values) if i != 1)
+
+    # And it warned rather than failing silently.
+    assert any(
+        "MIR waypoint failed" in r.getMessage() and "iter 1" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_mir_step_zero_matches_omitted_argument(real_data):
+    """mir_step=0 (explicit) must leave fit() behaviour byte-for-byte identical
+    to not passing mir_step at all."""
+    X = real_data[:, :4096]
+    default_model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    default_model.fit(X, max_iter=3, block_size=1024, seed=42)
+
+    explicit_model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    explicit_model.fit(X, max_iter=3, block_size=1024, seed=42, mir_step=0)
+
+    assert default_model.ll_history_ == explicit_model.ll_history_
+    assert default_model.final_ll_ == explicit_model.final_ll_
+    np.testing.assert_array_equal(
+        default_model.get_unmixing_matrix(), explicit_model.get_unmixing_matrix()
+    )
+    assert default_model.mir_history_ == explicit_model.mir_history_ == []
+
+
+def test_mir_raises_under_pca_reduction(real_data):
+    """PCA reduction (pcakeep) leaves the sphere rank-deficient, so mir()'s
+    log-Jacobian term is undefined; the guard must name pcakeep."""
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    model.fit(real_data[:, :4096], max_iter=2, block_size=1024, seed=42, pcakeep=20)
+
+    with pytest.raises(ValueError, match="pcakeep"):
+        model.mir(real_data[:, :4096])
+
+
+def test_mir_step_raises_under_pca_reduction_up_front(real_data):
+    """`mir_step > 0` under `pcakeep` is rejected BEFORE fitting starts, matching
+    the share_comps precedent, rather than failing mid-fit at the first waypoint.
+
+    Matches "Rejected up front", which is unique to `fit()`'s guard, NOT the
+    generic "pcakeep" that `mir()`'s own downstream guard also mentions. With the
+    generic pattern this test could not tell "rejected before iteration 0" from
+    "rejected during iteration 0", which is the entire claim it exists to make.
+    """
+    model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
+    with pytest.raises(ValueError, match="Rejected up front"):
+        model.fit(
+            real_data[:, :4096],
+            max_iter=2,
+            block_size=1024,
+            seed=42,
+            pcakeep=20,
+            mir_step=1,
         )

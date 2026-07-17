@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Union, Optional
 from dataclasses import dataclass
 from scipy.special import gamma
+from scipy.io import loadmat
 
 
 @dataclass
@@ -63,14 +64,16 @@ def write_amicaout(
     comp_list,
     ll,
     A=None,
+    Lht=None,
+    Lt=None,
 ):
     """Write a fitted AMICA model as the Fortran/EEGLAB binary output directory.
 
     Emits the raw little-endian files that :func:`loadmodout` and EEGLAB's
     ``loadmodout15.m`` read: ``gm``, ``W``, ``S``, ``mean``, ``c``, ``alpha``,
-    ``mu``, ``sbeta``, ``rho``, ``comp_list`` (1-based ``int32``) and ``LL``.
-    This is the write counterpart of :func:`loadmodout`, so a pyAMICA fit (either
-    backend) drops into an EEGLAB workflow (issue #92).
+    ``mu``, ``sbeta``, ``rho``, ``comp_list`` (1-based ``int32``), ``LL`` and
+    (when given) ``LLt``. This is the write counterpart of :func:`loadmodout`,
+    so a pyAMICA fit (either backend) drops into an EEGLAB workflow (issue #92).
 
     Both backends store these arrays in the same convention, so for a single
     model the bytes are identical to the Fortran reference's ``amicaout`` files;
@@ -93,6 +96,12 @@ def write_amicaout(
         Mixing matrix. ``loadmodout15`` derives ``A`` from ``W`` and ``S`` and
         ignores this file; it is written (when given) only so pyAMICA's own
         ``load_results`` can restore ``A`` directly for the viz helpers.
+    Lht : array-like of shape (num_models, n_samples), optional
+        Per-model per-sample log-likelihood (Fortran ``modloglik``). Written
+        together with ``Lt`` as the ``LLt`` file (issue #155); omitted (as
+        before) when either is ``None``.
+    Lt : array-like of shape (n_samples,), optional
+        Total per-sample log-likelihood (Fortran ``loglik``).
     """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +133,18 @@ def write_amicaout(
     # comp_list is 1-based on disk (loadmodout subtracts 1 when indexing).
     _w("comp_list", np.asarray(comp_list) + 1, dtype=np.int32, order="F")
     _w("LL", np.asarray(ll))
+    if (Lht is None) != (Lt is None):
+        raise ValueError(
+            "write_amicaout: Lht and Lt must be given together (both None to "
+            f"omit LLt, or both arrays to write it); got Lht={Lht!r}, "
+            f"Lt={Lt!r}."
+        )
+    if Lht is not None and Lt is not None:
+        # Fortran writes, per timepoint, each model's log-likelihood then the
+        # total (write_output, amica15.f90:2308-2333) -- a column-major
+        # (num_models+1, n_samples) matrix. Stacking Lt as the last row and
+        # flattening order="F" reproduces that per-timepoint sequence exactly.
+        _w("LLt", np.vstack([np.atleast_2d(Lht), np.atleast_2d(Lt)]), order="F")
 
 
 def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
@@ -195,10 +216,12 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
                 f"be corrupt or from an incompatible run."
             )
 
-    # Read log likelihoods
+    # Read log likelihoods. Stored column-major (Fortran writes, per timepoint,
+    # each model's log-likelihood then the total), so reshape order="F" (matches
+    # loadmodout15.m's `reshape(LLt, num_models+1, N)` and write_amicaout below).
     LLt = read_binary_file(outdir / "LLt")
     if LLt is not None:
-        LLt = LLt.reshape(num_models + 1, -1)
+        LLt = LLt.reshape(num_models + 1, -1, order="F")
         Lht = LLt[:num_models]
         Lt = LLt[num_models]
     else:
@@ -376,3 +399,68 @@ def loadmodout(outdir: Union[str, Path]) -> AmicaOutput:
         origord=origord,
         v=v,
     )
+
+
+def read_eeglab_set_metadata(path: Union[str, Path]) -> dict:
+    """Read sample rate, channel positions, and labels from an EEGLAB ``.set`` file.
+
+    pyAMICA has no notion of sampling rate or channel geometry anywhere in its
+    own data structures (`AmicaOutput`, `load_data_file`, `load_results` all
+    lack it); `pyAMICA.viz.plot_model_probability` needs the sample rate for a
+    seconds x-axis. This is a minimal `scipy.io.loadmat` reader for exactly
+    those fields, not a general EEGLAB-format loader.
+
+    Parameters
+    ----------
+    path : str or path-like
+        Path to an EEGLAB ``.set`` file (MATLAB v5/v7 format; ``-v7.3`` ``.set``
+        files are HDF5 and are not supported by `scipy.io.loadmat`).
+
+    Returns
+    -------
+    dict
+        ``{"srate": float, "positions": ndarray of shape (n_channels, 3),
+        "labels": list[str]}``. ``positions`` columns are EEGLAB's
+        ``chanlocs`` ``X``, ``Y``, ``Z`` fields, and are ``NaN`` for any
+        channel EEGLAB left unlocalized (EOG channels commonly are). Callers
+        that actually use ``positions`` must check for those; ``srate`` and
+        ``labels`` are unaffected.
+
+    Raises
+    ------
+    ValueError
+        If the file has no ``chanlocs`` at all.
+    """
+    mat = loadmat(str(path), struct_as_record=False, squeeze_me=True)
+    eeg = mat["EEG"]
+    chanlocs = np.atleast_1d(eeg.chanlocs)
+    if len(chanlocs) == 0:
+        # Guard explicitly: the non-finite check below uses np.any(np.isnan(...)),
+        # which is False on an empty array, so a .set with no chanlocs would sail
+        # through and return an empty (0, 3) positions array. That only surfaces
+        # later as a confusing channel-count mismatch in a caller, far from the
+        # actual cause.
+        raise ValueError(
+            f"read_eeglab_set_metadata: {path} has no channel locations "
+            "(EEG.chanlocs is empty); scalp topographies need per-channel X/Y/Z."
+        )
+
+    positions = np.full((len(chanlocs), 3), np.nan)
+    labels = []
+    for i, ch in enumerate(chanlocs):
+        labels.append(str(ch.labels))
+        for j, axis in enumerate(("X", "Y", "Z")):
+            val = getattr(ch, axis)
+            if isinstance(val, np.ndarray) and val.size == 0:
+                continue  # empty MATLAB [] on an unlocalized channel
+            positions[i, j] = float(val)
+
+    # Unlocalized channels are left as NaN rather than raising. This reader
+    # originally rejected them, because its only consumer was a scalp-topography
+    # plot that genuinely could not use them. That plot was cut (issue #159), so
+    # the sole remaining consumer wants `srate` and nothing else -- and refusing
+    # the whole file over a field nobody reads would block the sample rate for
+    # any dataset with an unlocalized channel, which EOG channels commonly are.
+    # A caller that does use `positions` must check for NaN itself; the docstring
+    # says so, and NaN is visible rather than silently plausible.
+    return {"srate": float(eeg.srate), "positions": positions, "labels": labels}

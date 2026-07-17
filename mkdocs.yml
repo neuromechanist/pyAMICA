@@ -101,6 +101,8 @@ nav:
       - PyTorch backend: api/torch-backend.md
       - MLX backend: api/mlx-backend.md
       - NumPy backend: api/numpy-backend.md
+      - Separation metrics: api/metrics.md
+      - Visualization: api/viz.md
   - Development:
       - Contributing: development/contributing.md
       - Testing: development/testing.md

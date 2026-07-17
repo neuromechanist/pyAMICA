@@ -46,12 +46,14 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
+from ..metrics import mir as mir_metric
+from ..metrics import pairwise_mi
 from .utils import setup_device
 
 logger = logging.getLogger(__name__)
@@ -589,6 +591,15 @@ class AMICATorchNG:
         # the iterate fit() actually kept -- use this, not ``ll_history[-1]``, as
         # the model's fitted log-likelihood. Set by fit().
         self.final_ll_: Optional[float] = None
+        # Mutual Information Reduction (MIR) waypoint trajectory (issue #137),
+        # populated by fit() when
+        # mir_step > 0: (iteration, mir_nats, variance) tuples from the
+        # CURRENT (mid-fit) W/sphere. Like ll_history, this is a true
+        # trajectory that a keep_best restore does NOT rewrite -- the
+        # fit-end MIR is mir() on the returned parameters, not
+        # mir_history_[-1]. Not part of state_dict(): it's a diagnostic,
+        # not a fitted parameter.
+        self.mir_history_: list[tuple[int, float, float]] = []
 
         # Outlier-rejection bookkeeping (set up in fit()).
         self.numrej = 0
@@ -618,6 +629,18 @@ class AMICATorchNG:
         self.mean: Optional[torch.Tensor] = None
         self.sphere: Optional[torch.Tensor] = None
         self.sldet = 0.0
+
+        # Full-dataset per-sample/per-model log-likelihood (Fortran's LLt,
+        # issue #155), computed ONCE at the end of fit() -- after any
+        # keep-best restore (issue #51), so it reflects the parameters
+        # actually exported, never a mid-training-loop value -- and stored as
+        # compact numpy arrays (not the full sphered dataset, which would pin
+        # n_channels x N x 8 bytes on the model, on GPU too). Not a fitted
+        # parameter (absent from state_dict()/_PARAM_TENSORS): a model
+        # restored via from_state_dict() has neither, so write_amica_output
+        # writes no LLt for it.
+        self._llt_lht: Optional[np.ndarray] = None
+        self._llt_lt: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
     # Preprocessing
@@ -852,6 +875,68 @@ class AMICATorchNG:
         statistic; Fortran ``P``/``loglik``, amica17.f90:1372)."""
         logV, *_ = self._forward(X)
         return torch.logsumexp(logV, dim=1)  # (batch,)
+
+    def _compute_full_posterior_ll(
+        self, X_t: torch.Tensor
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Recompute the per-model/per-sample log-likelihood over every sample
+        of ``X_t`` (the sphered training data), for the Fortran ``LLt`` output
+        (issue #155). Called once from ``fit()`` (after any keep-best restore)
+        with the full dataset; not retained on ``self`` afterward.
+
+        Reuses ``_forward``'s ``logV`` (Fortran's ``modloglik``: already
+        includes the ``log|det W|`` + ``sldet`` Jacobian terms) rather than any
+        value accumulated during training, so this reflects ``self``'s current
+        parameters -- correct even after a keep-best rollback (issue #51) to an
+        earlier iterate than the training loop's last.
+
+        Deliberate divergence from Fortran: Fortran's ``modloglik`` is filled
+        during iteration i's E-step, the M-step then updates the parameters,
+        and ``write_output`` writes both -- so Fortran's on-disk LLt is stale
+        by one M-step relative to the parameters written alongside it. This
+        method recomputes from the POST-update (and, here, post-keep-best-
+        restore) parameters, so pyAMICA's LLt is self-consistent with the
+        written W/A (better-behaved, not "fixed toward Fortran" -- do not
+        change this to match Fortran's staleness).
+
+        Under ``do_reject``, only the good set (``self.good_idx``) is scored --
+        Fortran zeroes a rejected sample's ``modloglik``/``loglik`` on write
+        (amica15.f90:2211-2216) and ``load_rej`` uses that exact zero as the
+        rejection sentinel (``sum(modloglik(:,i)) == 0.0``, amica15.f90:
+        887-896), so rejected columns of the returned arrays are left at their
+        zero-initialized value rather than computed and discarded -- this also
+        avoids running rejected outliers through the model for the first time
+        at write time.
+
+        Returns
+        -------
+        Lht : ndarray of shape (n_models, n_samples). Zero for rejected
+            samples under ``do_reject``.
+        Lt : ndarray of shape (n_samples,). Zero for rejected samples under
+            ``do_reject``.
+        """
+        n_samples = X_t.shape[1]
+        Lht = np.zeros((self.n_models, n_samples))
+        Lt = np.zeros(n_samples)
+
+        if self.do_reject:
+            assert self.good_idx is not None
+            idx = self.good_idx.detach().cpu().numpy()
+            X_use = X_t[:, self.good_idx]
+        else:
+            idx = np.arange(n_samples)
+            X_use = X_t
+        n_use = X_use.shape[1]
+
+        for start in range(0, n_use, self.block_size):
+            end = min(start + self.block_size, n_use)
+            logV, *_ = self._forward(X_use[:, start:end])
+            lt_block = torch.logsumexp(logV, dim=1)
+            cols = idx[start:end]
+            Lht[:, cols] = logV.T.detach().cpu().numpy()
+            Lt[cols] = lt_block.detach().cpu().numpy()
+
+        return Lht, Lt
 
     def _get_block_updates(self, X: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Compute sufficient-statistic accumulators for one data block.
@@ -1518,7 +1603,11 @@ class AMICATorchNG:
     # Public API
     # ------------------------------------------------------------------
     def fit(
-        self, X: np.ndarray, max_iter: int = 100, verbose: bool = True
+        self,
+        X: np.ndarray,
+        max_iter: int = 100,
+        verbose: bool = True,
+        mir_step: int = 0,
     ) -> "AMICATorchNG":
         """Fit the model to data.
 
@@ -1530,6 +1619,16 @@ class AMICATorchNG:
             Number of natural-gradient EM iterations.
         verbose : bool, default=True
             Show a tqdm progress bar.
+        mir_step : int, default=0
+            If > 0, compute MIR (issue #137) from the current ``W``/``sphere``
+            every ``mir_step`` iterations and append it to ``mir_history_`` as
+            ``(iteration, mir_nats, variance)``. ``0`` (default) disables the
+            waypoints and leaves fit behaviour byte-for-byte unchanged.
+            ``mir_history_`` is a true trajectory like ``ll_history``: a
+            ``keep_best`` (issue #51) restore does not rewrite it, so the
+            fit-end MIR is ``self.mir(X)`` on the returned parameters, not
+            ``mir_history_[-1]``. Incompatible with PCA reduction
+            (``pcakeep``/``pcadb``), same as :meth:`mir` itself.
 
         Returns
         -------
@@ -1543,12 +1642,22 @@ class AMICATorchNG:
             raise ValueError(
                 f"X has {X.shape[0]} channels, model expects {self.n_channels}"
             )
+        if mir_step < 0:
+            raise ValueError(f"mir_step must be >= 0, got {mir_step}")
+        if mir_step > 0 and self._pca_reduced():
+            raise ValueError(
+                "mir_step > 0 is incompatible with PCA reduction "
+                "(pcakeep/pcadb): the sphere is rank-deficient, so MIR's "
+                "log-Jacobian term is undefined. Rejected up front rather "
+                "than failing mid-fit at the first waypoint."
+            )
 
         X_t = self._preprocess(X)
         n_total = X_t.shape[1]
 
         self._initialize_parameters()
         self.ll_history = []
+        self.mir_history_ = []
         self.numrej = 0
         self.n_newton_fallbacks = 0
         self._spinv = None  # rebuild the de-sphering metric for this fit's sphere
@@ -1674,6 +1783,34 @@ class AMICATorchNG:
 
             self.ll_history.append(ll)
 
+            # MIR waypoint (issue #137), following the NumPy backend's
+            # writestep/histstep idiom (numpy_impl/core.py). Computed from the
+            # CURRENT W/sphere (just rebuilt above by _update_parameters /
+            # the share_comps block) against the raw, un-preprocessed X.
+            #
+            # A failed waypoint must never kill the fit. `metrics.mir` raises on
+            # a near-singular unmixing, and a near-singular W mid-fit is a
+            # transient the natural gradient can pass through (the same
+            # condition is only a warning on the training path, see
+            # numpy_impl/core.py's logdet_W check). Letting that propagate would
+            # let a purely diagnostic flag destroy an otherwise-recoverable
+            # decomposition. Warn and record NaN instead: the gap stays visible
+            # in mir_history_ rather than being silently absent, so a plotted
+            # trajectory shows a hole exactly where the transient was.
+            if mir_step > 0 and it % mir_step == 0:
+                try:
+                    mir_nats, mir_var = self.mir(X)
+                except (ValueError, np.linalg.LinAlgError) as exc:
+                    logger.warning(
+                        "MIR waypoint failed at iter %d (%s: %s); recording NaN "
+                        "and continuing. The fit itself is unaffected.",
+                        it,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    mir_nats = mir_var = float("nan")
+                self.mir_history_.append((it, mir_nats, mir_var))
+
             # Learning-rate control, ported from Fortran (amica17.f90:1062-1108).
             # Natural-gradient/Newton ascent is not monotonic at a fixed rate:
             # when the log-likelihood decreases, anneal the working rates
@@ -1746,6 +1883,13 @@ class AMICATorchNG:
             )
             self._restore_params(best_snapshot)
             self.final_ll_ = best_ll
+
+        # LLt (Fortran's per-sample/per-model log-likelihood, issue #155):
+        # computed ONCE here, strictly after the keep-best restore above, so
+        # the stored arrays reflect the parameters actually being returned/
+        # exported by fit() -- never a mid-training-loop value. Stored as
+        # compact numpy arrays rather than retaining the full sphered dataset.
+        self._llt_lht, self._llt_lt = self._compute_full_posterior_ll(X_t)
 
         return self
 
@@ -1846,6 +1990,85 @@ class AMICATorchNG:
             )
         return self.W[:, :, model_idx].T.cpu().numpy()
 
+    def _pca_reduced(self) -> bool:
+        """Whether PCA reduction is active (``pcakeep``/``pcadb``), which leaves
+        the sphere rank-deficient."""
+        return self.pcakeep is not None or self.pcadb is not None
+
+    def mir(
+        self, X: np.ndarray, *, model_idx: int = 0, nbins: Optional[int] = None
+    ) -> Tuple[float, float]:
+        """Mutual Information Reduction (issue #137) of this model's unmixing on ``X``.
+
+        Composes the full raw-data-to-sources transform ``W_fort @ sphere`` --
+        i.e. ``get_unmixing_matrix(model_idx) @ sphere`` -- and delegates to
+        :func:`pyAMICA.metrics.mir`. MIR is shift-invariant, so the data-space
+        mean/``c`` centering ``transform`` applies is irrelevant here.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+        model_idx : int, default=0
+            Which model's unmixing to use.
+        nbins : int, optional
+            Histogram bin count; see :func:`pyAMICA.metrics.mir`.
+
+        Returns
+        -------
+        mir_nats : float
+        variance : float
+
+        Raises
+        ------
+        RuntimeError
+            If the model is unfitted.
+        ValueError
+            If PCA reduction (``pcakeep``/``pcadb``) is active: it leaves the
+            sphere rank-deficient, so MIR's log-Jacobian term is undefined.
+        """
+        if self.A is None or self.W is None or self.sphere is None:
+            raise RuntimeError(
+                "AMICATorchNG.mir() requires a fitted model; call fit() first."
+            )
+        if self._pca_reduced():
+            raise ValueError(
+                "mir() is incompatible with PCA reduction (pcakeep/pcadb): "
+                "the sphere is rank-deficient, so MIR's log-Jacobian term is "
+                "undefined for the resulting non-square/non-invertible "
+                "unmixing."
+            )
+        unmixing = (self.W[:, :, model_idx].T @ self.sphere).cpu().numpy()
+        return mir_metric(unmixing, X, nbins)
+
+    def pmi(
+        self, X: np.ndarray, *, model_idx: int = 0, nbins: Optional[int] = None
+    ) -> np.ndarray:
+        """Pairwise Mutual Information (issue #137) between this model's sources on ``X``.
+
+        Delegates to :func:`pyAMICA.metrics.pairwise_mi` on
+        ``transform(X, model_idx)``.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+        model_idx : int, default=0
+            Which model's sources to use.
+        nbins : int, optional
+            Histogram bin count; see :func:`pyAMICA.metrics.pairwise_mi`.
+
+        Returns
+        -------
+        mi_matrix : np.ndarray of shape (n_sources, n_sources)
+
+        Raises
+        ------
+        RuntimeError
+            If the model is unfitted (via ``transform``).
+        """
+        return pairwise_mi(self.transform(X, model_idx=model_idx), nbins)
+
     # ------------------------------------------------------------------
     # EEGLAB drop-in output (issue #92)
     # ------------------------------------------------------------------
@@ -1914,11 +2137,19 @@ class AMICATorchNG:
         """Write this fitted model as the Fortran/EEGLAB AMICA output directory.
 
         Produces the raw binary files that EEGLAB's ``loadmodout15.m`` (and the
-        Python port :func:`pyAMICA.numpy_impl.load.loadmodout`) read, so a
-        PyTorch NG fit drops directly into an EEGLAB workflow (issue #92).
-        ``loadmodout15`` performs the variance-ordering and unit-norm
-        normalization on load, so the on-disk parameters are written in fit
-        order. Single-model output is byte-compatible with the Fortran reference.
+        Python port :func:`pyAMICA.numpy_impl.load.loadmodout`) read: ``gm``,
+        ``W``, ``S``, ``mean``, ``c``, ``alpha``, ``mu``, ``sbeta``, ``rho``,
+        ``comp_list``, ``LL``, so a PyTorch NG fit drops directly into an
+        EEGLAB workflow (issue #92). ``loadmodout15`` performs the
+        variance-ordering and unit-norm normalization on load, so the on-disk
+        parameters are written in fit order. Single-model output is
+        byte-compatible with the Fortran reference.
+
+        Also writes ``LLt`` (the per-sample/per-model log-likelihood, issue
+        #155) for a model that was just ``fit()`` in this process. A model
+        restored via :meth:`from_state_dict` has no training data to recompute
+        it from, so ``LLt`` is omitted for it (a warning is logged) -- the
+        rest of the output is unaffected.
 
         Parameters
         ----------
@@ -1949,6 +2180,21 @@ class AMICATorchNG:
         ):
             ll = ll[: int(np.argmax(ll)) + 1]
 
+        # LLt (Fortran's per-sample/per-model log-likelihood, issue #155):
+        # computed once at the end of fit() (after any keep-best restore) and
+        # stored compactly on self. A model restored via from_state_dict()
+        # never ran fit() in this process, so it has neither -- warn rather
+        # than silently omitting the file (silent-failure review).
+        if self._llt_lht is not None and self._llt_lt is not None:
+            Lht, Lt = self._llt_lht, self._llt_lt
+        else:
+            logger.warning(
+                "No LLt data available (model was restored via "
+                "from_state_dict(), not freshly fit()); writing output "
+                "without the LLt file."
+            )
+            Lht = Lt = None
+
         write_amicaout(
             outdir,
             gm=_np(self.gm),
@@ -1963,6 +2209,8 @@ class AMICATorchNG:
             comp_list=_np(self.comp_list),
             ll=ll,
             A=_np(self.A),
+            Lht=Lht,
+            Lt=Lt,
         )
 
     # ------------------------------------------------------------------

@@ -3,6 +3,51 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pyAMICA/releases).
 
+## Unreleased
+
+- Separation-quality metrics (`pyAMICA.metrics`): `mir` (Mutual Information
+  Reduction, in nats) measures how much mutual information a fitted unmixing
+  removes from the data. A direct port of `getMIR.m` from bigdelys/pre_ICA_cleaning
+  (Apache-2.0; see `THIRD_PARTY_NOTICES.md`), verified against the original at
+  1.7e-15 relative on the bundled sample EEG (#134).
+- `pairwise_mi` and `block_diagonal_order` (`pyAMICA.metrics`): the pairwise
+  mutual-information matrix between fitted sources, plus a greedy
+  nearest-neighbour-chain ordering that clusters dependent components near the
+  diagonal. A clean-room reimplementation: the reference (`minfojp.m` in
+  postAmicaUtility) is GPL-2.0-or-later and pyAMICA is BSD-3-Clause, so its
+  source was never read. Agrees with that reference at r=0.9887 on identical
+  signals (#135).
+- `LLt` output parity with the Fortran reference: both backends now write the
+  per-timepoint, per-model log-likelihood file that the reference binary
+  produces on every run, and `loadmodout` reads it with the correct column-major
+  layout (it previously used C order, scrambling `Lht`/`Lt`). Verified
+  bit-exactly in both directions against EEGLAB's real `loadmodout15.m`. Under
+  `do_reject`, rejected samples are written as exactly `0.0`, matching Fortran:
+  those zeros are load-bearing, since its `load_rej` reconstructs the rejection
+  mask from them (#155).
+- `AMICATorchNG`/`AMICA` gain `mir()`/`pmi()` accessors that compose the
+  fitted unmixing the documented way (`get_unmixing_matrix(model_idx) @
+  sphere` for MIR, `transform(X, model_idx)` for PMI) and delegate to
+  `pyAMICA.metrics.mir`/`pairwise_mi`, so callers no longer hand-compose the
+  transform themselves. `fit()` also accepts `mir_step` (default `0`, off) to
+  record MIR waypoints during training in `mir_history_` as
+  `(iteration, mir_nats, variance)`; like `ll_history_`, it is a true
+  trajectory that a `keep_best` restore does not rewrite. PCA reduction
+  (`pcakeep`/`pcadb`) is rejected up front with a named error, since it
+  leaves the sphere rank-deficient and MIR's log-Jacobian undefined (#137).
+- Visualization module (`pyAMICA.viz`): `plot_pmi_heatmap` and
+  `plot_model_probability`, backend-agnostic views over `AmicaOutput` that return
+  a `Figure` (and accept an optional `ax`/`axes`) rather than mutating pyplot
+  global state, plus `read_eeglab_set_metadata` for the sample rate pyAMICA
+  itself has no notion of. Both plots are verified against the MATLAB reference:
+  the smoothed model probability matches `smooth_amica_prob` at r=0.9886, and
+  `pairwise_mi` matches `minfojp` at r=0.9887 (#136).
+- Fixed `numpy_impl.pdf.compute_pdf` using `gammaln` where the generalized
+  Gaussian needs `gamma`, which made the returned density negative for every
+  `rho` outside the special-cased 1 and 2 (it integrated to -8.82 at the default
+  `rho0=1.5`). Affected `numpy_impl.viz.plot_pdf_fits`; the fit path was never
+  affected, as it uses its own log-space implementation (#136).
+
 ## 0.1.2
 
 Outlier-rejection parity in the NumPy backend, repo-wide type-checking, and the

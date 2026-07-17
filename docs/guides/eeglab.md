@@ -29,9 +29,17 @@ This writes the raw binary files EEGLAB's AMICA loader reads:
 | `alpha`, `mu`, `sbeta`, `rho` | source mixture-density parameters |
 | `comp_list` | component ids (for component sharing) |
 | `LL` | log-likelihood per iteration |
+| `LLt` | per-timepoint, per-model log-likelihood, plus the per-timepoint total |
 
 For a single model the bytes are identical to the reference Fortran binary's
 `amicaout` files, so the directory is interchangeable with a native AMICA run.
+
+`LLt` is what `loadmodout15.m` turns into `Lht`/`Lt` and the model-probability
+odds `v`; it is written after a fresh `fit()`, and omitted (with a warning) for
+a model restored from `load()`, which has no data to recompute it from. Under
+`do_reject`, rejected samples are written as exactly `0.0` to match the
+reference: AMICA's own `load_rej` reconstructs the rejection mask from those
+zeros, so they are load-bearing rather than padding.
 
 ## Loading in EEGLAB / MATLAB
 
