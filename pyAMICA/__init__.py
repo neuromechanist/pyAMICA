@@ -19,7 +19,7 @@ from .torch_impl import AMICATorchNG
 from . import metrics
 from . import numpy_impl
 from . import torch_impl
-from .viz import plot_pmi_heatmap, plot_model_probability, plot_topo_pdf
+from .viz import plot_model_probability, plot_pmi_heatmap
 
 # Legacy NumPy reference implementation (topic-named modules under numpy_impl/,
 # issue #34); AMICA_NumPy is its scikit-learn-style interface.
@@ -34,6 +34,5 @@ __all__ = [
     "torch_impl",
     "plot_pmi_heatmap",
     "plot_model_probability",
-    "plot_topo_pdf",
     "__version__",
 ]

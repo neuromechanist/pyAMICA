@@ -13,17 +13,14 @@ mutating pyplot's global state.
 - **`plot_model_probability`** — for a multi-model fit, two stacked panels: each
   model's posterior probability over time, and the log-likelihood of the most
   probable model at each timepoint.
-- **`plot_topo_pdf`** — per-component scalp topography beside its fitted
-  generalized-Gaussian mixture density, optionally overlaid on a histogram of
-  the component's real activations. Requires the optional `viz` extra
-  (`pip install pyAMICA[viz]`, for `mne`'s topomap rendering).
+A per-component scalp-topography plot is not included yet: deriving source
+activations from a loaded `AmicaOutput` depends on an unsettled `W` convention
+question, tracked in [#159](https://github.com/sccn/pyAMICA/issues/159).
 
 ```python
-from pyAMICA import plot_pmi_heatmap, plot_model_probability, plot_topo_pdf
+from pyAMICA import plot_pmi_heatmap, plot_model_probability
 ```
 
 ::: pyAMICA.viz.plot_pmi_heatmap
 
 ::: pyAMICA.viz.plot_model_probability
-
-::: pyAMICA.viz.plot_topo_pdf

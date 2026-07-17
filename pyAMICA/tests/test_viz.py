@@ -2,15 +2,7 @@
 
 Per the NO-MOCK policy (`.rules/testing.md`), every test exercises the real
 bundled sample EEG data and a real (short but genuine) AMICA fit; none use
-synthetic/random data as ground truth. The one deliberate exception is
-`test_plot_topo_pdf_raises_importerror_without_mne`, which uses
-``monkeypatch.setitem(sys.modules, "mne", None)`` -- the standard pytest idiom
-for exercising an optional-dependency import guard -- since `mne` genuinely is
-installed in this environment (the `viz` extra) and there is no other way to
-hit that branch without actually uninstalling it. This does not fake any
-data or numerical behavior; it only forces the real `import mne` statement in
-`pyAMICA.viz` to fail, the same way it would in an environment without the
-extra installed.
+synthetic/random data as ground truth.
 
 Assertions target structure (axes count, labels, line count, tick labels,
 masked diagonal, error messages, probabilities summing to 1, the fitted-PDF
@@ -19,8 +11,6 @@ values themselves), matching the precedent in `test_metrics_pmi.py` /
 """
 
 import dataclasses
-import importlib.util
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -38,25 +28,12 @@ from pyAMICA.numpy_impl.load import (
     loadmodout,
     read_eeglab_set_metadata,
 )
-from pyAMICA.numpy_impl.pdf import compute_pdf
-from pyAMICA.viz import plot_model_probability, plot_pmi_heatmap, plot_topo_pdf
+from pyAMICA.viz import plot_model_probability, plot_pmi_heatmap
 
 SAMPLE_DIR = Path(__file__).resolve().parents[1] / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"
 SET_FILE = SAMPLE_DIR / "eeglab_data.set"
 
-# `plot_topo_pdf` needs mne, the optional `viz` extra; CI installs the base env
-# only (bare `uv sync`), matching how mlx_tests skips when mlx is absent. This
-# is a per-test marker rather than a module-level `pytest.importorskip("mne")`
-# ON PURPOSE: a module-level skip would also silently drop the ~28 tests here
-# that need no mne at all, leaving a green suite that never exercised the viz
-# module. Only mark tests that genuinely reach `import mne`; in particular
-# `test_plot_topo_pdf_raises_importerror_without_mne` must stay unmarked, since
-# it asserts the guard fires precisely when mne is missing.
-requires_mne = pytest.mark.skipif(
-    importlib.util.find_spec("mne") is None,
-    reason="requires the optional `viz` extra (mne); install with pyAMICA[viz]",
-)
 NW = 32
 FIELD = 30504
 
@@ -374,124 +351,3 @@ def test_plot_model_probability_raises_without_lht(two_model_output):
     out_no_lht = dataclasses.replace(two_model_output, Lht=None)
     with pytest.raises(ValueError, match="Lht"):
         plot_model_probability(out_no_lht)
-
-
-# --- plot_topo_pdf -----------------------------------------------------------
-
-
-@requires_mne
-def test_plot_topo_pdf_returns_expected_axes_count(two_model_output, eeglab_metadata):
-    fig = plot_topo_pdf(
-        two_model_output, eeglab_metadata["positions"], comps=[0, 1], model=0
-    )
-    assert isinstance(fig, Figure)
-    assert len(fig.axes) == 4  # 2 components x (topo, pdf)
-
-
-@requires_mne
-def test_plot_topo_pdf_component_titles(two_model_output, eeglab_metadata):
-    fig = plot_topo_pdf(
-        two_model_output, eeglab_metadata["positions"], comps=[0, 1], model=0
-    )
-    # row-major creation order: (0,0)=topo0, (0,1)=pdf0, (1,0)=topo1, (1,1)=pdf1
-    assert fig.axes[0].get_title() == "Component 1"
-    assert fig.axes[2].get_title() == "Component 2"
-
-
-@requires_mne
-def test_plot_topo_pdf_pdf_panel_without_data(two_model_output, eeglab_metadata):
-    fig = plot_topo_pdf(
-        two_model_output, eeglab_metadata["positions"], comps=[0], model=0
-    )
-    ax_pdf = fig.axes[1]
-    assert len(ax_pdf.lines) == 1  # fitted mixture curve only, no histogram
-    assert len(ax_pdf.patches) == 0
-    assert ax_pdf.get_xlabel() == "Activation"
-    assert ax_pdf.get_ylabel() == "Density"
-
-
-@requires_mne
-def test_plot_topo_pdf_histogram_overlay_when_data_given(
-    two_model_output, eeglab_metadata, data_slice
-):
-    fig = plot_topo_pdf(
-        two_model_output,
-        eeglab_metadata["positions"],
-        data=data_slice,
-        comps=[0],
-        model=0,
-    )
-    ax_pdf = fig.axes[1]
-    assert len(ax_pdf.lines) == 1
-    assert len(ax_pdf.patches) > 0  # histogram bars
-
-
-@requires_mne
-def test_plot_topo_pdf_curve_matches_compute_pdf(two_model_output, eeglab_metadata):
-    """The fitted curve must be exactly compute_pdf's mixture (reused, not
-    reimplemented): y = sbeta*(x-mu), scaled by alpha*sbeta, summed."""
-    fig = plot_topo_pdf(
-        two_model_output,
-        eeglab_metadata["positions"],
-        comps=[0],
-        model=0,
-        n_points=200,
-    )
-    ax_pdf = fig.axes[1]
-    x = np.asarray(ax_pdf.lines[0].get_xdata(), dtype=float)
-    y = np.asarray(ax_pdf.lines[0].get_ydata(), dtype=float)
-
-    n_mix = two_model_output.alpha.shape[0]
-    expected = np.zeros_like(x)
-    for j in range(n_mix):
-        alpha_j = two_model_output.alpha[j, 0, 0]
-        mu_j = two_model_output.mu[j, 0, 0]
-        sbeta_j = two_model_output.sbeta[j, 0, 0]
-        rho_j = two_model_output.rho[j, 0, 0]
-        yv = sbeta_j * (x - mu_j)
-        pdf, _ = compute_pdf(yv, rho_j)
-        expected += alpha_j * sbeta_j * pdf
-
-    np.testing.assert_allclose(y, expected, rtol=1e-10)
-
-
-def test_plot_topo_pdf_raises_on_non_3col_positions(two_model_output):
-    with pytest.raises(ValueError, match="positions"):
-        plot_topo_pdf(two_model_output, np.zeros((NW, 2)), comps=[0])
-
-
-def test_plot_topo_pdf_raises_on_channel_count_mismatch(two_model_output):
-    with pytest.raises(ValueError, match="data_dim"):
-        plot_topo_pdf(two_model_output, np.zeros((5, 3)), comps=[0])
-
-
-@requires_mne
-def test_plot_topo_pdf_raises_on_axes_shape_mismatch(two_model_output, eeglab_metadata):
-    fig, axes = plt.subplots(1, 2, squeeze=False)
-    with pytest.raises(ValueError, match="axes"):
-        plot_topo_pdf(
-            two_model_output,
-            eeglab_metadata["positions"],
-            comps=[0, 1],
-            axes=axes,
-        )
-
-
-@requires_mne
-def test_plot_topo_pdf_accepts_existing_axes(two_model_output, eeglab_metadata):
-    fig, axes = plt.subplots(1, 2, squeeze=False)
-    returned = plot_topo_pdf(
-        two_model_output, eeglab_metadata["positions"], comps=[0], axes=axes
-    )
-    assert returned is fig
-
-
-def test_plot_topo_pdf_raises_importerror_without_mne(
-    two_model_output, eeglab_metadata, monkeypatch
-):
-    """`mne` is the optional `viz` extra; when it cannot be imported,
-    plot_topo_pdf must raise a clear ImportError naming the install command,
-    not a bare ModuleNotFoundError traceback."""
-    monkeypatch.setitem(sys.modules, "mne", None)
-    with pytest.raises(ImportError, match=r"pyAMICA\[viz\]"):
-        plot_topo_pdf(two_model_output, eeglab_metadata["positions"], comps=[0])

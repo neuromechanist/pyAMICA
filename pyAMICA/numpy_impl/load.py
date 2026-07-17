@@ -437,7 +437,7 @@ def read_eeglab_set_metadata(path: Union[str, Path]) -> dict:
         # Guard explicitly: the non-finite check below uses np.any(np.isnan(...)),
         # which is False on an empty array, so a .set with no chanlocs would sail
         # through and return an empty (0, 3) positions array. That only surfaces
-        # later as a channel-count mismatch inside plot_topo_pdf, far from the
+        # later as a confusing channel-count mismatch in a caller, far from the
         # actual cause.
         raise ValueError(
             f"read_eeglab_set_metadata: {path} has no channel locations "
