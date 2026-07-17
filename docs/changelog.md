@@ -3,6 +3,14 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pyAMICA/releases).
 
+## Unreleased
+
+- Visualization module (`pyAMICA.viz`): `plot_pmi_heatmap`, `plot_model_probability`,
+  and `plot_topo_pdf`, backend-agnostic views over `AmicaOutput` that return a
+  `Figure` (and accept an optional `ax`/`axes`) rather than mutating pyplot
+  global state, plus `read_eeglab_set_metadata` for the sample rate and channel
+  positions pyAMICA itself has no notion of (#136).
+
 ## 0.1.2
 
 Outlier-rejection parity in the NumPy backend, repo-wide type-checking, and the
