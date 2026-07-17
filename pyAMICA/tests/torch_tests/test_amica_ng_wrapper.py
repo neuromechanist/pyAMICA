@@ -558,6 +558,62 @@ def test_pmi_matches_pairwise_mi_on_transform(fitted_ng, real_data):
     npt.assert_allclose(actual, expected, rtol=1e-12)
 
 
+def test_mir_and_pmi_honour_model_idx(real_data):
+    """`model_idx` must actually reach the backend, for both methods.
+
+    Coverage gap found by sabotage: hardcoding `model_idx=0` inside `mir()` and
+    `pmi()` left every other test passing, because the shared fixture is
+    single-model and the wiring tests default to model 0 on both sides. Needs a
+    genuine 2-model fit whose models differ.
+    """
+    X = real_data[:, :4096]
+    model = AMICA(n_models=2, n_mix=3, device="cpu", verbose=False)
+    model.fit(X, max_iter=3, block_size=1024, seed=7)
+
+    # The two models are genuinely different, so their metrics must differ.
+    mir0, _ = model.mir(X, model_idx=0)
+    mir1, _ = model.mir(X, model_idx=1)
+    assert mir0 != mir1, "model_idx=1 returned model 0's MIR"
+
+    pmi0 = model.pmi(X, model_idx=0)
+    pmi1 = model.pmi(X, model_idx=1)
+    assert not np.array_equal(pmi0, pmi1), "model_idx=1 returned model 0's PMI"
+
+    # And each matches the free function composed for THAT model.
+    assert model.model_ is not None and model.model_.sphere is not None
+    sphere = model.model_.sphere.cpu().numpy()
+    for m in (0, 1):
+        expected, _ = mir(model.get_unmixing_matrix(m) @ sphere, X)
+        actual, _ = model.mir(X, model_idx=m)
+        npt.assert_allclose(actual, expected, rtol=1e-12)
+
+
+def test_mir_and_pmi_honour_nbins(fitted_ng, real_data):
+    """`nbins` must actually reach the metric, for both methods.
+
+    Coverage gap found by sabotage: hardcoding `nbins=None` in both methods left
+    every test passing, since none passed a non-default value.
+    """
+    X = real_data[:, :4096]
+    sphere = fitted_ng.model_.sphere.cpu().numpy()
+    unmixing = fitted_ng.get_unmixing_matrix(0) @ sphere
+
+    # A non-default nbins changes the estimate, and must match the free function
+    # given the same nbins.
+    default_mir, _ = fitted_ng.mir(X)
+    tuned_mir, _ = fitted_ng.mir(X, nbins=20)
+    assert default_mir != tuned_mir, "nbins was ignored by mir()"
+    expected_mir, _ = mir(unmixing, X, nbins=20)
+    npt.assert_allclose(tuned_mir, expected_mir, rtol=1e-12)
+
+    default_pmi = fitted_ng.pmi(X)
+    tuned_pmi = fitted_ng.pmi(X, nbins=20)
+    assert not np.array_equal(default_pmi, tuned_pmi), "nbins was ignored by pmi()"
+    npt.assert_allclose(
+        tuned_pmi, pairwise_mi(fitted_ng.transform(X), nbins=20), rtol=1e-12
+    )
+
+
 def test_mir_real_fitted_unmixing_is_large_and_positive(fitted_ng, real_data):
     """A real fitted unmixing removes mutual information (mir > 0) and removes
     more than the identity transform (mirrors
@@ -676,11 +732,16 @@ def test_mir_raises_under_pca_reduction(real_data):
 
 
 def test_mir_step_raises_under_pca_reduction_up_front(real_data):
-    """mir_step > 0 under pcakeep is rejected before fitting starts, matching
-    the share_comps precedent, rather than failing mid-fit at the first
-    waypoint."""
+    """`mir_step > 0` under `pcakeep` is rejected BEFORE fitting starts, matching
+    the share_comps precedent, rather than failing mid-fit at the first waypoint.
+
+    Matches "Rejected up front", which is unique to `fit()`'s guard, NOT the
+    generic "pcakeep" that `mir()`'s own downstream guard also mentions. With the
+    generic pattern this test could not tell "rejected before iteration 0" from
+    "rejected during iteration 0", which is the entire claim it exists to make.
+    """
     model = AMICA(n_models=1, n_mix=3, device="cpu", verbose=False)
-    with pytest.raises(ValueError, match="pcakeep"):
+    with pytest.raises(ValueError, match="Rejected up front"):
         model.fit(
             real_data[:, :4096],
             max_iter=2,
