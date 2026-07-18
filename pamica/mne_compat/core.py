@@ -427,7 +427,7 @@ class AMICAICA:
     # ------------------------------------------------------------------
     # Separation-quality metrics (issue #143, on top of #133)
     # ------------------------------------------------------------------
-    def mir(self, inst, *, model_idx: int = 0, nbins: Optional[int] = None):
+    def mir(self, inst, *, model_idx: int = 0, nbins: Optional[int] = None) -> tuple:
         """Mutual Information Reduction of model ``model_idx`` on ``inst``.
 
         How much mutual information the fitted unmixing removes from the data,
