@@ -413,3 +413,12 @@ def test_plot_model_probability_requires_exactly_one_source(two_model_output):
 def test_plot_model_probability_rejects_non_2d_lht():
     with pytest.raises(ValueError, match="2-D"):
         plot_model_probability(lht=np.zeros(10))
+
+
+def test_plot_model_probability_lht_with_smoothing(two_model_output, eeglab_metadata):
+    """The srate/smoothing kwargs (passed through by AMICAICA) work on lht=."""
+    lht = np.asarray(two_model_output.Lht, dtype=np.float64)
+    srate = eeglab_metadata["srate"]
+    fig = plot_model_probability(lht=lht, srate=srate, smooth_sec=1.0)
+    probs = np.array([line.get_ydata() for line in fig.axes[0].lines])
+    np.testing.assert_allclose(probs.sum(axis=0), 1.0, atol=1e-8)

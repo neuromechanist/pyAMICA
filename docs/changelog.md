@@ -38,7 +38,7 @@ MNE-Python compatibility layer (epic #139), additive: the scikit-learn-style
   log-likelihood over time. These build on a new public live accessor,
   `AMICA.model_loglik`/`model_probability` (and the `AMICATorchNG` equivalents),
   which score arbitrary data through the stored sphere/mean; the training-data
-  path is pinned bit-for-bit against the E-step's own `Lht`. The per-model export
+  path (without `do_reject`) is pinned bit-for-bit against the E-step's own `Lht`. The per-model export
   folds each model's data-space center `c` into `pca_mean_`, so the round trip
   holds for the multi-model case too. `pamica.viz.plot_model_probability` now also
   accepts a live `lht` array, not only a written `AmicaOutput` (phase 2, #141).

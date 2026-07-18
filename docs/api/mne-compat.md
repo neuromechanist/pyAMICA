@@ -83,7 +83,7 @@ ica.plot_model_probability(raw)        # per-model probability + best-model LL
 `AMICA.model_loglik`/`model_probability` accessors, which score arbitrary data
 through the fitted sphere and mean. Each per-model export folds that model's
 data-space center into `pca_mean_`, so `to_mne_ica(model_idx=h).get_sources(raw)`
-reproduces `AMICA.transform(raw, model_idx=h)` for every model, not just the
-first.
+reproduces `AMICA.transform(X, model_idx=h)` (with `X` the picked channel array)
+for every model, not just the first.
 
 ::: pamica.mne_compat.AMICAICA
