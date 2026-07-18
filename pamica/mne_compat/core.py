@@ -46,6 +46,12 @@ class AMICAICA:
     which MNE's ``ICA`` cannot represent -- is exposed directly by
     :meth:`get_model_probability` / :meth:`plot_model_probability`.
 
+    Separation-quality metrics (issue #133) are available directly on an MNE
+    object: :meth:`mir` (Mutual Information Reduction) and :meth:`pmi` (pairwise
+    mutual information between sources). The pamica-specific fitted metadata MNE
+    cannot hold -- source-density family, GG shape, component sharing -- is
+    inspectable via :meth:`get_pdftype` / :meth:`get_rho` / :meth:`shared_components`.
+
     Parameters
     ----------
     n_models : int, default=1
@@ -417,6 +423,64 @@ class AMICAICA:
         if srate is None:
             srate = float(self.info_["sfreq"])
         return _plot_model_probability(lht=lht, srate=srate, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Separation-quality metrics (issue #143, on top of #133)
+    # ------------------------------------------------------------------
+    def mir(self, inst, *, model_idx: int = 0, nbins: Optional[int] = None):
+        """Mutual Information Reduction of model ``model_idx`` on ``inst``.
+
+        How much mutual information the fitted unmixing removes from the data,
+        in nats (issue #133). Delegates to :meth:`AMICA.mir` on ``inst``'s
+        fitted-channel data; MIR is shift-invariant, so mean/``c`` centering is
+        irrelevant.
+
+        Parameters
+        ----------
+        inst : mne.io.BaseRaw | mne.BaseEpochs
+            Data to score (``Epochs`` concatenated along time).
+        model_idx : int, default=0
+            Which model's unmixing to use.
+        nbins : int, optional
+            Histogram bin count; see :func:`pamica.metrics.mir`.
+
+        Returns
+        -------
+        mir_nats : float
+        variance : float
+        """
+        self._check_fitted("compute MIR")
+        model_idx = self._check_model_idx(model_idx)
+        assert self.amica_ is not None
+        return self.amica_.mir(self._data_for(inst), model_idx=model_idx, nbins=nbins)
+
+    def pmi(
+        self, inst, *, model_idx: int = 0, nbins: Optional[int] = None
+    ) -> np.ndarray:
+        """Pairwise Mutual Information between model ``model_idx``'s sources on ``inst``.
+
+        The residual pairwise dependence between fitted sources, in nats
+        (issue #133). Delegates to :meth:`AMICA.pmi` on ``inst``'s fitted-channel
+        data.
+
+        Parameters
+        ----------
+        inst : mne.io.BaseRaw | mne.BaseEpochs
+            Data to score (``Epochs`` concatenated along time).
+        model_idx : int, default=0
+            Which model's sources to use.
+        nbins : int, optional
+            Histogram bin count; see :func:`pamica.metrics.pairwise_mi`.
+
+        Returns
+        -------
+        mi_matrix : np.ndarray of shape (n_components, n_components)
+            Symmetric; the diagonal is each source's own entropy.
+        """
+        self._check_fitted("compute PMI")
+        model_idx = self._check_model_idx(model_idx)
+        assert self.amica_ is not None
+        return self.amica_.pmi(self._data_for(inst), model_idx=model_idx, nbins=nbins)
 
     # ------------------------------------------------------------------
     # pamica-specific metadata (issue #142)
