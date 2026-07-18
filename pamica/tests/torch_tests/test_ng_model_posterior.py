@@ -4,7 +4,10 @@
 per-sample log-likelihood the E-step already computes internally. Real sample
 EEG only (no synthetic data): the internal training-data ``_llt_lht`` (Fortran's
 LLt, issue #155) is an exact oracle for ``model_loglik`` evaluated on that same
-data, so the live accessor is pinned bit-for-bit rather than by eyeball.
+data, so the live accessor is pinned bit-for-bit rather than by eyeball. The
+equality holds when the fit did not use ``do_reject`` (the default here);
+``_compute_full_posterior_ll`` zeroes rejected columns as Fortran's ``load_rej``
+sentinel, which ``model_loglik`` (rejection-unaware) does not reproduce.
 """
 
 from pathlib import Path
@@ -74,6 +77,16 @@ def test_model_loglik_requires_fit():
     m = AMICATorchNG(n_channels=NW, n_models=2, n_mix=3, seed=SEED, device="cpu")
     with pytest.raises(RuntimeError, match="fitted"):
         m.model_loglik(np.zeros((NW, 10)))
+
+
+def test_model_loglik_rejects_non_finite_input(real_data):
+    m = _fit(real_data, n_models=2, max_iter=5)
+    bad = real_data.copy()
+    bad[3, 100] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        m.model_loglik(bad)
+    with pytest.raises(ValueError, match="non-finite"):
+        m.model_probability(bad)
 
 
 def test_amica_wrapper_delegates(real_data):

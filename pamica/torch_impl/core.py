@@ -2082,6 +2082,14 @@ class AMICATorchNG:
         per-sample posterior over models (model dominance) is
         ``softmax(Lht, axis=0)``; see :meth:`model_probability`.
 
+        This does not replicate a training-time ``do_reject`` mask: it scores
+        every sample of ``X``. On a ``do_reject`` fit's own training data it
+        therefore returns real values where the stored ``_llt_lht`` carries
+        Fortran's sentinel zeros for rejected samples (issue #155), so the two
+        agree bit-for-bit only when the fit did not use ``do_reject``. Like
+        :meth:`transform`, it assumes a usable (non-degenerate) fit; the
+        :class:`~pamica.AMICA` wrapper enforces that via ``_check_usable``.
+
         Parameters
         ----------
         X : np.ndarray of shape (n_channels, n_samples)
@@ -2095,12 +2103,22 @@ class AMICATorchNG:
         ------
         RuntimeError
             If the model is unfitted.
+        ValueError
+            If ``X`` contains non-finite (NaN/Inf) values.
         """
         if self.sphere is None or self.mean is None or self.W is None:
             raise RuntimeError(
                 "AMICATorchNG.model_loglik() requires a fitted model; call fit() first."
             )
-        X_t = torch.from_numpy(np.ascontiguousarray(X)).to(self.device, self.dtype)
+        X = np.ascontiguousarray(X)
+        if not np.isfinite(X).all():
+            bad = np.flatnonzero(~np.isfinite(X).all(axis=1))
+            raise ValueError(
+                "AMICATorchNG.model_loglik(): input contains non-finite (NaN/Inf) "
+                f"values in {bad.size} channel(s) {bad.tolist()}; clean bad "
+                "segments before scoring."
+            )
+        X_t = torch.from_numpy(X).to(self.device, self.dtype)
         X_t = self.sphere @ (X_t - self.mean)
         n_samples = X_t.shape[1]
         Lht = np.zeros((self.n_models, n_samples))
@@ -2125,10 +2143,26 @@ class AMICATorchNG:
         Returns
         -------
         prob : np.ndarray of shape (n_models, n_samples)
+
+        Raises
+        ------
+        RuntimeError
+            If the model is unfitted.
+        ValueError
+            If ``X`` is non-finite, or if every model underflows to ``-inf``
+            log-likelihood at some sample (the posterior is undefined there).
         """
         Lht = self.model_loglik(X)
-        Lht = Lht - Lht.max(axis=0, keepdims=True)
-        ex = np.exp(Lht)
+        col_max = Lht.max(axis=0, keepdims=True)
+        if not np.isfinite(col_max).all():
+            n_bad = int((~np.isfinite(col_max)).sum())
+            raise ValueError(
+                f"AMICATorchNG.model_probability(): every model has -inf "
+                f"log-likelihood at {n_bad} sample(s), so the posterior is "
+                "undefined there (an extreme outlier under a tight source "
+                "density)."
+            )
+        ex = np.exp(Lht - col_max)
         return ex / ex.sum(axis=0, keepdims=True)
 
     # ------------------------------------------------------------------

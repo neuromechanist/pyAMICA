@@ -435,6 +435,13 @@ class AMICA:
         Returns
         -------
         Lht : np.ndarray of shape (n_models, n_samples)
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted, or if ``X`` is non-finite.
+        RuntimeError
+            If the fit ended degenerate (issue #50).
         """
         self._check_usable("compute the model log-likelihood")
         assert self.model_ is not None
@@ -456,6 +463,14 @@ class AMICA:
         Returns
         -------
         prob : np.ndarray of shape (n_models, n_samples)
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted, if ``X`` is non-finite, or if every model
+            underflows to ``-inf`` log-likelihood at some sample.
+        RuntimeError
+            If the fit ended degenerate (issue #50).
         """
         self._check_usable("compute the model probability")
         assert self.model_ is not None
