@@ -465,3 +465,71 @@ def test_metadata_requires_fit():
         ica.get_pdftype()
     with pytest.raises(ValueError, match="must be fitted"):
         ica.shared_components()
+
+
+# --- separation-quality metrics (issue #143) --------------------------------
+def test_mir_matches_amica_per_model(raw, fitted_2m):
+    x = _picked_data(raw)
+    mirs = []
+    for h in range(2):
+        m = fitted_2m.mir(raw, model_idx=h)
+        np.testing.assert_allclose(m, fitted_2m.amica_.mir(x, model_idx=h))
+        mirs.append(m[0])
+    assert not np.isclose(mirs[0], mirs[1])  # model_idx honored, not hardcoded to 0
+
+
+def test_pmi_matches_amica_per_model(raw, fitted_2m):
+    x = _picked_data(raw)
+    pmis = []
+    for h in range(2):
+        pmi_w = fitted_2m.pmi(raw, model_idx=h)
+        assert pmi_w.shape == (fitted_2m.n_components_, fitted_2m.n_components_)
+        np.testing.assert_allclose(pmi_w, fitted_2m.amica_.pmi(x, model_idx=h))
+        pmis.append(pmi_w)
+    assert not np.allclose(pmis[0], pmis[1])  # per-model, not hardcoded to 0
+
+
+def test_mir_pmi_on_epochs(raw, fitted_2m):
+    epochs = mne.make_fixed_length_epochs(raw, duration=2.0, preload=True)
+    x = np.hstack(epochs.copy().pick("data", exclude="bads").get_data())
+    np.testing.assert_allclose(fitted_2m.mir(epochs), fitted_2m.amica_.mir(x))
+    np.testing.assert_allclose(fitted_2m.pmi(epochs), fitted_2m.amica_.pmi(x))
+
+
+def test_mir_pmi_nbins_passthrough(raw, fitted_2m):
+    """nbins must reach the metric: a non-default nbins matches AMICA with the
+    same nbins (a dropped forward would silently fall back to the default)."""
+    x = _picked_data(raw)
+    np.testing.assert_allclose(
+        fitted_2m.mir(raw, nbins=50), fitted_2m.amica_.mir(x, nbins=50)
+    )
+    np.testing.assert_allclose(
+        fitted_2m.pmi(raw, nbins=50), fitted_2m.amica_.pmi(x, nbins=50)
+    )
+
+
+def test_mir_pmi_respect_model_idx_bounds(fitted_2m, raw):
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.mir(raw, model_idx=2)
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.pmi(raw, model_idx=-1)
+
+
+def test_mir_pmi_require_fit(raw):
+    ica = AMICAICA()
+    with pytest.raises(ValueError, match="must be fitted"):
+        ica.mir(raw)
+    with pytest.raises(ValueError, match="must be fitted"):
+        ica.pmi(raw)
+
+
+def test_mir_pmi_refuse_degenerate(raw):
+    ica = AMICAICA(n_models=2, random_state=SEED, device="cpu", verbose=False).fit(
+        raw, max_iter=MAX_ITER
+    )
+    ica.converged_ = False
+    ica.stop_reason_ = "nan_ll"
+    with pytest.raises(RuntimeError, match="degenerate"):
+        ica.mir(raw)
+    with pytest.raises(RuntimeError, match="degenerate"):
+        ica.pmi(raw)
