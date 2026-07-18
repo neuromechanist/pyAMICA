@@ -1,6 +1,6 @@
 ! Single-rank MPI shim for AMICA (epic #165, phase 1).
 !
-! amica15.f90 is an MPI + OpenMP + LAPACK program, but pyAMICA always runs it as
+! amica15.f90 is an MPI + OpenMP + LAPACK program, but pamica always runs it as
 ! ONE process. Every MPI collective it uses is trivial for a single rank
 ! (broadcast is a no-op, reduce/gather is a copy, barrier is a no-op), so instead
 ! of linking a real MPI runtime (Open MPI / MS-MPI), we provide a tiny stub. This

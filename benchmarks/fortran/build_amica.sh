@@ -17,7 +17,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
-src_dir="${AMICA_SRC:-$repo_root/pyAMICA}"
+src_dir="${AMICA_SRC:-$repo_root/pamica}"
 fc="${FC:-mpif90}"
 build_dir="$here/build"
 out="$here/amica15"

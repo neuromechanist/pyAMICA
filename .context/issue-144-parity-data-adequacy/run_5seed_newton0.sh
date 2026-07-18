@@ -10,7 +10,7 @@
 # the NEXT seed's Fortran starts immediately -- CPU and GPU work overlap
 # since they don't compete for the same resource.
 set -e
-cd ~/pyAMICA-issue144
+cd ~/pamica-issue144
 NPY=benchmarks/data/ds002718_sub-002_eeg70_full.npy
 SCRIPTS=.context/issue-144-parity-data-adequacy
 

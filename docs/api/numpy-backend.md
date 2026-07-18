@@ -5,4 +5,4 @@ command-line interface. It carries the same parity fixes as the PyTorch backend,
 plus baralpha and outlier rejection (`do_reject`), which mirrors the PyTorch
 backend's `good_idx` sample-dropping mechanism (issue #123).
 
-::: pyAMICA.AMICA_NumPy
+::: pamica.AMICA_NumPy

@@ -79,7 +79,7 @@ and is Apple-native with a real compiler / lazy graph ([WWDC25](https://develope
 unfused, and sometimes falls back to CPU ([State of PyTorch HW 2025](https://tunguz.github.io/PyTorch_Hardware_2025/)).
 An MLX backend could both cut dispatch overhead and fuse the per-block work.
 
-**Status (#76):** `AMICAMLXNG` (`pyAMICA/mlx_impl/core.py`) is a v1 MVP -- single-model,
+**Status (#76):** `AMICAMLXNG` (`pamica/mlx_impl/core.py`) is a v1 MVP -- single-model,
 generalized-Gaussian, natural gradient. It is a **hybrid**: the E/M-step hot path runs on
 the GPU in float32 (with the Phase A `ufp/y` guard), while all `mlx.core.linalg` is CPU-only
 in MLX 0.32, so `inv(A)`/`slogdet(W)` run on the CPU stream (hoisted to once per iteration --

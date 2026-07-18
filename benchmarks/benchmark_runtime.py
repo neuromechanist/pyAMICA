@@ -54,7 +54,7 @@ import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SAMPLE_DIR = REPO_ROOT / "pyAMICA" / "sample_data"
+SAMPLE_DIR = REPO_ROOT / "pamica" / "sample_data"
 DATA_FILE = SAMPLE_DIR / "eeglab_data.fdt"
 PARAM_TEMPLATE = SAMPLE_DIR / "input.param"
 FORTRAN_BINARY = SAMPLE_DIR / "amica15mac"
@@ -63,9 +63,9 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 # params.json keys AMICATorchNG accepts as constructor kwargs; anything else is
 # handled explicitly (below) or does not apply to the backend.
-from pyAMICA import AMICA  # noqa: E402
-from pyAMICA.torch_impl import AMICATorchNG  # noqa: E402
-from pyAMICA.torch_impl.utils import load_eeglab_data  # noqa: E402
+from pamica import AMICA  # noqa: E402
+from pamica.torch_impl import AMICATorchNG  # noqa: E402
+from pamica.torch_impl.utils import load_eeglab_data  # noqa: E402
 
 import inspect  # noqa: E402
 

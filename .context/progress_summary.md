@@ -7,7 +7,7 @@ what remains as of the v0.1.0 preparation.
 ## Delivered
 
 ### Natural-gradient EM backend at Fortran parity (epic #9 / issue #24)
-- `AMICATorchNG` (`pyAMICA/torch_impl/core.py`) is the sole PyTorch backend; the `AMICA`
+- `AMICATorchNG` (`pamica/torch_impl/core.py`) is the sole PyTorch backend; the `AMICA`
   scikit-learn-style wrapper wraps it directly.
 - Root cause of the historical parity gap: the natural-gradient A-update was transposed and
   multiplied on the wrong side. Fix plus exact-EM mixture updates, the digamma rho update, the
@@ -67,7 +67,7 @@ what remains as of the v0.1.0 preparation.
 
 ### Structure and infrastructure
 - Module rename into `numpy_impl/` and `torch_impl/` with topic-based names (issue #34); the public
-  import surface (`from pyAMICA import AMICA, AMICA_NumPy, AMICATorchNG`) is stable.
+  import surface (`from pamica import AMICA, AMICA_NumPy, AMICATorchNG`) is stable.
 - UV is the canonical environment (`pyproject.toml` + `uv.lock`); the legacy conda env is retired.
 - CI is live and green on `main`: ruff lint/format, pytest (excluding slow/Fortran-binary parity),
   and a build + clean-env import matrix on Python 3.12 and 3.13. Typos check green.

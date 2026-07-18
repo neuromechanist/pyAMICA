@@ -3,9 +3,9 @@ requires = ["setuptools>=64.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyAMICA"
+name = "pamica"
 version = "0.1.2"
-description = "pyAMICA: Python implementation of the Adaptive Mixture ICA algorithm"
+description = "pamica: Python implementation of the Adaptive Mixture ICA algorithm"
 readme = "README.md"
 authors = [
     {name = "Seyed Yahya Shirazi", email = "shirazi@ieee.org"},
@@ -36,7 +36,7 @@ dependencies = [
 
 # Optional Apple-Silicon GPU backend (AMICAMLXNG). MLX is Apple-only, so it is
 # NOT a core dependency; install with `uv pip install mlx` or `pip install
-# pyAMICA[mlx]`. `import pyAMICA` never requires it (mlx_impl is imported lazily).
+# pamica[mlx]`. `import pamica` never requires it (mlx_impl is imported lazily).
 [project.optional-dependencies]
 mlx = ["mlx>=0.32"]
 # Documentation stack (MkDocs Material + mkdocstrings). Built and deployed to
@@ -56,11 +56,11 @@ Repository = "https://github.com/sccn/pyAMICA"
 
 [tool.setuptools]
 # List subpackages explicitly so the wheel is deterministic across platforms
-# (a bare ["pyAMICA"] dropped torch_impl/ on some setuptools versions).
-packages = ["pyAMICA", "pyAMICA.numpy_impl", "pyAMICA.torch_impl", "pyAMICA.mlx_impl", "pyAMICA.metrics", "pyAMICA.native"]
+# (a bare ["pamica"] dropped torch_impl/ on some setuptools versions).
+packages = ["pamica", "pamica.numpy_impl", "pamica.torch_impl", "pamica.mlx_impl", "pamica.metrics", "pamica.native"]
 # numpy_impl/params.json is the NumPy backend's default parameter file, loaded at
 # runtime via importlib/__file__, so it must ship in the wheel.
-package-data = {"pyAMICA" = ["data/*"], "pyAMICA.numpy_impl" = ["params.json"]}
+package-data = {"pamica" = ["data/*"], "pamica.numpy_impl" = ["params.json"]}
 
 [dependency-groups]
 dev = [
@@ -73,16 +73,16 @@ dev = [
 ]
 
 [tool.coverage.run]
-source = ["pyAMICA"]
+source = ["pamica"]
 branch = true
 omit = [
-    "pyAMICA/tests/*",
+    "pamica/tests/*",
     # argparse CLI entrypoint: exercised via subprocess, not unit-covered here.
-    "pyAMICA/numpy_impl/cli.py",
+    "pamica/numpy_impl/cli.py",
     # Optional MLX backend (Apple Silicon only): its tests require MLX + an Apple
     # GPU, so CI (ubuntu, no mlx) cannot exercise it and always measures 0%. It is
     # covered locally by tests/mlx_tests/ on Apple hardware (issue #76).
-    "pyAMICA/mlx_impl/*",
+    "pamica/mlx_impl/*",
 ]
 
 [tool.coverage.report]
@@ -107,7 +107,7 @@ exclude = [".context/**"]
 
 [tool.ty.rules]
 # Optional-extra lazy imports (mne: benchmarks/benchmark_decompose.py; mlx:
-# pyAMICA/mlx_impl/core.py, benchmarks/benchmark_dimsweep.py) carry
+# pamica/mlx_impl/core.py, benchmarks/benchmark_dimsweep.py) carry
 # `# ty: ignore[unresolved-import]` comments, since CI's base env (no extras,
 # matching the other jobs) can't resolve either. Whether such a comment is
 # "used" or "unused" then depends on whether the local env happens to have the

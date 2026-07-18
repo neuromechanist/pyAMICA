@@ -1,7 +1,7 @@
 """MATLAB gate check for issue #159 (run last).
 
 Compares Python ``loadmodout`` against MATLAB ``loadmodout15.m`` element-wise for
-W/A/sbeta/rho, on the genuine single-model fixture and the pyAMICA 2-model output.
+W/A/sbeta/rho, on the genuine single-model fixture and the pamica 2-model output.
 Both are the same algorithm (Python is a port), so a correct byte order makes them
 agree to floating-point noise; the pre-#159 C-order read made W disagree by the
 internal transpose (and A/svar with it), and sbeta/rho disagree for num_mix > 1.

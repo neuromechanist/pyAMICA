@@ -1,4 +1,4 @@
-# pyAMICA
+# pamica
 
 Python (PyTorch) implementation of **Adaptive Mixture Independent Component
 Analysis (AMICA)** that reproduces the results of the reference Fortran binary,
@@ -6,12 +6,12 @@ with GPU / Apple-GPU / CPU support. AMICA is a blind source separation algorithm
 widely used for electroencephalography (EEG) and electromyography (EMG) source
 decomposition.
 
-pyAMICA exposes a scikit-learn-style interface over a natural-gradient
+pamica exposes a scikit-learn-style interface over a natural-gradient
 expectation-maximization (EM) backend that matches the Fortran reference
 (`amica15`) to within numerical tolerance: single-model log-likelihood and
 Hungarian-matched component correlation both agree with Fortran on real EEG.
 
-## Why pyAMICA
+## Why pamica
 
 - **Fortran parity is the specification.** Correctness is defined as matching the
   reference Fortran output within tolerance, not merely converging. See

@@ -68,7 +68,7 @@ BLOCK_SIZE = 512
 
 # Native-Fortran backend (#85): paths + run limits.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-SAMPLE_DIR = _REPO_ROOT / "pyAMICA" / "sample_data"
+SAMPLE_DIR = _REPO_ROOT / "pamica" / "sample_data"
 _PARAM_TEMPLATE = SAMPLE_DIR / "input.param"
 _DEFAULT_FORTRAN_BIN = _REPO_ROOT / "benchmarks" / "fortran" / "amica15"
 _FORTRAN_TIMEOUT = 3600  # seconds; a crashed/hung run must not hang the sweep
@@ -106,7 +106,7 @@ def _run_torch(
 ):
     import torch
 
-    from pyAMICA.torch_impl import AMICATorchNG
+    from pamica.torch_impl import AMICATorchNG
 
     dtype = torch.float64 if dtype_str == "f64" else torch.float32
 
@@ -149,7 +149,7 @@ def _run_torch(
 
 
 def _run_mlx(data, iters, repeats, n_models=1):
-    from pyAMICA.mlx_impl import AMICAMLXNG
+    from pamica.mlx_impl import AMICAMLXNG
 
     def one(n_iter):
         m = AMICAMLXNG(
@@ -178,7 +178,7 @@ def _run_numpy(data, iters, repeats, n_models=1, share=False, threads=None):
 
     from threadpoolctl import threadpool_limits
 
-    from pyAMICA.numpy_impl.core import AMICA as AMICA_NumPy
+    from pamica.numpy_impl.core import AMICA as AMICA_NumPy
 
     # NumPy uses share_int (torch uses share_iter).
     share_kw: dict[str, Any] = (

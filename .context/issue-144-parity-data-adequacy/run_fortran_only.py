@@ -15,8 +15,8 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-BIN = REPO / "pyAMICA/sample_data/amica15_linux"
-INPUT_PARAM = REPO / "pyAMICA/sample_data/input.param"
+BIN = REPO / "pamica/sample_data/amica15_linux"
+INPUT_PARAM = REPO / "pamica/sample_data/input.param"
 
 
 def write_fdt(data: np.ndarray, path: Path) -> None:

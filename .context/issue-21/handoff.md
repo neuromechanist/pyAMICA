@@ -33,7 +33,7 @@ Fortran; see the correction banner above and `.context/issue-24/findings.md`.
 - **Issues:** #21 (this work), #24 (Newton bit-parity / init-basin verification via Fortran load_*).
 - **Env:** UV. Run parity work on CPU/float64: `PYTORCH_ENABLE_MPS_FALLBACK=1 uv run pytest ...`.
   NG needs `device="cpu"` for float64 (MPS lacks it).
-- **Fortran reference solution:** `pyAMICA/sample_data/amicaout/` (200-iter run, LL -3.402).
+- **Fortran reference solution:** `pamica/sample_data/amicaout/` (200-iter run, LL -3.402).
   Raw files (`W`, `S`, `mu`, `sbeta`, `rho`, `alpha`, `gm`, `c`, `mean`) are float64,
   column-major (`np.fromfile(...).reshape(shape, order="F")`), in Fortran's internal order (NOT
   re-sorted like loadmodout15.m).
@@ -90,7 +90,7 @@ class. Each change with its Fortran line ref:
    NG == NumPy on the OLD (buggy) accumulator keys (`dmu`, `dbeta`, `dA`). They must become
    NG-vs-Fortran parity tests (the fixed-point test above is the right shape), because the NumPy
    reference is equally buggy. Do not "fix" the tests to keep passing against NumPy.
-3. **Mirror the fix in `pyAMICA.py`** (same score/exact-EM/source-space/sphere/rho changes;
+3. **Mirror the fix in `pamica.py`** (same score/exact-EM/source-space/sphere/rho changes;
    `_get_block_updates` ~611-755, `_update_parameters` ~757+). Keep NG and NumPy in sync.
 4. **Fix `validate_implementations.py::compare_results`** to compare the basis-invariant total
    spatial filter `W@sphere` (with the transpose), not raw sphered-space `W` rows.
@@ -127,5 +127,5 @@ class. Each change with its Fortran line ref:
 ```
 PYTORCH_ENABLE_MPS_FALLBACK=1 uv run python .context/issue-21/reproduce_root_cause.py      # score bug
 PYTORCH_ENABLE_MPS_FALLBACK=1 uv run python .context/issue-21/corrected_mstep_prototype.py # fixed-point + fit
-PYTORCH_ENABLE_MPS_FALLBACK=1 uv run pytest pyAMICA/tests/torch_tests/test_ng_backend.py
+PYTORCH_ENABLE_MPS_FALLBACK=1 uv run pytest pamica/tests/torch_tests/test_ng_backend.py
 ```

@@ -67,7 +67,7 @@ _ds = _load_dimsweep()
 def _fit_torch(data, device, dtype_str, iters, threads=None):
     import torch
 
-    from pyAMICA.torch_impl import AMICATorchNG
+    from pamica.torch_impl import AMICATorchNG
 
     dtype = torch.float64 if dtype_str == "f64" else torch.float32
     prev = torch.get_num_threads()
@@ -105,7 +105,7 @@ def _fit_torch(data, device, dtype_str, iters, threads=None):
 
 def _fit_mlx(data, iters):
 
-    from pyAMICA.mlx_impl import AMICAMLXNG
+    from pamica.mlx_impl import AMICAMLXNG
 
     m = AMICAMLXNG(
         n_channels=data.shape[0],

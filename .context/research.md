@@ -1,4 +1,4 @@
-# pyAMICA Research & Parity Analysis
+# pamica Research & Parity Analysis
 
 Fortran-vs-Python parity analysis. Fortran reference: `amica17.f90` (~3900 lines),
 `amica17_header.f90` (declarations), `funmod2.f90` (function modules).
@@ -22,7 +22,7 @@ Fortran-vs-Python parity analysis. Fortran reference: `amica17.f90` (~3900 lines
 | alpha, mu, sbeta, rho | `self.alpha`, `self.mu`, `self.beta`, `self.rho` | done |
 | comp_list, LL, nd | `self.comp_list`, `self.ll`, `self.nd` | done |
 | lambda, kappa, sigma2 (Newton) | `compute_newton_direction()` | partial |
-| baralpha (Newton) | `self.baralpha` in legacy `pyAMICA.py` | done in NumPy; missing in torch backend |
+| baralpha (Newton) | `self.baralpha` in legacy `pamica.py` | done in NumPy; missing in torch backend |
 
 ## Core Subroutines (Fortran -> Python)
 | Fortran | Python | Status |
@@ -33,12 +33,12 @@ Fortran-vs-Python parity analysis. Fortran reference: `amica17.f90` (~3900 lines
 | update_params | `_update_parameters()` | done |
 | get_unmixing_matrices | `get_unmixing_matrices()` | done |
 | identify_shared_comps | `identify_shared_components()` | done |
-| reject_data | `_reject_outliers()` in legacy `pyAMICA.py` | done in NumPy; missing in torch backend |
+| reject_data | `_reject_outliers()` in legacy `pamica.py` | done in NumPy; missing in torch backend |
 | determine_block_size | `determine_block_size()` | done |
 | write_output / write_history | `save_results()` | done / partial |
 
 ## Missing / incomplete in the PyTorch backend
-The legacy NumPy `pyAMICA.py` implements outlier rejection, `baralpha`, and Newton; the PyTorch
+The legacy NumPy `pamica.py` implements outlier rejection, `baralpha`, and Newton; the PyTorch
 backend (the parity-focused path) does not yet. Items below refer to the torch backend.
 1. Outlier rejection (`do_reject`, `reject_data`) - present in NumPy, absent in torch.
 2. Adaptive PDF selection (`do_choose_pdfs`) - partial, in `amica_torch_v2.py`, not wired into the default interface.
@@ -65,7 +65,7 @@ log_norm = torch.lgamma(1.0 + 1.0/rho) + torch.log(torch.tensor(2.0))
 # CORRECT:
 log_norm = torch.log(torch.tensor(2.0)) + torch.lgamma(1.0/rho) - torch.log(rho)
 ```
-Location: `pyAMICA/torch_impl/adaptive_pdf.py`.
+Location: `pamica/torch_impl/adaptive_pdf.py`.
 
 ### Newton ramping
 Fortran ramps conservatively at Newton start (lrate 0.05 -> 0.10 at iter 51, doubling, capped ~0.5).
@@ -89,7 +89,7 @@ reframes AMICA as "minimize NLL with Adam over reparameterized tensors," but AMI
 fixed-point EM / natural-gradient method with closed-form sufficient-statistic updates. Adam on
 the reparameterized surface follows a different trajectory and converges to a different fixed
 point, so component correlation with Fortran is essentially coincidental. Decision to rewrite:
-see `.context/decisions/0001-torch-backend-natural-gradient-em.md`. The NumPy `pyAMICA.py` is a
+see `.context/decisions/0001-torch-backend-natural-gradient-em.md`. The NumPy `pamica.py` is a
 faithful port and is the spec.
 
 ### Concrete bugs (fixable independently of the rewrite)
@@ -120,7 +120,7 @@ faithful port and is the spec.
    REPORTED LL value.
 4. **Newton double-steps** - `newton_optimizer.py:221-262` mutates `A` in place, then the main
    loop also calls Adam `optimizer.step()` on the same iteration -> NaN at `newt_start`. Port the
-   NumPy Newton (`pyAMICA.py:666-694`) instead.
+   NumPy Newton (`pamica.py:666-694`) instead.
 5. **`pinv` in the hot path** - `amica_torch.py:149` recomputes `W = pinv(A.T).T` every forward.
    Track `W` directly.
 6. **float32 default** - Fortran is double throughout; validate in float64.

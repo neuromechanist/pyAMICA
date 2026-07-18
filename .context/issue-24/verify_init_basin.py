@@ -43,7 +43,7 @@ import torch
 from scipy.optimize import linear_sum_assignment
 
 REPO = Path(__file__).resolve().parents[2]
-SAMPLE = REPO / "pyAMICA" / "sample_data"
+SAMPLE = REPO / "pamica" / "sample_data"
 AO = SAMPLE / "amicaout"
 BIN = SAMPLE / "amica15mac"
 PROTO = REPO / ".context" / "issue-21" / "corrected_mstep_prototype.py"
@@ -63,7 +63,7 @@ def _import_corrected_ng():
 CorrectedNG, load_eeglab_data = _import_corrected_ng()
 
 
-# Fortran-matched hyperparameters (from pyAMICA/sample_data/input.param).
+# Fortran-matched hyperparameters (from pamica/sample_data/input.param).
 HYPER = dict(
     n_channels=NW,
     n_models=1,

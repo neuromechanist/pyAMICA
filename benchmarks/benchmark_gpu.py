@@ -26,10 +26,10 @@ from time import perf_counter
 import numpy as np
 import torch
 
-from pyAMICA.torch_impl.core import AMICATorchNG
-from pyAMICA.torch_impl.utils import load_eeglab_data
+from pamica.torch_impl.core import AMICATorchNG
+from pamica.torch_impl.utils import load_eeglab_data
 
-SAMPLE_DIR = Path(__file__).resolve().parent.parent / "pyAMICA" / "sample_data"
+SAMPLE_DIR = Path(__file__).resolve().parent.parent / "pamica" / "sample_data"
 
 
 def _combos() -> list[tuple[str, torch.dtype]]:

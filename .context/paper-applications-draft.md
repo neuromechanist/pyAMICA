@@ -21,7 +21,7 @@ advanced brain data modeling features available in AMICA:
    An efficient measure of source separation performance is Mutual Information Reduction (MIR)
    introduced by Palmer in (Delorme et al., 2012).
 
-   Scott's strong recommendation: add MIR as a built-in pyAMICA option, applicable at decomposition
+   Scott's strong recommendation: add MIR as a built-in pamica option, applicable at decomposition
    end and/or optionally at specified decomposition waypoints. See the MIR/PMI port epic (tracked
    as a GitHub issue) for the implementation side of this.
 
@@ -44,7 +44,7 @@ advanced brain data modeling features available in AMICA:
    than a day, allowing assays of source and source network instability as well as stability.
 
 All these possibilities, once beyond the reach of routine desktop computing, are now practical to
-apply using current desktop hardware. Using pyAMICA in still more powerful compute environments can
+apply using current desktop hardware. Using pamica in still more powerful compute environments can
 only increase the depth of detail and statistical power of studies of brain dynamics in complex or
 even real-life protocols -- either exploratory or confirmatory. For applications in supercomputer
 environments, however, Palmer's FORTRAN version (AMICA 5.??) customized for use at the San Diego

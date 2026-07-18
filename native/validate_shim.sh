@@ -16,7 +16,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/.." && pwd)"
-sample="$repo_root/pyAMICA/sample_data"
+sample="$repo_root/pamica/sample_data"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -30,7 +30,7 @@ fflags=(-O3 -fopenmp -cpp -ffree-line-length-none -std=legacy -fallow-argument-m
 build() {  # build <mode> <fc> -> $work/amica_<mode>
   local mode="$1" fc="$2" d="$work/b_$1"
   mkdir -p "$d"
-  cp "$repo_root/pyAMICA"/{funmod2,amica15,amica15_header}.f90 "$d/"
+  cp "$repo_root/pamica"/{funmod2,amica15,amica15_header}.f90 "$d/"
   # --pin-seed drops the clock term from the RNG seed so the shim and mpif90
   # builds seed identically and can be compared bit-for-bit. Scoped to the seed
   # formula inside patch_sources.py (not a loose whole-file regex).

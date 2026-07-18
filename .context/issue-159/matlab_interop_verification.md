@@ -1,14 +1,14 @@
 # Issue #159 -- MATLAB interop verification (W / A / sbeta / rho)
 
 Direction (2) of the interop contract: EEGLAB's real `loadmodout15.m` reads
-pyAMICA's (and Fortran's) bytes correctly. A pyAMICA write->read round trip
+pamica's (and Fortran's) bytes correctly. A pamica write->read round trip
 cannot pin this -- it cancels the byte-order error -- so this is a manual MATLAB
 run, recorded here (MATLAB is not on PATH and not in CI).
 
 ## Setup
 
 - MATLAB `R2025b` at `/Volumes/S1/Applications/MATLAB_R2025b.app/bin/matlab`.
-- Reader: pyAMICA's own working `pyAMICA/sample_data/loadmodout15.m`, added to the
+- Reader: pamica's own working `pamica/sample_data/loadmodout15.m`, added to the
   path LAST so it shadows any broken copy (postAmicaUtility's has a syntax error
   on R2025b). `loadmodout15` concatenates paths directly, so the outdir argument
   is passed with a trailing `filesep`.
@@ -17,7 +17,7 @@ run, recorded here (MATLAB is not on PATH and not in CI).
   `gate_compare.m` (MATLAB `loadmodout15` on the same dirs), `gate_check.py`
   (element-wise compare).
 - Inputs: (a) the genuine single-model Fortran fixture `sample_data/amicaout`;
-  (b) the freshly written pyAMICA 2-model output `.context/issue-159/gate_2model`.
+  (b) the freshly written pamica 2-model output `.context/issue-159/gate_2model`.
 
 ## Result -- GATE PASS
 

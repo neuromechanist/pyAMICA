@@ -14,7 +14,7 @@ Release notes are also published on the
   released as a self-contained binary for macOS arm64, Linux x64/arm64 and Windows
   x64 (Windows arm64 runs the x64 binary via emulation until a native toolchain
   exists, issue #173). The binary is resolved for the host and downloaded from the
-  release on first use (SHA-256 verified); `python -m pyAMICA.native` installs it
+  release on first use (SHA-256 verified); `python -m pamica.native` installs it
   explicitly, or set `PAMICA_NATIVE_BINARY` to a local build (epic #165).
 - Fixed `loadmodout` reading `W`, `sbeta` and `rho` in the wrong byte order:
   it used C order where the writer, genuine Fortran output and EEGLAB's
@@ -31,22 +31,22 @@ Release notes are also published on the
   supported `sources(X, model=0)` accessor (the loaded-fit counterpart of the
   live model's `transform`) so downstream source derivations no longer hand-roll
   the sphere/unmixing composition (#159). Migration note: a *multi-model*
-  `amicaout` directory written by an earlier pyAMICA (whose `W` used the old
+  `amicaout` directory written by an earlier pamica (whose `W` used the old
   model-interleaved layout) must be regenerated with `write_amica_output`, not
   just re-loaded; there is no version marker to detect the old layout (genuine
   Fortran output carries none either), and the pre-fix multi-model `W` was never
   in the correct convention regardless. Single-model directories are unaffected
   (byte-identical before and after).
-- Separation-quality metrics (`pyAMICA.metrics`): `mir` (Mutual Information
+- Separation-quality metrics (`pamica.metrics`): `mir` (Mutual Information
   Reduction, in nats) measures how much mutual information a fitted unmixing
   removes from the data. A direct port of `getMIR.m` from bigdelys/pre_ICA_cleaning
   (Apache-2.0; see `THIRD_PARTY_NOTICES.md`), verified against the original at
   1.7e-15 relative on the bundled sample EEG (#134).
-- `pairwise_mi` and `block_diagonal_order` (`pyAMICA.metrics`): the pairwise
+- `pairwise_mi` and `block_diagonal_order` (`pamica.metrics`): the pairwise
   mutual-information matrix between fitted sources, plus a greedy
   nearest-neighbour-chain ordering that clusters dependent components near the
   diagonal. A clean-room reimplementation: the reference (`minfojp.m` in
-  postAmicaUtility) is GPL-2.0-or-later and pyAMICA is BSD-3-Clause, so its
+  postAmicaUtility) is GPL-2.0-or-later and pamica is BSD-3-Clause, so its
   source was never read. Agrees with that reference at r=0.9887 on identical
   signals (#135).
 - `LLt` output parity with the Fortran reference: both backends now write the
@@ -60,17 +60,17 @@ Release notes are also published on the
 - `AMICATorchNG`/`AMICA` gain `mir()`/`pmi()` accessors that compose the
   fitted unmixing the documented way (`get_unmixing_matrix(model_idx) @
   sphere` for MIR, `transform(X, model_idx)` for PMI) and delegate to
-  `pyAMICA.metrics.mir`/`pairwise_mi`, so callers no longer hand-compose the
+  `pamica.metrics.mir`/`pairwise_mi`, so callers no longer hand-compose the
   transform themselves. `fit()` also accepts `mir_step` (default `0`, off) to
   record MIR waypoints during training in `mir_history_` as
   `(iteration, mir_nats, variance)`; like `ll_history_`, it is a true
   trajectory that a `keep_best` restore does not rewrite. PCA reduction
   (`pcakeep`/`pcadb`) is rejected up front with a named error, since it
   leaves the sphere rank-deficient and MIR's log-Jacobian undefined (#137).
-- Visualization module (`pyAMICA.viz`): `plot_pmi_heatmap` and
+- Visualization module (`pamica.viz`): `plot_pmi_heatmap` and
   `plot_model_probability`, backend-agnostic views over `AmicaOutput` that return
   a `Figure` (and accept an optional `ax`/`axes`) rather than mutating pyplot
-  global state, plus `read_eeglab_set_metadata` for the sample rate pyAMICA
+  global state, plus `read_eeglab_set_metadata` for the sample rate pamica
   itself has no notion of. Both plots are verified against the MATLAB reference:
   the smoothed model probability matches `smooth_amica_prob` at r=0.9886, and
   `pairwise_mi` matches `minfojp` at r=0.9887 (#136).

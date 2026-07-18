@@ -1,9 +1,9 @@
-# pyAMICA: Adaptive Mixture ICA
+# pamica: Adaptive Mixture ICA
 
 [![CI](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sccn/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/sccn/pyAMICA)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21312148.svg)](https://doi.org/10.5281/zenodo.21312148)
-[![Docs](https://img.shields.io/badge/docs-eeglab.org%2FpyAMICA-blue)](https://eeglab.org/pyAMICA/)
+[![Docs](https://img.shields.io/badge/docs-eeglab.org%2Fpamica-blue)](https://eeglab.org/pyAMICA/)
 
 Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis
 (AMICA) that reproduces the reference Fortran implementation within numerical
@@ -44,12 +44,12 @@ extra: `uv pip install mlx`.
 
 ## Usage
 
-pyAMICA exposes a scikit-learn-style estimator backed by the PyTorch
+pamica exposes a scikit-learn-style estimator backed by the PyTorch
 natural-gradient EM implementation:
 
 ```python
 import numpy as np
-from pyAMICA import AMICA
+from pamica import AMICA
 
 # X is (n_channels, n_samples) of real EEG/EMG; float64 gives Fortran parity
 model = AMICA(n_models=1, n_mix=3).fit(X)
@@ -71,12 +71,12 @@ The wrapper auto-selects a device and computes in float64 for Fortran parity.
 
 ```python
 AMICA(device="cuda").fit(X)               # NVIDIA GPU, float64
-from pyAMICA.mlx_impl import AMICAMLXNG    # Apple GPU (install the mlx extra)
+from pamica.mlx_impl import AMICAMLXNG    # Apple GPU (install the mlx extra)
 ```
 
 ### EEGLAB interoperability
 
-pyAMICA writes results in EEGLAB's AMICA output format, so a run drops into an
+pamica writes results in EEGLAB's AMICA output format, so a run drops into an
 EEGLAB workflow with no manual re-ordering or sign-flipping:
 
 ```python
@@ -92,7 +92,7 @@ mod = loadmodout15('amicaout');   % components in EEGLAB variance order
 The NumPy reference backend keeps a JSON-driven command-line interface:
 
 ```bash
-python -m pyAMICA.numpy_impl.cli params.json --outdir results
+python -m pamica.numpy_impl.cli params.json --outdir results
 ```
 
 See the [documentation](https://eeglab.org/pyAMICA/) for the full API, the
@@ -100,7 +100,7 @@ parameter reference, and the backend-selection and validation guides.
 
 ## Citation
 
-If you use pyAMICA, please cite it (see [CITATION.cff](CITATION.cff)) and the
+If you use pamica, please cite it (see [CITATION.cff](CITATION.cff)) and the
 original AMICA method:
 
 > Palmer, J. A., Kreutz-Delgado, K., & Makeig, S. (2012). AMICA: An adaptive

@@ -1,6 +1,6 @@
 # Validation & Parity
 
-**Correctness in pyAMICA is defined as parity with the reference Fortran binary,
+**Correctness in pamica is defined as parity with the reference Fortran binary,
 not merely as convergence.** A run is correct when it reproduces the Fortran output within numerical tolerance.
 This page collects the full verification evidence: bit-exact score functions, single-model parity,
 multi-model distributional similarity, cross-platform device and precision invariance,
@@ -49,7 +49,7 @@ distance:
 - Log-likelihood ~ -3.6993 ($k\approx153$; Fortran ~ -3.6993, gap ~0.0003).
 - Hungarian-matched component correlation ~0.998 ($k\approx153$; Fortran-vs-Fortran self-consistency
   over the same 5 seeds: ~0.999), clearing the >0.95 gate. On the bundled sample ($k\approx30$) both
-  numbers are consistent: ~0.998 pyAMICA-vs-Fortran, ~0.998 Fortran-vs-Fortran.
+  numbers are consistent: ~0.998 pamica-vs-Fortran, ~0.998 Fortran-vs-Fortran.
 - Amari distance ~0.006 (bundled sample; Fortran-vs-Fortran: ~0.005).
 
 The fixed source-density families are bit-exact against the literal Fortran score/derivative expressions (~1e-15),
@@ -78,24 +78,24 @@ The `pdftype=1` extended-Infomax switcher flips each source between the super-Ga
 sub-Gaussian (code 4) densities on a kurtosis schedule; its dynamic switch has no bit-exact oracle
 (the reference's `do_choose_pdfs` accumulator is dead code in the binary), so it is validated by real-data
 log-likelihood instead. Each fixed family converges within ~0.005 LL of the binary at a matched Newton budget.
-See `pyAMICA/tests/torch_tests/test_ng_pdf_families.py` and ADR 0002.
+See `pamica/tests/torch_tests/test_ng_pdf_families.py` and ADR 0002.
 
 ## Multi-model distributional similarity
 
 Multi-model AMICA is not partition-identifiable, so exact partition parity with Fortran is the wrong acceptance bar.
 The right test is whether the two implementations sample a similar distribution over solutions. Running an ensemble of `N = 20` fits per implementation on the bundled sample EEG (`n_models = 2`, 3 mixture components, 100 iterations, matched schedule),
-the pyAMICA-vs-Fortran partition cross-correlation distribution overlaps Fortran's own run-to-run distribution:
+the pamica-vs-Fortran partition cross-correlation distribution overlaps Fortran's own run-to-run distribution:
 
 | Distribution (pairwise Hungarian-matched \|corr\|) | Mean | SD | Range |
 |---|---:|---:|---|
 | within-Fortran (Fortran vs Fortran) | 0.638 | 0.040 | [0.572, 0.797] |
-| within-pyAMICA (pyAMICA vs pyAMICA) | 0.661 | 0.045 | [0.583, 0.820] |
-| between (pyAMICA vs Fortran) | 0.649 | 0.045 | [0.582, 0.886] |
+| within-pamica (pamica vs pamica) | 0.661 | 0.045 | [0.583, 0.820] |
+| between (pamica vs Fortran) | 0.649 | 0.045 | [0.582, 0.886] |
 
-![Multi-model solution-ensemble cross-correlation distributions for pyAMICA and Fortran.](../assets/figures/multimodel-ensemble.png){ width=640 }
+![Multi-model solution-ensemble cross-correlation distributions for pamica and Fortran.](../assets/figures/multimodel-ensemble.png){ width=640 }
 /// caption
-Pairwise Hungarian-matched component correlation for 20 pyAMICA and 20 Fortran multi-model fits of the sample EEG.
-The within-Fortran, within-pyAMICA, and between-implementation distributions overlap: the estimators sample the same solution space.
+Pairwise Hungarian-matched component correlation for 20 pamica and 20 Fortran multi-model fits of the sample EEG.
+The within-Fortran, within-pamica, and between-implementation distributions overlap: the estimators sample the same solution space.
 ///
 
 The three distribution means lie within 0.011 of each other (between 0.649, within-Fortran 0.638), well inside a $\pm 0.05$ margin. To test this at the correct unit of analysis, we use a **run-level permutation test**:
@@ -106,9 +106,9 @@ Permuting the 40 runs as intact units instead (20000 permutations, statistic = w
 The single-run cross-correlation of ~0.65 is therefore intrinsic estimator spread, not a shortfall: Fortran agrees with *itself* at 0.64.
 The per-block sufficient statistics and one M-step are bit-exact against Fortran (~$10^{-15}$),
 so the update equations are correct;
-a small residual in the log-likelihood *distribution* (pyAMICA $-3.363 \pm 0.006$ vs Fortran $-3.354 \pm 0.003$;
+a small residual in the log-likelihood *distribution* (pamica $-3.363 \pm 0.006$ vs Fortran $-3.354 \pm 0.003$;
 Kolmogorov-Smirnov $p \approx 6\times10^{-5}$) is an optimizer-quality effect,
-not a model-correctness defect (pyAMICA reaches Fortran's mean with about twice as many iterations).
+not a model-correctness defect (pamica reaches Fortran's mean with about twice as many iterations).
 
 ### Amari distance: a second, assignment-free metric
 
@@ -117,14 +117,14 @@ The Amari distance does not: it is permutation- and scale-invariant by construct
 so it is a genuinely independent check on the same 20-run ensembles (`.context/issue-27/ensemble.npz`;
 recomputed by `.context/issue-27/amari_distance.py` with no re-fitting, since the raw unmixing matrices from the original 40 fits are already saved).
 Each stacked 2-model matrix is split into its per-model 32x32 blocks;
-since which Fortran model corresponds to which pyAMICA model is not identified, both label pairings are tried and the lower-distance pairing is kept, per run pair.
-This pairing correction is not free: on this ensemble it lowers the reported distance by ~0.02-0.03 versus always keeping the naive (unswapped) pairing, a similar order of magnitude to the within-Fortran/within-pyAMICA gap below, so part of that gap plausibly reflects how often each group happens to need the swap, not just genuine agreement differences.
+since which Fortran model corresponds to which pamica model is not identified, both label pairings are tried and the lower-distance pairing is kept, per run pair.
+This pairing correction is not free: on this ensemble it lowers the reported distance by ~0.02-0.03 versus always keeping the naive (unswapped) pairing, a similar order of magnitude to the within-Fortran/within-pamica gap below, so part of that gap plausibly reflects how often each group happens to need the swap, not just genuine agreement differences.
 
 | Distribution (Amari distance, lower is better) | Mean | SD |
 |---|---:|---:|
 | within-Fortran (Fortran vs Fortran) | 0.174 | 0.023 |
-| within-pyAMICA (pyAMICA vs pyAMICA) | 0.154 | 0.019 |
-| between (pyAMICA vs Fortran) | 0.163 | 0.022 |
+| within-pamica (pamica vs pamica) | 0.154 | 0.019 |
+| between (pamica vs Fortran) | 0.163 | 0.022 |
 
 The same run-level permutation test (20000 permutations, intact 40-run units) finds no evidence that between-implementation agreement is worse than Fortran's own run-to-run agreement ($p > 0.999$), agreeing with the correlation-based conclusion above.
 
@@ -156,30 +156,30 @@ The same run-level permutation test (20000 permutations, intact 40-run units) fi
     | Fortran | 17 | 0.6280 | 0.6483 | 0.1749 | 0.1632 |
     | Fortran | 18 | 0.6441 | 0.6371 | 0.1691 | 0.1665 |
     | Fortran | 19 | 0.6389 | 0.6505 | 0.1733 | 0.1637 |
-    | pyAMICA | 0 | 0.6317 | 0.6149 | 0.1690 | 0.1806 |
-    | pyAMICA | 1 | 0.6935 | 0.6777 | 0.1440 | 0.1529 |
-    | pyAMICA | 2 | 0.6624 | 0.6583 | 0.1545 | 0.1606 |
-    | pyAMICA | 3 | 0.6406 | 0.6459 | 0.1527 | 0.1561 |
-    | pyAMICA | 4 | 0.6493 | 0.6384 | 0.1506 | 0.1569 |
-    | pyAMICA | 5 | 0.6755 | 0.6591 | 0.1548 | 0.1622 |
-    | pyAMICA | 6 | 0.6339 | 0.6236 | 0.1677 | 0.1807 |
-    | pyAMICA | 7 | 0.6809 | 0.6788 | 0.1417 | 0.1479 |
-    | pyAMICA | 8 | 0.6780 | 0.6552 | 0.1508 | 0.1631 |
-    | pyAMICA | 9 | 0.6270 | 0.6206 | 0.1703 | 0.1823 |
-    | pyAMICA | 10 | 0.6855 | 0.6665 | 0.1474 | 0.1612 |
-    | pyAMICA | 11 | 0.6739 | 0.6556 | 0.1506 | 0.1612 |
-    | pyAMICA | 12 | 0.6321 | 0.6190 | 0.1617 | 0.1753 |
-    | pyAMICA | 13 | 0.6639 | 0.6610 | 0.1519 | 0.1597 |
-    | pyAMICA | 14 | 0.6866 | 0.6849 | 0.1460 | 0.1520 |
-    | pyAMICA | 15 | 0.6944 | 0.6672 | 0.1417 | 0.1559 |
-    | pyAMICA | 16 | 0.6576 | 0.6533 | 0.1551 | 0.1633 |
-    | pyAMICA | 17 | 0.6435 | 0.6249 | 0.1615 | 0.1756 |
-    | pyAMICA | 18 | 0.6753 | 0.6547 | 0.1442 | 0.1549 |
-    | pyAMICA | 19 | 0.6302 | 0.6180 | 0.1562 | 0.1655 |
+    | pamica | 0 | 0.6317 | 0.6149 | 0.1690 | 0.1806 |
+    | pamica | 1 | 0.6935 | 0.6777 | 0.1440 | 0.1529 |
+    | pamica | 2 | 0.6624 | 0.6583 | 0.1545 | 0.1606 |
+    | pamica | 3 | 0.6406 | 0.6459 | 0.1527 | 0.1561 |
+    | pamica | 4 | 0.6493 | 0.6384 | 0.1506 | 0.1569 |
+    | pamica | 5 | 0.6755 | 0.6591 | 0.1548 | 0.1622 |
+    | pamica | 6 | 0.6339 | 0.6236 | 0.1677 | 0.1807 |
+    | pamica | 7 | 0.6809 | 0.6788 | 0.1417 | 0.1479 |
+    | pamica | 8 | 0.6780 | 0.6552 | 0.1508 | 0.1631 |
+    | pamica | 9 | 0.6270 | 0.6206 | 0.1703 | 0.1823 |
+    | pamica | 10 | 0.6855 | 0.6665 | 0.1474 | 0.1612 |
+    | pamica | 11 | 0.6739 | 0.6556 | 0.1506 | 0.1612 |
+    | pamica | 12 | 0.6321 | 0.6190 | 0.1617 | 0.1753 |
+    | pamica | 13 | 0.6639 | 0.6610 | 0.1519 | 0.1597 |
+    | pamica | 14 | 0.6866 | 0.6849 | 0.1460 | 0.1520 |
+    | pamica | 15 | 0.6944 | 0.6672 | 0.1417 | 0.1559 |
+    | pamica | 16 | 0.6576 | 0.6533 | 0.1551 | 0.1633 |
+    | pamica | 17 | 0.6435 | 0.6249 | 0.1615 | 0.1756 |
+    | pamica | 18 | 0.6753 | 0.6547 | 0.1442 | 0.1549 |
+    | pamica | 19 | 0.6302 | 0.6180 | 0.1562 | 0.1655 |
 
 ## Cross-platform device and precision invariance
 
-The strongest reassurance that pyAMICA is a single, well-defined implementation is that it recovers the *same*
+The strongest reassurance that pamica is a single, well-defined implementation is that it recovers the *same*
 independent components no matter where or how it runs. Fitting the same real EEG (ds002718 sub-002, 147,000 frames, 70 channels, 2000 iterations)
 on every backend and Hungarian-matching the unmixing components across them:
 
@@ -275,7 +275,7 @@ This is cross-*implementation* agreement, not just cross-device. The residual ga
 
 ## EEGLAB drop-in round-trip
 
-pyAMICA writes the same on-disk format EEGLAB's AMICA plugin reads, so a fit is a drop-in replacement:
+pamica writes the same on-disk format EEGLAB's AMICA plugin reads, so a fit is a drop-in replacement:
 no re-sorting, sign-flipping, or reformatting. After a fit, `write_amica_output(dir)` writes the raw binary
 files (`gm`, `W`, `S`, `mean`, `c`, `alpha`, `mu`, `sbeta`, `rho`, `comp_list`, `LL`) that EEGLAB's
 `loadmodout15.m` loads.
@@ -292,7 +292,7 @@ The round-trip is verified two ways:
 `variance_order()` reproduces EEGLAB's IC ordering (IC1 = highest back-projected variance) in Python without a
 disk round-trip. For `n_models > 1` the layout is self-consistent and round-trips through both readers, but is
 not byte-identical to a native multi-model run (see the multi-model discussion above).
-Full usage is in the [EEGLAB interoperability guide](eeglab.md); tests are in `pyAMICA/tests/torch_tests/test_amica_ng_wrapper.py`.
+Full usage is in the [EEGLAB interoperability guide](eeglab.md); tests are in `pamica/tests/torch_tests/test_amica_ng_wrapper.py`.
 
 ## Performance across backends
 
@@ -384,7 +384,7 @@ guarded to a no-op so the parity results above stay byte-for-byte unchanged.
 | Outlier rejection (`do_reject`, #123) | off by default | `good_idx` mechanism in both backends; NumPy port validated vs the PyTorch backend |
 | Degenerate-fit contract (#50) | always | a NaN or singular fit is refused (`converged_` / `stop_reason_`); `transform`/`get_*`/`save`/`write_amica_output` raise instead of returning NaN sources |
 
-Tests live under `pyAMICA/tests/`: `torch_tests/test_ng_backend.py`, `torch_tests/test_ng_sharing.py`, `torch_tests/test_amica_ng_wrapper.py`, and `test_numpy_reject.py`.
+Tests live under `pamica/tests/`: `torch_tests/test_ng_backend.py`, `torch_tests/test_ng_sharing.py`, `torch_tests/test_amica_ng_wrapper.py`, and `test_numpy_reject.py`.
 
 ## Reproducing these results
 
@@ -417,6 +417,6 @@ the underlying findings are in `.context/issue-84/` and `.context/issue-90/`.
 `sample_data/sample_params.json` is the JSON parameter file used above (loaded via
 `AMICA.from_params_file`); its keys mostly reuse Fortran's `.param` names (`lrate`, `do_newton`,
 `rho0`, `block_size`, `max_iter`, `num_models`, ...), but not all of them match one-to-one
-(for example `num_mix` here vs `num_mix_comps` in Fortran's `input.param`), and pyAMICA does not
+(for example `num_mix` here vs `num_mix_comps` in Fortran's `input.param`), and pamica does not
 yet parse the literal Fortran `.param` text format. A native `.param` reader, so the same file
 drives both implementations, is tracked as a future issue.

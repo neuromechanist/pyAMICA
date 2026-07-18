@@ -34,7 +34,7 @@ import numpy as np
 import torch
 
 REPO = Path(__file__).resolve().parents[2]
-SAMPLE = REPO / "pyAMICA" / "sample_data"
+SAMPLE = REPO / "pamica" / "sample_data"
 AO = SAMPLE / "amicaout"
 BIN = SAMPLE / "amica15mac"
 PROTO = REPO / ".context" / "issue-21" / "corrected_mstep_prototype.py"

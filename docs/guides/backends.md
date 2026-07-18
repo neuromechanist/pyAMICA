@@ -1,6 +1,6 @@
 # Backends & Devices
 
-pyAMICA ships one primary PyTorch backend behind the [`AMICA`](../api/amica.md)
+pamica ships one primary PyTorch backend behind the [`AMICA`](../api/amica.md)
 interface, plus an optional Apple-GPU backend and a legacy NumPy reference.
 
 ## Backends
@@ -8,11 +8,11 @@ interface, plus an optional Apple-GPU backend and a legacy NumPy reference.
 | Backend | Class | Role |
 |---|---|---|
 | PyTorch natural-gradient EM | [`AMICATorchNG`](../api/torch-backend.md) | **Default.** Fortran-parity backend; CUDA / CPU, and float32 on MPS. |
-| MLX (Apple GPU) | [`AMICAMLXNG`](../api/mlx-backend.md) (`pyAMICA.mlx_impl`) | Optional Apple-Silicon GPU backend; float32 only. |
+| MLX (Apple GPU) | [`AMICAMLXNG`](../api/mlx-backend.md) (`pamica.mlx_impl`) | Optional Apple-Silicon GPU backend; float32 only. |
 | NumPy reference | [`AMICA_NumPy`](../api/numpy-backend.md) | Legacy oracle + CLI; carries the same parity fixes. |
 
 The `AMICA` wrapper uses `AMICATorchNG`. The MLX backend is imported separately
-(`from pyAMICA.mlx_impl import AMICAMLXNG`) so that `import pyAMICA` never
+(`from pamica.mlx_impl import AMICAMLXNG`) so that `import pamica` never
 requires MLX.
 
 ## Device selection

@@ -1,8 +1,8 @@
 cff-version: 1.3.0
 message: "If you use this software, please cite it using the metadata below."
-title: "pyAMICA: a Python implementation of Adaptive Mixture ICA"
+title: "pamica: a Python implementation of Adaptive Mixture ICA"
 abstract: >-
-  pyAMICA is a Python (PyTorch) implementation of Adaptive Mixture Independent
+  pamica is a Python (PyTorch) implementation of Adaptive Mixture Independent
   Component Analysis (AMICA) that reproduces the reference Fortran
   implementation, with GPU (CUDA), Apple-GPU (MLX), and CPU support. It targets
   EEG/EMG blind source separation.

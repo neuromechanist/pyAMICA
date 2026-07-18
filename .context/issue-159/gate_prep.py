@@ -1,6 +1,6 @@
 """MATLAB gate prep for issue #159 (run first).
 
-Writes a real 2-model pyAMICA output, then dumps what Python ``loadmodout``
+Writes a real 2-model pamica output, then dumps what Python ``loadmodout``
 reads for W/A/sbeta/rho on (a) the genuine single-model Fortran fixture and
 (b) that 2-model output. ``gate_compare.m`` then loads the same two directories
 with EEGLAB's ``loadmodout15.m`` and this script's companion assertion (run last)
@@ -12,13 +12,13 @@ pre-#159 C-order read made W (and A/svar) disagree by the internal transpose.
 import os
 import numpy as np
 
-from pyAMICA import AMICA
-from pyAMICA.numpy_impl.load import loadmodout
-from pyAMICA.torch_impl.utils import load_eeglab_data
+from pamica import AMICA
+from pamica.numpy_impl.load import loadmodout
+from pamica.torch_impl.utils import load_eeglab_data
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SAMPLE = os.path.join(ROOT, "pyAMICA", "sample_data")
+SAMPLE = os.path.join(ROOT, "pamica", "sample_data")
 FIXTURE = os.path.join(SAMPLE, "amicaout")
 TWO_MODEL = os.path.join(HERE, "gate_2model")
 

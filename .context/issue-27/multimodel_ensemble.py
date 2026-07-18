@@ -29,19 +29,19 @@ import matplotlib.pyplot as plt  # noqa: E402
 from scipy import stats  # noqa: E402
 from scipy.optimize import linear_sum_assignment  # noqa: E402
 
-from pyAMICA.torch_impl import AMICATorchNG  # noqa: E402
+from pamica.torch_impl import AMICATorchNG  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-BIN = REPO / "pyAMICA/sample_data/amica15mac"
-FDT = REPO / "pyAMICA/sample_data/eeglab_data.fdt"
-FIXTURE = REPO / "pyAMICA/tests/torch_tests/_ng_e2e_tmp/fortran_run/input.param"
+BIN = REPO / "pamica/sample_data/amica15mac"
+FDT = REPO / "pamica/sample_data/eeglab_data.fdt"
+FIXTURE = REPO / "pamica/tests/torch_tests/_ng_e2e_tmp/fortran_run/input.param"
 NW, FIELD, MAX_ITER, DELTA = 32, 30504, 100, 0.05
 C_FORT, C_NG, C_BET = "#0072B2", "#E69F00", "#009E73"  # Okabe-Ito
 
 
 def load_data():
-    from pyAMICA.torch_impl.utils import load_eeglab_data
+    from pamica.torch_impl.utils import load_eeglab_data
 
     return load_eeglab_data(str(FDT), data_dim=NW, field_dim=FIELD).astype(np.float64)
 
@@ -175,8 +175,8 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     bins = np.linspace(0.5, 1.0, 26)
     for arr, col, lab in [
         (within_F, C_FORT, "within-Fortran"),
-        (within_G, C_NG, "within-pyAMICA"),
-        (between, C_BET, "between (pyAMICA-Fortran)"),
+        (within_G, C_NG, "within-pamica"),
+        (between, C_BET, "between (pamica-Fortran)"),
     ]:
         axA.hist(arr, bins=bins, density=True, color=col, alpha=0.35)
         axA.hist(
@@ -194,7 +194,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
     bins_ll = np.linspace(
         min(F_ll.min(), G_ll.min()) - 0.005, max(F_ll.max(), G_ll.max()) + 0.005, 24
     )
-    for arr, col, lab in [(F_ll, C_FORT, "Fortran"), (G_ll, C_NG, "pyAMICA")]:
+    for arr, col, lab in [(F_ll, C_FORT, "Fortran"), (G_ll, C_NG, "pamica")]:
         axB.hist(arr, bins=bins_ll, density=True, color=col, alpha=0.35)
         axB.hist(
             arr, bins=bins_ll, density=True, histtype="step", color=col, lw=2, label=lab
@@ -231,7 +231,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
         0.20,
         f"mean corr. (run pairs)\n"
         f"within-Fortran: {within_F.mean():.3f} (n={len(within_F)})\n"
-        f"within-pyAMICA: {within_G.mean():.3f} (n={len(within_G)})\n"
+        f"within-pamica: {within_G.mean():.3f} (n={len(within_G)})\n"
         f"between: {between.mean():.3f} (n={len(between)})\n"
         f"diff: {diff:+.3f} (margin +/-0.05)\n"
         f"perm. p={p_perm:.2f}",
@@ -251,7 +251,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
         0.23,
         f"mean final LL\n"
         f"Fortran: {F_ll.mean():.4f} (sd {F_ll.std():.3f})\n"
-        f"pyAMICA: {G_ll.mean():.4f} (sd {G_ll.std():.3f})\n"
+        f"pamica: {G_ll.mean():.4f} (sd {G_ll.std():.3f})\n"
         f"gap: {abs(F_ll.mean() - G_ll.mean()):.3f} (100-iter budget)\n"
         f"KS p={ks:.0e}",
         ha="center",
@@ -269,7 +269,7 @@ def figure(within_F, within_G, between, F_ll, G_ll, diff, p_perm, ks, out):
         style="italic",
     )
     fig.suptitle(
-        "Multi-model AMICA (n_models=2): pyAMICA vs Fortran ensembles, real sample EEG",
+        "Multi-model AMICA (n_models=2): pamica vs Fortran ensembles, real sample EEG",
         fontweight="bold",
         fontsize=8.5,
         y=0.97,
