@@ -11,14 +11,19 @@ MNE-Python compatibility layer (epic #139), additive: the scikit-learn-style
 - `pamica.mne_compat.AMICAICA`, an MNE-facing wrapper that fits AMICA directly
   from an `mne.io.Raw`/`Epochs` (`picks=...`, epochs concatenated along time like
   MNE's own ICA) and interoperates with the standard MNE ICA consumer surface:
-  `get_sources`, `apply`, `get_components` and `plot_components`. `to_mne_ica()`
-  returns a fully-populated `mne.preprocessing.ICA`, so the whole MNE ICA
+  `get_sources`, `apply`, `get_components`, `plot_components` and `plot_sources`.
+  `to_mne_ica()`
+  returns a fully-populated `mne.preprocessing.ICA` (including `reject_`/
+  `n_samples_`, so `ICA.save` and `plot_properties` work), so the whole MNE ICA
   ecosystem (component plotting, `find_bads_eog`/`_ecg`, exclusion workflows)
   works on an AMICA decomposition. The export maps pamica's mean, symmetric-ZCA
   sphere and unmixing into MNE's `pca_mean_`/`pca_components_`/`unmixing_matrix_`,
   writing the sphere as `V diag(1/sqrt(e)) V^T` with `V` orthonormal so MNE's
   scalp maps are in channel space; `to_mne_ica().get_sources(raw)` reproduces
-  `AMICA.transform(X)` to float64 precision, pinned on real sample EEG. MNE is an
+  `AMICA.transform(X)` to float64 precision, pinned on real sample EEG. `fit`
+  rejects PCA reduction (`pcakeep`/`pcadb`, which leaves the sphere rank-deficient
+  and the export invalid) and non-finite input, and a degenerate fit is refused
+  by the consumer methods rather than emitting NaNs. MNE is an
   optional extra (`pip install pamica[mne]`); `import pamica` never requires it,
   and a dedicated CI job runs the wrapper tests with the extra installed (phase 1,
   single-model, #140).

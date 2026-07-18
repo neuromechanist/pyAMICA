@@ -31,7 +31,10 @@ clean = ica.apply(raw.copy(), exclude=[0, 3])
 
 `fit` accepts a `Raw` or `Epochs` (epochs are concatenated along time, as MNE's
 own ICA does), any MNE `picks` selector, and forwards remaining keywords
-(`max_iter`, `lrate`, `do_newton`, ...) to [`AMICA.fit`](amica.md).
+(`max_iter`, `lrate`, `do_newton`, ...) to [`AMICA.fit`](amica.md). It rejects
+non-finite input and PCA reduction (`pcakeep`/`pcadb`, which leaves the sphere
+rank-deficient so the full-rank export would be invalid), and a degenerate
+(diverged) fit is refused by the consumer methods rather than emitting NaNs.
 
 ## Interoperating with `mne.preprocessing.ICA`
 
@@ -46,8 +49,9 @@ eog_idx, scores = mne_ica.find_bads_eog(raw)
 mne_ica.plot_scores(scores)
 ```
 
-The wrapper's `get_sources`, `apply`, `get_components` and `plot_components`
-delegate to this object, so they reproduce `AMICA.transform` exactly: MNE
+The wrapper's `get_sources`, `apply`, `get_components`, `plot_components` and
+`plot_sources` delegate to this object, so they reproduce `AMICA.transform`
+exactly: MNE
 computes sources as `unmixing_matrix_ @ pca_components_ @ (X - pca_mean_)`, and
 the export maps pamica's mean, symmetric-ZCA sphere and unmixing into those
 matrices (writing the sphere as `V diag(1/√e) Vᵀ` with `V` orthonormal so MNE's
