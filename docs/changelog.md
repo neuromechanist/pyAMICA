@@ -3,7 +3,10 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pyAMICA/releases).
 
-## Unreleased
+## 0.2.1
+
+PyPI publishing, release-metadata sync, the pAMICA display title, and
+native-engine documentation.
 
 - Packaging and release: a PyPI publish workflow (`publish.yml`) uploads the
   `pamica` sdist and wheel via Trusted Publishing (OIDC) when a GitHub release
@@ -20,6 +23,23 @@ Release notes are also published on the
   `--native-engine`/`--fortran-binary` so the real Fortran reference runs as a
   backend on any platform, not only through the bundled macOS `amica15mac`
   fixture (#147 phase 5, #179).
+
+## 0.2.0
+
+Package rename to align with the reserved PyPI name.
+
+- Renamed the Python package `pyAMICA` -> `pamica`: the import path is now
+  `import pamica` and the distribution installs as `pip install pamica` (pip
+  name matching is case-insensitive, so `pip install pAmica` resolves to the
+  same project). The GitHub repository (`sccn/pyAMICA`), the documentation
+  domain (`eeglab.org/pyAMICA`), and the release-asset repository are unchanged
+  (#176).
+
+## 0.1.3
+
+Native Fortran run engine, separation-quality metrics, LLt output parity, and
+the `loadmodout` byte-order fix.
+
 - Native Fortran run engine (`AMICANative`), the fourth backend alongside NumPy,
   PyTorch and MLX. It runs the AMICA Fortran reference itself and returns an
   `AmicaOutput` with the usual accessors, so it is the parity oracle the Python
