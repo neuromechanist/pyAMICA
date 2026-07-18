@@ -628,6 +628,9 @@ class AMICA:
             self.good_idx = saved_good_idx
             self.num_good_samples = saved_num_good
         self.lrate = self.lrate0
+        # rholrate is the (maxdecs-ratcheted) rho-rate ceiling; restore it to the
+        # pristine rholrate0 so a re-fit starts fresh (issue #193).
+        self.rholrate = self.rholrate0
         self.ll = []
         self.nd = []
 
@@ -1468,10 +1471,13 @@ class AMICA:
 
         Mirrors Fortran's per-iteration convergence handling
         (amica17.f90:1062-1103). On a likelihood decrease Fortran does NOT stop
-        at ``maxdecs``; it lowers the learning-rate *ceiling* (``lrate0``, and
-        ``newtrate``/``rholrate0`` under Newton) and continues, which is what
-        keeps a long run from oscillating and drifting past its converged
-        solution (issue #41). The updated ``numdecs``/``numincs`` counters are
+        at ``maxdecs``; it lowers the learning-rate *ceilings* (``lrate0``; the
+        rho rate once ``iter > newt_start``; ``newtrate`` under Newton) and
+        continues, which is what keeps a long run from oscillating and drifting
+        past its converged solution (issue #41). The rho ceiling is
+        ``self.rholrate`` here (reset to ``rholrate0`` each fit), ratcheted only
+        at ``maxdecs`` -- never per-decrease (issue #193). The updated
+        ``numdecs``/``numincs`` counters are
         returned so they accumulate across iterations (they previously did not).
 
         Parameters
@@ -1517,8 +1523,8 @@ class AMICA:
         grad_norm = self.nd[-1] if len(self.nd) > 0 else None
 
         # Likelihood decrease (Fortran amica17.f90:1062-1083): reduce the current
-        # lrate, and once maxdecs decreases have accrued, ratchet the ceiling
-        # (lrate0, plus newtrate/rholrate0 under Newton) down and continue --
+        # lrate, and once maxdecs decreases have accrued, ratchet the ceilings
+        # (lrate0; the rho rate; newtrate under Newton) down and continue --
         # NOT stop. Only a lrate/gradient floor terminates on a decrease.
         if self.ll[-1] < self.ll[-2]:
             if self.lrate <= self.minlrate or (
@@ -1531,12 +1537,17 @@ class AMICA:
                     numincs,
                 )
             self.lrate *= self.lratefact
-            self.rholrate *= self.rholratefact
             numdecs += 1
             if numdecs >= self.max_decs:
                 self.lrate0 *= self.lratefact
                 if self.iter > self.newt_start:
-                    self.rholrate0 *= self.rholratefact
+                    # rho rate is a ceiling reset to rholrate0 each iteration
+                    # (Fortran amica15.f90:1788); it ratchets ONLY here at maxdecs
+                    # (amica15.f90:1050), never per LL-decrease. The old per-decrease
+                    # self.rholrate *= rholratefact was a monotone decay with no
+                    # reset that collapsed the rho rate and froze rho at a stale
+                    # shape (issue #193).
+                    self.rholrate *= self.rholratefact
                 if self.do_newton and self.iter > self.newt_start:
                     self.newtrate *= self.lratefact
                 numdecs = 0
