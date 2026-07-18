@@ -47,7 +47,7 @@ a single-model output file is byte-identical in layout to a native AMICA file an
 and multi-model output round-trips through the same loader. Correctness is defined as parity with the Fortran reference for the single-model case and, because multi-model AMICA is not partition-identifiable, as a similar distribution of solutions for the multi-model case;
 both are validated on real EEG against the reference binary.
 A minimal example is a scikit-learn-style call, `AMICA(n_models=1, n_mix=3).fit(X)` on a `(channels, samples)` array (full workflow in the README).
-The software is at <https://github.com/sccn/pyAMICA> (archived at doi:10.5281/zenodo.21312148).
+The software is at <https://github.com/sccn/pAMICA> (archived at doi:10.5281/zenodo.21312148).
 
 # Statement of need
 
@@ -136,7 +136,7 @@ The correctness harness compares `pamica` against Fortran with two metrics, Hung
 the multi-model and score-function checks need no external download (bundled sample only).
 The full per-channel and multi-model performance tables, the per-run Amari-distance detail,
 and the data-size sweep, along with the step-by-step commands to reproduce every number here,
-are in the documentation (<https://eeglab.org/pyAMICA/guides/validation/>).
+are in the documentation (<https://eeglab.org/pAMICA/guides/validation/>).
 
 # State of the field
 

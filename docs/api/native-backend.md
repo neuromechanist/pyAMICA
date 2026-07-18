@@ -44,7 +44,7 @@ asset and caches it, so later runs are offline:
   it has passed its checksum; a failed or tampered download never runs.
 - **Platforms:** prebuilt binaries are attached to each release for macOS arm64,
   Linux x64, Linux arm64 and Windows x64. Windows arm64 has no native Fortran
-  toolchain yet ([#173](https://github.com/sccn/pyAMICA/issues/173)); it maps to
+  toolchain yet ([#173](https://github.com/sccn/pAMICA/issues/173)); it maps to
   the x64 binary, which runs under Windows 11 ARM's x64 emulation.
 
 Install the binary explicitly (for example to pre-populate the cache in an

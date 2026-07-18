@@ -1,7 +1,7 @@
 # Changelog
 
 Release notes are also published on the
-[GitHub releases page](https://github.com/sccn/pyAMICA/releases).
+[GitHub releases page](https://github.com/sccn/pAMICA/releases).
 
 ## 0.2.1
 

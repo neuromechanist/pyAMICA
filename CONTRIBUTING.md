@@ -9,7 +9,7 @@ standard rather than to "it converges."
 ## Getting help and reporting issues
 
 - **Questions, bugs, and feature requests:** please open an issue on the
-  [GitHub issue tracker](https://github.com/sccn/pyAMICA/issues).
+  [GitHub issue tracker](https://github.com/sccn/pAMICA/issues).
 - When reporting a bug, include the pamica version, platform, device
   (CPU/CUDA/MPS/MLX), precision (float32/float64), and a minimal example.
 
@@ -19,8 +19,8 @@ pamica uses [UV](https://docs.astral.sh/uv/) for environment and dependency
 management.
 
 ```bash
-git clone https://github.com/sccn/pyAMICA.git
-cd pyAMICA
+git clone https://github.com/sccn/pAMICA.git
+cd pAMICA
 uv sync                 # install the project and dependencies
 uv run pytest           # run the test suite
 ```

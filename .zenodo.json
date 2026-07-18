@@ -35,7 +35,7 @@
   ],
   "related_identifiers": [
     {
-      "identifier": "https://eeglab.org/pyAMICA/",
+      "identifier": "https://eeglab.org/pAMICA/",
       "relation": "isDocumentedBy",
       "scheme": "url",
       "resource_type": "publication-softwaredocumentation"
