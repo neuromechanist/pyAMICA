@@ -297,3 +297,75 @@ def test_failed_refit_leaves_prior_state_intact(raw):
         ica.fit(raw, picks=raw.ch_names[:10], stop=raw.n_times + 1, max_iter=MAX_ITER)
     assert ica.n_components_ == before.shape[0]  # still the 32-channel fit
     np.testing.assert_array_equal(ica.get_components(), before)
+
+
+# --- multi-model (issue #141) ----------------------------------------------
+@pytest.fixture(scope="module")
+def fitted_2m(raw):
+    """A two-model AMICAICA fit reused across the multi-model assertions."""
+    return AMICAICA(
+        n_models=2, n_mix=3, random_state=SEED, device="cpu", verbose=False
+    ).fit(raw, max_iter=MAX_ITER)
+
+
+def test_per_model_export_roundtrips_with_nonzero_c(raw, fitted_2m):
+    """Each model exports its own ICA reproducing that model's transform.
+
+    Unlike the single-model case, the per-model center c is nonzero, so this
+    exercises the inv(sphere)@c fold into pca_mean_ that phase 1 deferred.
+    """
+    x = _picked_data(raw)
+    c = fitted_2m.amica_.model_.c.cpu().numpy()
+    for h in range(2):
+        assert np.any(c[:, h]), f"model {h} center c should be nonzero"
+        s_mne = fitted_2m.get_sources(raw, model_idx=h).get_data()
+        np.testing.assert_allclose(
+            s_mne, fitted_2m.amica_.transform(x, model_idx=h), rtol=1e-6, atol=1e-9
+        )
+
+
+def test_per_model_export_is_distinct_and_cached(fitted_2m):
+    ica0, ica1 = fitted_2m.to_mne_ica(0), fitted_2m.to_mne_ica(1)
+    assert ica0 is not ica1
+    assert fitted_2m.to_mne_ica(0) is ica0  # cached per model
+    assert not np.allclose(ica0.unmixing_matrix_, ica1.unmixing_matrix_)
+
+
+def test_per_model_apply_reconstructs(raw, fitted_2m):
+    for h in range(2):
+        recon = fitted_2m.apply(raw.copy(), model_idx=h)
+        np.testing.assert_allclose(
+            recon.get_data(), raw.get_data(), rtol=1e-6, atol=1e-12
+        )
+
+
+def test_model_probability_is_normalized(raw, fitted_2m):
+    prob = fitted_2m.get_model_probability(raw)
+    assert prob.shape == (2, raw.n_times)
+    np.testing.assert_allclose(prob.sum(axis=0), 1.0, atol=1e-10)
+    assert np.all(prob >= 0.0) and np.all(prob <= 1.0)
+
+
+def test_single_model_probability_is_all_ones(raw, fitted):
+    np.testing.assert_allclose(fitted.get_model_probability(raw), 1.0, atol=1e-10)
+
+
+def test_plot_model_probability_returns_figure(fitted_2m, raw):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.figure
+    import matplotlib.pyplot as plt
+
+    fig = fitted_2m.plot_model_probability(raw)
+    assert isinstance(fig, matplotlib.figure.Figure)
+    # srate defaults to the fitted recording's rate -> seconds x-axis.
+    assert fig.axes[1].get_xlabel() == "Time (s)"
+    plt.close("all")
+
+
+def test_out_of_range_model_idx_raises(fitted_2m):
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.to_mne_ica(model_idx=2)
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.get_sources(None, model_idx=-1)
