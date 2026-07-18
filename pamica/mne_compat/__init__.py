@@ -10,6 +10,6 @@ Install the dependency with ``pip install pamica[mne]`` (same lazy-extra
 pattern as the optional ``mlx`` backend).
 """
 
-from .core import AMICAICA
+from .core import AMICAICA, PDFTYPE_NAMES
 
-__all__ = ["AMICAICA"]
+__all__ = ["AMICAICA", "PDFTYPE_NAMES"]

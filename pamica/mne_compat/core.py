@@ -26,6 +26,9 @@ import mne  # ty: ignore[unresolved-import]
 from mne.preprocessing import ICA as _MNEICA  # ty: ignore[unresolved-import]
 
 from ..amica import AMICA
+from ..torch_impl import PDFTYPE_NAMES
+
+__all__ = ["AMICAICA", "PDFTYPE_NAMES"]
 
 
 class AMICAICA:
@@ -414,6 +417,48 @@ class AMICAICA:
         if srate is None:
             srate = float(self.info_["sfreq"])
         return _plot_model_probability(lht=lht, srate=srate, **kwargs)
+
+    # ------------------------------------------------------------------
+    # pamica-specific metadata (issue #142)
+    #
+    # MNE's ``ICA`` carries no source-density family, GG shape, or
+    # component-sharing state, so these are exposed here rather than silently
+    # dropped by the ``mne.preprocessing.ICA`` export.
+    # ------------------------------------------------------------------
+    def get_pdftype(self, *, model_idx: int = 0) -> np.ndarray:
+        """Per-component source-density family code for model ``model_idx``.
+
+        One integer per ICA component (0-4); map to names with
+        :data:`pamica.mne_compat.PDFTYPE_NAMES`. All components share one family
+        unless the adaptive switcher (``pdftype=1``) moved them (issue #26).
+        """
+        self._check_fitted("get the density family")
+        model_idx = self._check_model_idx(model_idx)
+        assert self.amica_ is not None
+        return self.amica_.get_pdftype(model_idx=model_idx)
+
+    def get_rho(self, *, model_idx: int = 0) -> np.ndarray:
+        """Generalized-Gaussian shape ``rho`` for model ``model_idx``.
+
+        Shape ``(n_mix, n_components)``; ``rho == 2`` is Gaussian-shaped,
+        ``rho == 1`` Laplacian, ``rho < 1`` heavier-tailed. Meaningful only for
+        the generalized-Gaussian family (``pdftype=0``).
+        """
+        self._check_fitted("get rho")
+        model_idx = self._check_model_idx(model_idx)
+        assert self.amica_ is not None
+        return self.amica_.get_rho(model_idx=model_idx)
+
+    def shared_components(self) -> list:
+        """Components shared across models by ``share_comps`` (issue #60).
+
+        One group of ``(model_idx, component_idx)`` pairs per shared column;
+        empty when nothing is shared (always so for a single model or a default
+        multi-model fit with ``share_comps`` off).
+        """
+        self._check_fitted("get the shared components")
+        assert self.amica_ is not None
+        return self.amica_.shared_components()
 
     # ------------------------------------------------------------------
     # Helpers

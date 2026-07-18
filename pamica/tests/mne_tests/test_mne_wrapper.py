@@ -18,7 +18,7 @@ import pytest
 
 mne = pytest.importorskip("mne")
 
-from pamica.mne_compat import AMICAICA  # noqa: E402  (after importorskip)
+from pamica.mne_compat import AMICAICA, PDFTYPE_NAMES  # noqa: E402  (after importorskip)
 
 mne.set_log_level("ERROR")
 
@@ -434,3 +434,34 @@ def test_degenerate_fit_refused_on_dominance_methods(raw):
         ica.get_model_probability(raw)
     with pytest.raises(RuntimeError, match="degenerate"):
         ica.plot_model_probability(raw)
+
+
+# --- pamica-specific metadata (issue #142) ----------------------------------
+def test_get_pdftype_and_rho_per_model(fitted_2m):
+    for h in range(2):
+        pdf = fitted_2m.get_pdftype(model_idx=h)
+        assert pdf.shape == (fitted_2m.n_components_,)
+        assert np.array_equal(np.unique(pdf), [0])  # default generalized Gaussian
+        assert PDFTYPE_NAMES[int(pdf[0])] == "generalized_gaussian"
+        rho = fitted_2m.get_rho(model_idx=h)
+        assert rho.shape == (fitted_2m.n_mix, fitted_2m.n_components_)
+        assert np.all(np.isfinite(rho))
+
+
+def test_shared_components_empty_by_default(fitted_2m):
+    assert fitted_2m.shared_components() == []
+
+
+def test_metadata_respects_model_idx_bounds(fitted_2m):
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.get_pdftype(model_idx=2)
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.get_rho(model_idx=5)
+
+
+def test_metadata_requires_fit():
+    ica = AMICAICA()
+    with pytest.raises(ValueError, match="must be fitted"):
+        ica.get_pdftype()
+    with pytest.raises(ValueError, match="must be fitted"):
+        ica.shared_components()
