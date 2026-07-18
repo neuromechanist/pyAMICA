@@ -1,4 +1,4 @@
-"""AMICAICA MNE-wrapper tests (issue #139 phase 1, single-model).
+"""AMICAICA MNE-wrapper tests (issue #139, single-model phase 1 + multi-model #141).
 
 Real sample EEG only (no synthetic/mock): the bundled EEGLAB ``eeglab_data.set``
 (32 channels, 30504 samples) is loaded through ``mne.io.read_raw_eeglab`` -- the
@@ -339,6 +339,30 @@ def test_per_model_apply_reconstructs(raw, fitted_2m):
         )
 
 
+def test_per_model_apply_exclude_differs_by_model(raw, fitted_2m):
+    """apply must honor model_idx: excluding a component of different models
+    removes different signals (guards against model_idx being ignored)."""
+    c0 = fitted_2m.apply(raw.copy(), model_idx=0, exclude=[0]).get_data()
+    c1 = fitted_2m.apply(raw.copy(), model_idx=1, exclude=[0]).get_data()
+    assert not np.allclose(c0, c1)
+
+
+def test_per_model_get_components_and_plot(fitted_2m):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.figure
+    import matplotlib.pyplot as plt
+
+    maps0 = fitted_2m.get_components(model_idx=0)
+    maps1 = fitted_2m.get_components(model_idx=1)
+    assert not np.allclose(maps0, maps1)  # per-model scalp maps differ
+    out = fitted_2m.plot_components(model_idx=1, picks=[0, 1], show=False)
+    figs = out if isinstance(out, list) else [out]
+    assert all(isinstance(f, matplotlib.figure.Figure) for f in figs)
+    plt.close("all")
+
+
 def test_model_probability_is_normalized(raw, fitted_2m):
     prob = fitted_2m.get_model_probability(raw)
     assert prob.shape == (2, raw.n_times)
@@ -350,7 +374,23 @@ def test_single_model_probability_is_all_ones(raw, fitted):
     np.testing.assert_allclose(fitted.get_model_probability(raw), 1.0, atol=1e-10)
 
 
-def test_plot_model_probability_returns_figure(fitted_2m, raw):
+def test_model_probability_and_plot_on_epochs(raw, fitted_2m):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    epochs = mne.make_fixed_length_epochs(raw, duration=2.0, preload=True)
+    n = len(epochs) * len(epochs.times)
+    prob = fitted_2m.get_model_probability(epochs)
+    assert prob.shape == (2, n)  # concatenated along time
+    np.testing.assert_allclose(prob.sum(axis=0), 1.0, atol=1e-10)
+    fig = fitted_2m.plot_model_probability(epochs)
+    assert fig is not None
+    plt.close("all")
+
+
+def test_plot_model_probability_default_srate_gives_seconds(raw, fitted_2m):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -359,8 +399,14 @@ def test_plot_model_probability_returns_figure(fitted_2m, raw):
 
     fig = fitted_2m.plot_model_probability(raw)
     assert isinstance(fig, matplotlib.figure.Figure)
-    # srate defaults to the fitted recording's rate -> seconds x-axis.
-    assert fig.axes[1].get_xlabel() == "Time (s)"
+    ax = fig.axes[1]
+    assert ax.get_xlabel() == "Time (s)"
+    # srate default must be the fitted recording's rate, not just any non-None:
+    # the x-data must equal sample-index / sfreq (catches a wrong/stale binding).
+    expected_t = np.arange(raw.n_times) / raw.info["sfreq"]
+    np.testing.assert_allclose(
+        np.asarray(ax.lines[0].get_xdata(), dtype=float), expected_t
+    )
     plt.close("all")
 
 
@@ -369,3 +415,22 @@ def test_out_of_range_model_idx_raises(fitted_2m):
         fitted_2m.to_mne_ica(model_idx=2)
     with pytest.raises(ValueError, match="out of range"):
         fitted_2m.get_sources(None, model_idx=-1)
+    with pytest.raises(TypeError, match="model_idx must be an int"):
+        fitted_2m.to_mne_ica(model_idx=1.0)
+
+
+def test_get_model_probability_rejects_non_mne_input(fitted_2m):
+    with pytest.raises(TypeError, match="Raw or mne.Epochs"):
+        fitted_2m.get_model_probability(np.zeros((32, 100)))
+
+
+def test_degenerate_fit_refused_on_dominance_methods(raw):
+    ica = AMICAICA(n_models=2, random_state=SEED, device="cpu", verbose=False).fit(
+        raw, max_iter=MAX_ITER
+    )
+    ica.converged_ = False
+    ica.stop_reason_ = "nan_ll"
+    with pytest.raises(RuntimeError, match="degenerate"):
+        ica.get_model_probability(raw)
+    with pytest.raises(RuntimeError, match="degenerate"):
+        ica.plot_model_probability(raw)

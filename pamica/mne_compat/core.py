@@ -77,18 +77,20 @@ class AMICAICA:
 
     Notes
     -----
-    The single-model AMICA transform is ``S = W_fort @ sphere @ (X - mean)`` (the
-    per-model data-space center ``c`` is identically zero for one model, since
-    its update is gated to ``n_models > 1``). MNE computes sources as
-    ``S = unmixing_matrix_ @ pca_components_ @ (X - pca_mean_)`` (with a unit
-    pre-whitener). Writing the symmetric-ZCA ``sphere`` as
-    ``V @ diag(1/sqrt(e)) @ V.T`` with ``V`` orthonormal, the exported ICA uses
-    ``pca_components_ = V.T``, ``unmixing_matrix_ = W_fort @ sphere @ V`` and
-    ``pca_mean_ = mean``. Keeping ``pca_components_`` orthonormal is what makes
-    MNE's ``get_components`` (scalp maps ``inv(sphere) @ inv(W_fort)``) come out
-    right, since MNE assumes orthonormal PCA rows. The mapping is pinned by a
-    round-trip test (``to_mne_ica().get_sources(raw)`` equals
-    ``amica_.transform(X)``).
+    Model ``h``'s AMICA transform is ``S = W_fort @ (sphere @ (X - mean) - c_h)``,
+    where ``c_h`` is that model's data-space center (identically zero for a
+    single model, since the ``c`` update is gated to ``n_models > 1``). MNE
+    computes sources as ``S = unmixing_matrix_ @ pca_components_ @ (X - pca_mean_)``
+    (with a unit pre-whitener). Writing the symmetric-ZCA ``sphere`` as
+    ``V @ diag(1/sqrt(e)) @ V.T`` with ``V`` orthonormal, the exported ICA for
+    model ``h`` uses ``pca_components_ = V.T``,
+    ``unmixing_matrix_ = W_fort @ sphere @ V`` and
+    ``pca_mean_ = mean + inv(sphere) @ c_h`` (which reduces to ``mean`` when
+    ``c_h`` is zero). Keeping ``pca_components_`` orthonormal is what makes MNE's
+    ``get_components`` (scalp maps ``inv(sphere) @ inv(W_fort)``) come out right,
+    since MNE assumes orthonormal PCA rows. The mapping is pinned by a round-trip
+    test (``to_mne_ica(model_idx=h).get_sources(raw)`` equals
+    ``amica_.transform(X, model_idx=h)``).
 
     PCA reduction (``pcakeep``/``pcadb``) is unsupported: it leaves the sphere
     rank-deficient, so the export (which assumes a full-rank whitening) would be
@@ -342,20 +344,26 @@ class AMICAICA:
     # ------------------------------------------------------------------
     # MNE consumer surface (delegates to the exported ICA)
     # ------------------------------------------------------------------
-    def get_sources(self, inst, model_idx: int = 0):
-        """Sources for ``inst`` from model ``model_idx`` (see ``ICA.get_sources``)."""
-        return self.to_mne_ica(model_idx).get_sources(inst)
+    def get_sources(self, inst, *args, model_idx: int = 0, **kwargs):
+        """Sources for ``inst`` from model ``model_idx`` (see ``ICA.get_sources``).
 
-    def apply(self, inst, model_idx: int = 0, **kwargs):
+        ``model_idx`` is keyword-only so positional arguments pass straight
+        through to MNE's ``ICA.get_sources`` (e.g. ``add_channels``,
+        ``start``/``stop``).
+        """
+        return self.to_mne_ica(model_idx).get_sources(inst, *args, **kwargs)
+
+    def apply(self, inst, *args, model_idx: int = 0, **kwargs):
         """Remove selected components of model ``model_idx`` and back-project.
 
-        Pass ``exclude=[...]`` (or set it on the exported ICA) to drop
-        components; with no exclusions this reconstructs the input. See
-        ``ICA.apply``.
+        ``model_idx`` is keyword-only so positional arguments pass straight
+        through to MNE's ``ICA.apply``. Pass ``exclude=[...]`` (or set it on the
+        exported ICA) to drop components; with no exclusions this reconstructs
+        the input.
         """
-        return self.to_mne_ica(model_idx).apply(inst, **kwargs)
+        return self.to_mne_ica(model_idx).apply(inst, *args, **kwargs)
 
-    def get_components(self, model_idx: int = 0) -> np.ndarray:
+    def get_components(self, *, model_idx: int = 0) -> np.ndarray:
         """Scalp maps of model ``model_idx``, ``(n_channels, n_components)``."""
         return self.to_mne_ica(model_idx).get_components()
 
@@ -380,7 +388,10 @@ class AMICAICA:
         here rather than through the exported per-model ICA objects.
         """
         self._check_fitted("compute the model probability")
-        assert self.amica_ is not None
+        if self.amica_ is None:
+            raise RuntimeError(
+                "AMICAICA: internal state is inconsistent; refit before scoring."
+            )
         return self.amica_.model_probability(self._data_for(inst))
 
     def plot_model_probability(self, inst, *, srate: Optional[float] = None, **kwargs):
@@ -395,7 +406,10 @@ class AMICAICA:
         from ..viz import plot_model_probability as _plot_model_probability
 
         self._check_fitted("plot the model probability")
-        assert self.amica_ is not None and self.info_ is not None
+        if self.amica_ is None or self.info_ is None:
+            raise RuntimeError(
+                "AMICAICA: internal state is inconsistent; refit before plotting."
+            )
         lht = self.amica_.model_loglik(self._data_for(inst))
         if srate is None:
             srate = float(self.info_["sfreq"])
@@ -422,12 +436,23 @@ class AMICAICA:
         return np.ascontiguousarray(X, dtype=np.float64)
 
     def _check_model_idx(self, model_idx: int) -> int:
-        if not (0 <= model_idx < self.n_models):
-            raise ValueError(
-                f"model_idx={model_idx} out of range for a {self.n_models}-model "
-                f"fit (valid: 0..{self.n_models - 1})."
+        if not isinstance(model_idx, (int, np.integer)):
+            raise TypeError(
+                f"model_idx must be an int, got {type(model_idx).__name__}."
             )
-        return model_idx
+        # Bound against the fitted backend's model count (the source of truth),
+        # not the mutable constructor hyperparameter self.n_models.
+        n = (
+            self.amica_.model_.n_models
+            if self.amica_ is not None and self.amica_.model_ is not None
+            else self.n_models
+        )
+        if not (0 <= model_idx < n):
+            raise ValueError(
+                f"model_idx={model_idx} out of range for a {n}-model fit "
+                f"(valid: 0..{n - 1})."
+            )
+        return int(model_idx)
 
     def _check_fitted(self, action: str = "this call") -> None:
         """Raise if no usable model is available.
