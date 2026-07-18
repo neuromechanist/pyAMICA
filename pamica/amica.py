@@ -477,6 +477,47 @@ class AMICA:
 
         return self.model_.model_probability(X)
 
+    def get_pdftype(self, model_idx: int = 0) -> np.ndarray:
+        """Per-source density-family code for model ``model_idx`` (issue #142).
+
+        Delegates to :meth:`AMICATorchNG.get_pdftype`. One integer per source
+        component (0-4; see :data:`pamica.torch_impl.PDFTYPE_NAMES`).
+
+        Returns
+        -------
+        np.ndarray of int, shape (n_sources,)
+        """
+        self._check_usable("get the density family")
+        assert self.model_ is not None
+
+        return self.model_.get_pdftype(model_idx=model_idx)
+
+    def get_rho(self, model_idx: int = 0) -> np.ndarray:
+        """Generalized-Gaussian shape ``rho`` for model ``model_idx`` (issue #142).
+
+        Delegates to :meth:`AMICATorchNG.get_rho`.
+
+        Returns
+        -------
+        np.ndarray of float, shape (n_mix, n_sources)
+        """
+        self._check_usable("get rho")
+        assert self.model_ is not None
+
+        return self.model_.get_rho(model_idx=model_idx)
+
+    def shared_components(self) -> list:
+        """Components shared across models by ``share_comps`` (issue #142).
+
+        Delegates to :meth:`AMICATorchNG.shared_components`: one group of
+        ``(model_idx, source_idx)`` pairs per shared column; empty when nothing
+        is shared.
+        """
+        self._check_usable("get the shared components")
+        assert self.model_ is not None
+
+        return self.model_.shared_components()
+
     def variance_order(
         self, model_idx: int = 0, return_svar: bool = False
     ) -> Union[np.ndarray, tuple]:

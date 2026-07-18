@@ -58,6 +58,17 @@ from .utils import setup_device
 
 logger = logging.getLogger(__name__)
 
+# Human-readable names for the ``pdftype``/``pdtype`` source-density family codes
+# (issue #26; amica15.f90). Exposed alongside the numeric codes so a fitted
+# model's per-source density family is inspectable (issue #142).
+PDFTYPE_NAMES = {
+    0: "generalized_gaussian",
+    1: "super_gaussian_cosh",
+    2: "gaussian",
+    3: "logistic",
+    4: "sub_gaussian_cosh",
+}
+
 _LOG2 = math.log(2.0)
 _LOG4 = math.log(4.0)  # logistic-family normalizer (amica15.f90:1328)
 _HALF_LOG_PI = 0.5 * math.log(math.pi)
@@ -1953,6 +1964,23 @@ class AMICATorchNG:
             int(self.good_idx.numel()),
         )
 
+    def _check_model_idx(self, model_idx: int) -> None:
+        """Validate a model index against the fitted ``n_models``.
+
+        Raises a clear ``ValueError`` (rejecting negatives, which torch's
+        negative indexing would otherwise turn into a silent wrong-model result)
+        instead of an opaque tensor ``IndexError``.
+        """
+        if not isinstance(model_idx, (int, np.integer)):
+            raise TypeError(
+                f"model_idx must be an int, got {type(model_idx).__name__}."
+            )
+        if not (0 <= model_idx < self.n_models):
+            raise ValueError(
+                f"model_idx={model_idx} out of range for a {self.n_models}-model "
+                f"fit (valid: 0..{self.n_models - 1})."
+            )
+
     def transform(self, X: np.ndarray, model_idx: int = 0) -> np.ndarray:
         """Apply the learned unmixing matrix to (new) data.
 
@@ -1966,6 +1994,7 @@ class AMICATorchNG:
             raise RuntimeError(
                 "AMICATorchNG.transform() requires a fitted model; call fit() first."
             )
+        self._check_model_idx(model_idx)
         X_t = torch.from_numpy(np.ascontiguousarray(X)).to(self.device, self.dtype)
         X_t = self.sphere @ (X_t - self.mean)
         # c is the per-model data-space center: unmix as W(x - c) (issue #27).
@@ -1979,6 +2008,7 @@ class AMICATorchNG:
                 "AMICATorchNG.get_mixing_matrix() requires a fitted model; call "
                 "fit() first."
             )
+        self._check_model_idx(model_idx)
         return self.A[:, self.comp_list[:, model_idx]].T.cpu().numpy()
 
     def get_unmixing_matrix(self, model_idx: int = 0) -> np.ndarray:
@@ -1988,6 +2018,7 @@ class AMICATorchNG:
                 "AMICATorchNG.get_unmixing_matrix() requires a fitted model; call "
                 "fit() first."
             )
+        self._check_model_idx(model_idx)
         return self.W[:, :, model_idx].T.cpu().numpy()
 
     def _pca_reduced(self) -> bool:
@@ -2031,6 +2062,7 @@ class AMICATorchNG:
             raise RuntimeError(
                 "AMICATorchNG.mir() requires a fitted model; call fit() first."
             )
+        self._check_model_idx(model_idx)
         if self._pca_reduced():
             raise ValueError(
                 "mir() is incompatible with PCA reduction (pcakeep/pcadb): "
@@ -2166,6 +2198,92 @@ class AMICATorchNG:
         return ex / ex.sum(axis=0, keepdims=True)
 
     # ------------------------------------------------------------------
+    # Fitted-parameter metadata (issue #142)
+    # ------------------------------------------------------------------
+    def get_pdftype(self, model_idx: int = 0) -> np.ndarray:
+        """Per-source density-family code for model ``model_idx``.
+
+        One integer per source component (0-4; see
+        :data:`pamica.torch_impl.PDFTYPE_NAMES`): 0 generalized Gaussian, 1
+        super-Gaussian cosh, 2 Gaussian, 3 logistic, 4 sub-Gaussian cosh. All
+        sources share ``pdftype`` unless the adaptive switcher (``pdftype=1``)
+        moved them individually (issue #26).
+
+        Returns
+        -------
+        np.ndarray of int, shape (n_sources,)
+        """
+        if self.pdtype is None:
+            raise RuntimeError(
+                "AMICATorchNG.get_pdftype() requires a fitted model; call fit() first."
+            )
+        self._check_model_idx(model_idx)
+        return self.pdtype[:, model_idx].detach().cpu().numpy()
+
+    def get_rho(self, model_idx: int = 0) -> np.ndarray:
+        """Generalized-Gaussian shape parameter ``rho`` for model ``model_idx``.
+
+        One value per (mixture component, source): ``rho == 2`` is Gaussian-
+        shaped, ``rho == 1`` Laplacian, ``rho < 1`` heavier-tailed. Only the
+        generalized-Gaussian family (``pdftype=0``) updates ``rho``; for every
+        non-zero code (1-4, the fixed and adaptive cosh families) it stays frozen
+        at ``rho0`` and does not describe the fitted density.
+
+        Returns
+        -------
+        np.ndarray of float, shape (n_mix, n_sources)
+        """
+        if self.rho is None or self.comp_list is None:
+            raise RuntimeError(
+                "AMICATorchNG.get_rho() requires a fitted model; call fit() first."
+            )
+        self._check_model_idx(model_idx)
+        # Defense-in-depth, matching state_dict()'s isfinite sweep: a degenerate
+        # multi-model fit can leave one model's rho non-finite without the
+        # aggregate LL tripping nan_ll, and _check_usable only inspects
+        # stop_reason. Refuse rather than return a silent NaN.
+        if not torch.isfinite(self.rho).all():
+            raise RuntimeError(
+                "AMICATorchNG.get_rho(): rho holds non-finite values (a "
+                "degenerate fit); inspect stop_reason and refit."
+            )
+        idx = self.comp_list[:, model_idx]
+        return self.rho[:, idx].detach().cpu().numpy()
+
+    def shared_components(self) -> list:
+        """Components shared across models by ``share_comps`` (issue #60).
+
+        ``share_comps`` folds near-collinear components of different models onto
+        one shared mixing column + density, recorded as a repeated index in
+        ``comp_list``. Returns one group per shared column: a list of
+        ``(model_idx, source_idx)`` pairs that all reference it. Empty when no
+        component is shared across two or more models (always for one model, and
+        for a default multi-model fit with ``share_comps`` off).
+
+        Note that a merge synchronizes only the mixture parameters routed through
+        ``comp_list`` (``mu``/``alpha``/``beta``/``rho``); the per-source density
+        *family* code ``pdtype`` is a separate tensor and is not synchronized, so
+        under the adaptive switcher (``pdftype=1``) a shared pair can still report
+        different :meth:`get_pdftype` codes.
+
+        Returns
+        -------
+        list of list of tuple(int, int)
+        """
+        if self.comp_list is None:
+            raise RuntimeError(
+                "AMICATorchNG.shared_components() requires a fitted model; call "
+                "fit() first."
+            )
+        cl = self.comp_list.detach().cpu().numpy()  # (n_sources, n_models)
+        groups = []
+        for col in np.unique(cl):
+            src, mdl = np.where(cl == col)
+            if np.unique(mdl).size >= 2:
+                groups.append([(int(h), int(i)) for i, h in zip(src, mdl)])
+        return groups
+
+    # ------------------------------------------------------------------
     # EEGLAB drop-in output (issue #92)
     # ------------------------------------------------------------------
     def variance_order(
@@ -2210,6 +2328,7 @@ class AMICATorchNG:
                 "AMICATorchNG.variance_order() requires a fitted model; call "
                 "fit() first."
             )
+        self._check_model_idx(model_idx)
         cl = self.comp_list[:, model_idx].cpu().numpy()
         alpha = self.alpha[:, cl].cpu().numpy()
         mu = self.mu[:, cl].cpu().numpy()
