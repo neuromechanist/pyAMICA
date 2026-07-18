@@ -59,9 +59,31 @@ scalp maps come out in channel space). The equivalence
 `to_mne_ica().get_sources(raw) == AMICA.transform(X)` is pinned by the test
 suite on real sample EEG.
 
-!!! note "Single-model in this release"
-    `AMICAICA` covers the single-model case (`n_models == 1`). Multi-model
-    exposure for MNE users (per-model sources and model dominance) is tracked in
-    issue #141.
+## Multi-model fits
+
+AMICA can learn a mixture of ICA models (`n_models > 1`). MNE's `ICA` represents
+only one unmixing matrix, so each model is exported as its own single-model
+`mne.preprocessing.ICA`, and the per-sample *model dominance* (which model best
+explains each timepoint) is exposed directly, since MNE has no concept for it:
+
+```python
+ica = AMICAICA(n_models=2, random_state=42).fit(raw, max_iter=100)
+
+# Per-model: model_idx selects the model on every consumer method.
+sources_m1 = ica.get_sources(raw, model_idx=1)
+ica.plot_components(model_idx=1)
+model1 = ica.to_mne_ica(model_idx=1)   # a standard ICA for model 1
+
+# Model dominance over time (P(model | sample), columns sum to 1):
+prob = ica.get_model_probability(raw)  # (n_models, n_samples)
+ica.plot_model_probability(raw)        # per-model probability + best-model LL
+```
+
+`get_model_probability`/`plot_model_probability` build on the public
+`AMICA.model_loglik`/`model_probability` accessors, which score arbitrary data
+through the fitted sphere and mean. Each per-model export folds that model's
+data-space center into `pca_mean_`, so `to_mne_ica(model_idx=h).get_sources(raw)`
+reproduces `AMICA.transform(raw, model_idx=h)` for every model, not just the
+first.
 
 ::: pamica.mne_compat.AMICAICA
