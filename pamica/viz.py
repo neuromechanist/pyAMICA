@@ -147,8 +147,9 @@ def plot_pmi_heatmap(
 
 
 def plot_model_probability(
-    out: AmicaOutput,
+    out: AmicaOutput | None = None,
     *,
+    lht: np.ndarray | None = None,
     srate: float | None = None,
     smooth_sec: float | None = None,
     window_sec: float | None = None,
@@ -161,11 +162,19 @@ def plot_model_probability(
     single most probable model at each timepoint (``Lht.max(axis=0)``), not
     the total ``Lt``, matching the observed MATLAB behaviour.
 
+    Provide exactly one source of ``Lht``: a written ``out`` (an
+    :class:`AmicaOutput`), or a live ``lht`` array (for example from
+    :meth:`pamica.AMICA.model_loglik`, so an MNE-side fit can plot dominance
+    without writing an ``amicaout`` directory, issue #141).
+
     Parameters
     ----------
-    out : AmicaOutput
+    out : AmicaOutput, optional
         Must have `out.Lht` populated (per-model per-sample log-likelihood;
-        see `pamica.numpy_impl.load.loadmodout`).
+        see `pamica.numpy_impl.load.loadmodout`). Mutually exclusive with `lht`.
+    lht : np.ndarray of shape (n_models, n_samples), optional
+        A per-model per-sample log-likelihood array. Mutually exclusive with
+        `out`.
     srate : float, optional
         Sampling rate in Hz. pamica has no built-in notion of sample rate
         (`AmicaOutput`/`loadmodout`/`load_data_file` carry none), so a seconds
@@ -192,15 +201,35 @@ def plot_model_probability(
     Raises
     ------
     ValueError
-        If `out.Lht` is `None`, or if `smooth_sec`/`window_sec` is given
-        without `srate`.
+        If neither or both of `out`/`lht` are given, if `out.Lht` is `None`, if
+        `lht` is not 2-D, or if `smooth_sec`/`window_sec` is given without
+        `srate`.
     """
-    if out.Lht is None:
+    if lht is not None and out is not None:
         raise ValueError(
-            "plot_model_probability: out.Lht is None (no LLt saved with this "
-            "fit); refit with a backend that writes LLt (see "
-            "AMICA.write_amica_output) or pass an AmicaOutput loaded from a "
-            "directory that has it."
+            "plot_model_probability: provide exactly one of `out` (an "
+            "AmicaOutput with Lht) or `lht` (a (n_models, n_samples) array)."
+        )
+    if lht is not None:
+        Lht = np.asarray(lht, dtype=np.float64)
+    elif out is not None:
+        if out.Lht is None:
+            raise ValueError(
+                "plot_model_probability: out.Lht is None (no LLt saved with this "
+                "fit); refit with a backend that writes LLt (see "
+                "AMICA.write_amica_output) or pass an AmicaOutput loaded from a "
+                "directory that has it."
+            )
+        Lht = np.asarray(out.Lht, dtype=np.float64)
+    else:
+        raise ValueError(
+            "plot_model_probability: provide `out` (an AmicaOutput with Lht) or "
+            "`lht` (a (n_models, n_samples) array)."
+        )
+    if Lht.ndim != 2:
+        raise ValueError(
+            "plot_model_probability: lht must be 2-D (n_models, n_samples), got "
+            f"shape {Lht.shape}."
         )
     if smooth_sec is not None and srate is None:
         raise ValueError(
@@ -214,7 +243,6 @@ def plot_model_probability(
             "seconds-based x-axis width; pass srate explicitly)."
         )
 
-    Lht = np.asarray(out.Lht, dtype=np.float64)
     n_models, n_samples = Lht.shape
 
     if smooth_sec is not None:

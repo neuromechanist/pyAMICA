@@ -387,3 +387,29 @@ def test_plot_model_probability_raises_without_lht(two_model_output):
     out_no_lht = dataclasses.replace(two_model_output, Lht=None)
     with pytest.raises(ValueError, match="Lht"):
         plot_model_probability(out_no_lht)
+
+
+# --- live `lht` array path (issue #141) --------------------------------------
+def test_plot_model_probability_lht_array_matches_out(two_model_output):
+    """Passing a raw Lht array reproduces the AmicaOutput path exactly."""
+    lht = np.asarray(two_model_output.Lht, dtype=np.float64)
+    fig_out = plot_model_probability(two_model_output)
+    fig_lht = plot_model_probability(lht=lht)
+    for line_out, line_lht in zip(fig_out.axes[0].lines, fig_lht.axes[0].lines):
+        np.testing.assert_array_equal(line_out.get_ydata(), line_lht.get_ydata())
+    np.testing.assert_array_equal(
+        fig_out.axes[1].lines[0].get_ydata(), fig_lht.axes[1].lines[0].get_ydata()
+    )
+
+
+def test_plot_model_probability_requires_exactly_one_source(two_model_output):
+    lht = np.asarray(two_model_output.Lht, dtype=np.float64)
+    with pytest.raises(ValueError, match="exactly one"):
+        plot_model_probability(two_model_output, lht=lht)  # both
+    with pytest.raises(ValueError, match="provide"):
+        plot_model_probability()  # neither
+
+
+def test_plot_model_probability_rejects_non_2d_lht():
+    with pytest.raises(ValueError, match="2-D"):
+        plot_model_probability(lht=np.zeros(10))
