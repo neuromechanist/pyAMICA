@@ -8,8 +8,10 @@ pamica's fitted mean/sphere/unmixing into a fully-populated
 :class:`mne.preprocessing.ICA`; the other methods delegate to that object, so MNE
 performs the export/plot/back-projection machinery unchanged.
 
-This phase covers the single-model, full-rank case (``n_models == 1``, no PCA
-reduction). Multi-model exposure is issue #141.
+Multi-model AMICA (``n_models > 1``) is exposed per-model (each model is its own
+single-model MNE ICA), plus a per-sample model-dominance accessor
+(:meth:`AMICAICA.get_model_probability`) that MNE's ``ICA`` cannot represent
+(issue #141). PCA reduction is unsupported (full-rank whitening only).
 """
 
 from typing import Optional, Union
@@ -35,8 +37,16 @@ class AMICAICA:
     :meth:`plot_components` and :meth:`plot_sources` all delegate to a real
     :class:`mne.preprocessing.ICA` built by :meth:`to_mne_ica`.
 
+    For a multi-model fit (``n_models > 1``) each model is exported as its own
+    single-model MNE ICA (``to_mne_ica(model_idx=...)`` / the ``model_idx``
+    argument on the consumer methods), and the per-sample model dominance --
+    which MNE's ``ICA`` cannot represent -- is exposed directly by
+    :meth:`get_model_probability` / :meth:`plot_model_probability`.
+
     Parameters
     ----------
+    n_models : int, default=1
+        Number of ICA models to learn (AMICA ``n_models``).
     n_mix : int, default=3
         Number of mixture components per source (AMICA ``n_mix``).
     random_state : int or None, default=None
@@ -51,7 +61,7 @@ class AMICAICA:
     Attributes
     ----------
     amica_ : AMICA
-        The fitted single-model pamica model.
+        The fitted pamica model (holds all ``n_models`` models).
     info_ : mne.Info
         The picked measurement info the fit was run on (channel subset only).
     ch_names_ : list of str
@@ -67,18 +77,20 @@ class AMICAICA:
 
     Notes
     -----
-    The single-model AMICA transform is ``S = W_fort @ sphere @ (X - mean)`` (the
-    per-model data-space center ``c`` is identically zero for one model, since
-    its update is gated to ``n_models > 1``). MNE computes sources as
-    ``S = unmixing_matrix_ @ pca_components_ @ (X - pca_mean_)`` (with a unit
-    pre-whitener). Writing the symmetric-ZCA ``sphere`` as
-    ``V @ diag(1/sqrt(e)) @ V.T`` with ``V`` orthonormal, the exported ICA uses
-    ``pca_components_ = V.T``, ``unmixing_matrix_ = W_fort @ sphere @ V`` and
-    ``pca_mean_ = mean``. Keeping ``pca_components_`` orthonormal is what makes
-    MNE's ``get_components`` (scalp maps ``inv(sphere) @ inv(W_fort)``) come out
-    right, since MNE assumes orthonormal PCA rows. The mapping is pinned by a
-    round-trip test (``to_mne_ica().get_sources(raw)`` equals
-    ``amica_.transform(X)``).
+    Model ``h``'s AMICA transform is ``S = W_fort @ (sphere @ (X - mean) - c_h)``,
+    where ``c_h`` is that model's data-space center (identically zero for a
+    single model, since the ``c`` update is gated to ``n_models > 1``). MNE
+    computes sources as ``S = unmixing_matrix_ @ pca_components_ @ (X - pca_mean_)``
+    (with a unit pre-whitener). Writing the symmetric-ZCA ``sphere`` as
+    ``V @ diag(1/sqrt(e)) @ V.T`` with ``V`` orthonormal, the exported ICA for
+    model ``h`` uses ``pca_components_ = V.T``,
+    ``unmixing_matrix_ = W_fort @ sphere @ V`` and
+    ``pca_mean_ = mean + inv(sphere) @ c_h`` (which reduces to ``mean`` when
+    ``c_h`` is zero). Keeping ``pca_components_`` orthonormal is what makes MNE's
+    ``get_components`` (scalp maps ``inv(sphere) @ inv(W_fort)``) come out right,
+    since MNE assumes orthonormal PCA rows. The mapping is pinned by a round-trip
+    test (``to_mne_ica(model_idx=h).get_sources(raw)`` equals
+    ``amica_.transform(X, model_idx=h)``).
 
     PCA reduction (``pcakeep``/``pcadb``) is unsupported: it leaves the sphere
     rank-deficient, so the export (which assumes a full-rank whitening) would be
@@ -90,11 +102,13 @@ class AMICAICA:
 
     def __init__(
         self,
+        n_models: int = 1,
         n_mix: int = 3,
         random_state: Optional[int] = None,
         device: Optional[Union[str, torch.device]] = None,
         verbose: bool = True,
     ):
+        self.n_models = n_models
         self.n_mix = n_mix
         self.random_state = random_state
         self.device = device
@@ -108,7 +122,8 @@ class AMICAICA:
         self.stop_reason_: Optional[str] = None
         self._n_samples: Optional[int] = None
         self._fit_kind: Optional[str] = None
-        self._mne_ica: Optional[_MNEICA] = None
+        # Per-model export cache (one mne.preprocessing.ICA per model_idx).
+        self._mne_ica_cache: dict = {}
 
     # ------------------------------------------------------------------
     # Fit
@@ -197,7 +212,10 @@ class AMICAICA:
             fit_kwargs.setdefault("seed", int(self.random_state))
 
         amica = AMICA(
-            n_models=1, n_mix=self.n_mix, device=self.device, verbose=self.verbose
+            n_models=self.n_models,
+            n_mix=self.n_mix,
+            device=self.device,
+            verbose=self.verbose,
         )
         amica.fit(X, **fit_kwargs)
 
@@ -221,13 +239,13 @@ class AMICAICA:
         self.amica_ = amica
         self.converged_ = amica.converged_
         self.stop_reason_ = amica.stop_reason_
-        self._mne_ica = None  # invalidate any cached export
+        self._mne_ica_cache = {}  # invalidate any cached exports
         return self
 
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------
-    def to_mne_ica(self) -> _MNEICA:
+    def to_mne_ica(self, model_idx: int = 0) -> _MNEICA:
         """Build (and cache) a fully-populated :class:`mne.preprocessing.ICA`.
 
         The returned object is a genuine MNE ICA: ``get_sources``, ``apply``,
@@ -236,17 +254,26 @@ class AMICAICA:
         mean/sphere/unmixing to ``pca_mean_``/``pca_components_``/
         ``unmixing_matrix_`` mapping.
 
-        The object is cached and returned by reference: mutating it (for example
-        setting ``.exclude``) persists across subsequent :meth:`apply`/
-        :meth:`get_sources` calls until the next :meth:`fit`.
+        For a multi-model fit each model is exported as its own single-model
+        MNE ICA (MNE has no multi-model concept); pass ``model_idx`` to pick
+        one. The per-model exports are cached and returned by reference:
+        mutating one (for example setting ``.exclude``) persists across
+        subsequent :meth:`apply`/:meth:`get_sources` calls for that model until
+        the next :meth:`fit`.
+
+        Parameters
+        ----------
+        model_idx : int, default=0
+            Which AMICA model to export (``0..n_models-1``).
 
         Returns
         -------
         ica : mne.preprocessing.ICA
         """
         self._check_fitted("build the MNE ICA")
-        if self._mne_ica is not None:
-            return self._mne_ica
+        model_idx = self._check_model_idx(model_idx)
+        if model_idx in self._mne_ica_cache:
+            return self._mne_ica_cache[model_idx]
 
         amica = self.amica_
         if amica is None or amica.model_ is None or self.ch_names_ is None:
@@ -254,15 +281,16 @@ class AMICAICA:
                 "AMICAICA: internal state is inconsistent; refit before to_mne_ica()."
             )
         backend = amica.model_
-        if backend.mean is None or backend.sphere is None:
+        if backend.mean is None or backend.sphere is None or backend.c is None:
             raise RuntimeError(
-                "AMICAICA: the fitted backend is missing mean/sphere; refit "
+                "AMICAICA: the fitted backend is missing mean/sphere/c; refit "
                 "before to_mne_ica()."
             )
 
         mean = backend.mean.cpu().numpy().ravel()
         sphere = backend.sphere.cpu().numpy()
-        w_fort = amica.get_unmixing_matrix(model_idx=0)
+        w_fort = amica.get_unmixing_matrix(model_idx=model_idx)
+        c = backend.c.cpu().numpy()[:, model_idx]  # per-model center (sphered space)
         n_ch = sphere.shape[0]
 
         # Orthonormal eigenbasis of the symmetric-ZCA sphere
@@ -277,9 +305,11 @@ class AMICAICA:
 
         pca_components = v.T
         unmixing = w_fort @ sphere @ v
-        # Single-model AMICA has the per-model center c identically zero (its
-        # update is gated to n_models>1), so no data-space offset enters pca_mean.
-        pca_mean = mean
+        # Fold the per-model center c (in sphered space) into pca_mean via the
+        # data-space offset inv(sphere) @ c, so MNE's (X - pca_mean) reproduces
+        # AMICA's W(sphere(X - mean) - c). c is identically zero for a single
+        # model, leaving pca_mean == mean bit-for-bit.
+        pca_mean = mean + np.linalg.solve(sphere, c) if np.any(c) else mean
 
         ica = _MNEICA(
             n_components=n_ch,
@@ -308,39 +338,122 @@ class AMICAICA:
         ica._update_ica_names()
         ica.current_fit = self._fit_kind
 
-        self._mne_ica = ica
+        self._mne_ica_cache[model_idx] = ica
         return ica
 
     # ------------------------------------------------------------------
     # MNE consumer surface (delegates to the exported ICA)
     # ------------------------------------------------------------------
-    def get_sources(self, inst):
-        """Sources for ``inst`` as an MNE object (see ``ICA.get_sources``)."""
-        return self.to_mne_ica().get_sources(inst)
+    def get_sources(self, inst, *args, model_idx: int = 0, **kwargs):
+        """Sources for ``inst`` from model ``model_idx`` (see ``ICA.get_sources``).
 
-    def apply(self, inst, **kwargs):
-        """Remove selected components and back-project (see ``ICA.apply``).
-
-        Pass ``exclude=[...]`` (or set it on the exported ICA) to drop
-        components; with no exclusions this reconstructs the input.
+        ``model_idx`` is keyword-only so positional arguments pass straight
+        through to MNE's ``ICA.get_sources`` (e.g. ``add_channels``,
+        ``start``/``stop``).
         """
-        return self.to_mne_ica().apply(inst, **kwargs)
+        return self.to_mne_ica(model_idx).get_sources(inst, *args, **kwargs)
 
-    def get_components(self) -> np.ndarray:
-        """Scalp maps, shape ``(n_channels, n_components)`` (``ICA.get_components``)."""
-        return self.to_mne_ica().get_components()
+    def apply(self, inst, *args, model_idx: int = 0, **kwargs):
+        """Remove selected components of model ``model_idx`` and back-project.
 
-    def plot_components(self, *args, **kwargs):
-        """Plot component topographies (see ``ICA.plot_components``)."""
-        return self.to_mne_ica().plot_components(*args, **kwargs)
+        ``model_idx`` is keyword-only so positional arguments pass straight
+        through to MNE's ``ICA.apply``. Pass ``exclude=[...]`` (or set it on the
+        exported ICA) to drop components; with no exclusions this reconstructs
+        the input.
+        """
+        return self.to_mne_ica(model_idx).apply(inst, *args, **kwargs)
 
-    def plot_sources(self, inst, *args, **kwargs):
-        """Plot component time courses (see ``ICA.plot_sources``)."""
-        return self.to_mne_ica().plot_sources(inst, *args, **kwargs)
+    def get_components(self, *, model_idx: int = 0) -> np.ndarray:
+        """Scalp maps of model ``model_idx``, ``(n_channels, n_components)``."""
+        return self.to_mne_ica(model_idx).get_components()
+
+    def plot_components(self, *args, model_idx: int = 0, **kwargs):
+        """Plot model ``model_idx`` component topographies (see ``ICA.plot_components``)."""
+        return self.to_mne_ica(model_idx).plot_components(*args, **kwargs)
+
+    def plot_sources(self, inst, *args, model_idx: int = 0, **kwargs):
+        """Plot model ``model_idx`` component time courses (see ``ICA.plot_sources``)."""
+        return self.to_mne_ica(model_idx).plot_sources(inst, *args, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Multi-model dominance (issue #141)
+    # ------------------------------------------------------------------
+    def get_model_probability(self, inst) -> np.ndarray:
+        """Per-sample posterior probability of each model on ``inst`` (dominance).
+
+        Returns ``P(model | sample)`` as ``(n_models, n_samples)`` via
+        :meth:`AMICA.model_probability` on ``inst``'s data (``Epochs`` are
+        concatenated along time). Each column sums to 1; all ones for a single
+        model. MNE's own ``ICA`` has no multi-model concept, so this is exposed
+        here rather than through the exported per-model ICA objects.
+        """
+        self._check_fitted("compute the model probability")
+        if self.amica_ is None:
+            raise RuntimeError(
+                "AMICAICA: internal state is inconsistent; refit before scoring."
+            )
+        return self.amica_.model_probability(self._data_for(inst))
+
+    def plot_model_probability(self, inst, *, srate: Optional[float] = None, **kwargs):
+        """Plot per-model probability + best-model log-likelihood over ``inst``.
+
+        Delegates to :func:`pamica.viz.plot_model_probability` with the live
+        per-model log-likelihood (:meth:`AMICA.model_loglik`) on ``inst``'s
+        data. ``srate`` defaults to the fitted recording's sampling rate, so the
+        x-axis is in seconds; extra keywords (``smooth_sec``, ``window_sec``,
+        ``axes``) pass through.
+        """
+        from ..viz import plot_model_probability as _plot_model_probability
+
+        self._check_fitted("plot the model probability")
+        if self.amica_ is None or self.info_ is None:
+            raise RuntimeError(
+                "AMICAICA: internal state is inconsistent; refit before plotting."
+            )
+        lht = self.amica_.model_loglik(self._data_for(inst))
+        if srate is None:
+            srate = float(self.info_["sfreq"])
+        return _plot_model_probability(lht=lht, srate=srate, **kwargs)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _data_for(self, inst) -> np.ndarray:
+        """The fitted-channel data of ``inst`` as ``(n_channels, n_samples)``.
+
+        Selects the exact channels the fit used (by name) so the array aligns
+        with the stored sphere/unmixing; ``Epochs`` are concatenated along time.
+        """
+        if not isinstance(inst, (mne.io.BaseRaw, mne.BaseEpochs)):
+            raise TypeError(
+                f"expected an mne.io.Raw or mne.Epochs, got {type(inst).__name__}."
+            )
+        picked = inst.copy().pick(self.ch_names_)
+        if isinstance(inst, mne.io.BaseRaw):
+            X = picked.get_data()
+        else:
+            X = np.hstack(picked.get_data())
+        return np.ascontiguousarray(X, dtype=np.float64)
+
+    def _check_model_idx(self, model_idx: int) -> int:
+        if not isinstance(model_idx, (int, np.integer)):
+            raise TypeError(
+                f"model_idx must be an int, got {type(model_idx).__name__}."
+            )
+        # Bound against the fitted backend's model count (the source of truth),
+        # not the mutable constructor hyperparameter self.n_models.
+        n = (
+            self.amica_.model_.n_models
+            if self.amica_ is not None and self.amica_.model_ is not None
+            else self.n_models
+        )
+        if not (0 <= model_idx < n):
+            raise ValueError(
+                f"model_idx={model_idx} out of range for a {n}-model fit "
+                f"(valid: 0..{n - 1})."
+            )
+        return int(model_idx)
+
     def _check_fitted(self, action: str = "this call") -> None:
         """Raise if no usable model is available.
 
@@ -361,13 +474,15 @@ class AMICAICA:
 
     def __repr__(self) -> str:
         if self.amica_ is None:
-            return f"<AMICAICA (unfitted, n_mix={self.n_mix})>"
+            return (
+                f"<AMICAICA (unfitted, n_models={self.n_models}, n_mix={self.n_mix})>"
+            )
         if not self.converged_:
             return (
                 f"<AMICAICA (degenerate fit, stop_reason={self.stop_reason_!r}, "
-                f"n_mix={self.n_mix}, {self._fit_kind})>"
+                f"n_models={self.n_models}, n_mix={self.n_mix}, {self._fit_kind})>"
             )
         return (
             f"<AMICAICA (fitted: {self.n_components_} components, "
-            f"n_mix={self.n_mix}, {self._fit_kind})>"
+            f"n_models={self.n_models}, n_mix={self.n_mix}, {self._fit_kind})>"
         )
