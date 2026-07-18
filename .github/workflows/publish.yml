@@ -8,6 +8,7 @@ name: Publish to PyPI
 # Release procedure (metadata must be correct in the *tag's* tree, because
 # PyPI publishes the built dist and Zenodo archives the tag on release):
 #   1. python scripts/sync_version.py sync X.Y.Z   # pyproject + CITATION.cff + .zenodo.json
+#      uv lock                                      # refresh uv.lock to the new version
 #   2. commit "Bump version to X.Y.Z", open/merge the bump PR
 #   3. create a GitHub release with tag vX.Y.Z (or X.Y.Z)
 # The build job's `check` step then fails the release if the tag and the three
@@ -56,6 +57,7 @@ jobs:
         with:
           name: dist
           path: dist/*
+          if-no-files-found: error  # an empty dist/ means the build silently produced nothing
 
   publish:
     name: Publish to PyPI

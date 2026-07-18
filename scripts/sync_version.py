@@ -16,7 +16,8 @@ Two modes:
     python scripts/sync_version.py sync 0.1.3 --date 2026-08-01
     python scripts/sync_version.py check 0.1.3           # verifies, exit 1 on drift
 
-``sync`` is the release-prep step (run it, commit "Bump version to X.Y.Z", tag).
+``sync`` is the release-prep step: run it, then ``uv lock`` (so ``uv.lock``
+tracks the new version), commit "Bump version to X.Y.Z", and tag.
 ``check`` is the release gate that ``publish.yml`` runs against the release tag,
 so a mistagged or half-bumped release fails before anything reaches PyPI.
 
@@ -63,31 +64,65 @@ def read_versions() -> dict[str, str]:
     }
 
 
+def _sub_once(text: str, pattern: str, repl: str, *, where: str) -> str:
+    """Substitute exactly one match, raising if the pattern is absent.
+
+    ``re.sub`` returns the input unchanged (no error) when nothing matches, which
+    would let ``sync`` write a file back untouched while reporting success -- a
+    silent no-op if a file's formatting ever drifts from what the pattern expects.
+    Raising instead turns that drift into a loud, actionable failure.
+    """
+    new, n = re.subn(pattern, repl, text, count=1)
+    if n == 0:
+        raise ValueError(f"{where}: no line matched {pattern!r}; nothing written")
+    return new
+
+
 def sync(version: str, released: str) -> None:
-    pyproject = re.sub(
-        r'(?m)^version = "[^"]*"',
-        f'version = "{version}"',
-        PYPROJECT.read_text(),
-        count=1,
+    PYPROJECT.write_text(
+        _sub_once(
+            PYPROJECT.read_text(),
+            r'(?m)^version = "[^"]*"',
+            f'version = "{version}"',
+            where="pyproject.toml version",
+        )
     )
-    PYPROJECT.write_text(pyproject)
 
     citation = CITATION.read_text()
-    citation = re.sub(r"(?m)^version:.*$", f"version: {version}", citation, count=1)
-    citation = re.sub(
-        r"(?m)^date-released:.*$", f'date-released: "{released}"', citation, count=1
+    citation = _sub_once(
+        citation,
+        r"(?m)^version:.*$",
+        f"version: {version}",
+        where="CITATION.cff version",
+    )
+    citation = _sub_once(
+        citation,
+        r"(?m)^date-released:.*$",
+        f'date-released: "{released}"',
+        where="CITATION.cff date-released",
     )
     CITATION.write_text(citation)
 
     zenodo = ZENODO.read_text()
-    zenodo = re.sub(r'"version": "[^"]*"', f'"version": "{version}"', zenodo, count=1)
-    zenodo = re.sub(
+    zenodo = _sub_once(
+        zenodo,
+        r'"version": "[^"]*"',
+        f'"version": "{version}"',
+        where=".zenodo.json version",
+    )
+    zenodo = _sub_once(
+        zenodo,
         r'"publication_date": "[^"]*"',
         f'"publication_date": "{released}"',
-        zenodo,
-        count=1,
+        where=".zenodo.json publication_date",
     )
     ZENODO.write_text(zenodo)
+
+    # Belt-and-suspenders: never report success while a file is still out of sync
+    # (e.g. a substitution that matched an unexpected line and wrote a wrong value).
+    drift = {name: got for name, got in read_versions().items() if got != version}
+    if drift:
+        raise RuntimeError(f"sync wrote the files but they still disagree: {drift}")
 
     print(f"Set version {version} (released {released}) in all three metadata files.")
 
