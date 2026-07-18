@@ -3,6 +3,23 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pAMICA/releases).
 
+## 0.2.2
+
+GitHub repository rename to pAMICA and a `__version__` fix.
+
+- Fixed `pamica.__version__` reporting the stale `0.1.2`: `version.py` hardcoded
+  the version and the release sync never touched it, so the 0.2.1 wheel shipped
+  correct distribution metadata but a wrong runtime attribute. `__version__` now
+  derives from the installed package metadata, so `pyproject.toml` is the single
+  source of truth and it can never drift again (#182).
+- Canonicalized `pyAMICA` -> `pAMICA` URLs after the GitHub repository was
+  renamed `sccn/pyAMICA` -> `sccn/pAMICA`. The documentation site moved to
+  <https://eeglab.org/pAMICA/>, so the old `eeglab.org/pyAMICA` links (including
+  the README docs badge) now 404; the repository URLs, codecov, the native
+  binary resolver's default repository, the docs badge, and `git clone`/`cd`
+  snippets are updated to match. GitHub redirects the old repo URLs, and the
+  package/import name stays lowercase `pamica` (#184).
+
 ## 0.2.1
 
 PyPI publishing, release-metadata sync, the pAMICA display title, and
