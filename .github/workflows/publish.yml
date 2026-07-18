@@ -1,0 +1,75 @@
+name: Publish to PyPI
+
+# Builds the pamica sdist + wheel and uploads them to PyPI when a GitHub release
+# is published. Uploading uses PyPI Trusted Publishing (OIDC): no API token is
+# stored. PyPI is configured to trust this repository, this workflow file
+# (publish.yml), and the `pypi` deployment environment.
+#
+# Release procedure (metadata must be correct in the *tag's* tree, because
+# PyPI publishes the built dist and Zenodo archives the tag on release):
+#   1. python scripts/sync_version.py sync X.Y.Z   # pyproject + CITATION.cff + .zenodo.json
+#   2. commit "Bump version to X.Y.Z", open/merge the bump PR
+#   3. create a GitHub release with tag vX.Y.Z (or X.Y.Z)
+# The build job's `check` step then fails the release if the tag and the three
+# metadata files disagree, before anything is uploaded.
+#
+# workflow_dispatch runs a build-only dry run (the publish job is gated on the
+# release event), so the package can be built and metadata-checked without
+# publishing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # On a real release, the tag must match the version declared in
+      # pyproject.toml, CITATION.cff, and .zenodo.json (all kept in lockstep by
+      # scripts/sync_version.py). This gates PyPI + the Zenodo archive + the
+      # citation record on one agreed version.
+      - name: Verify tag matches metadata version
+        if: github.event_name == 'release'
+        run: uv run python scripts/sync_version.py check "${GITHUB_REF_NAME#v}"
+
+      - name: Build distributions
+        run: uv build
+
+      # Fail early on a broken long-description / invalid metadata rather than at
+      # the upload step.
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pamica
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
