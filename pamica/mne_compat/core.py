@@ -1,0 +1,373 @@
+"""MNE-Python-facing wrapper over pamica's AMICA backend (issue #139, phase 1).
+
+:class:`AMICAICA` fits AMICA directly from an :class:`mne.io.Raw` /
+:class:`mne.Epochs` and exposes the standard MNE ICA consumer surface
+(``get_sources``, ``apply``, ``get_components``, ``plot_components``,
+``plot_sources``). Its core value-add is :meth:`AMICAICA.to_mne_ica`, which maps
+pamica's fitted mean/sphere/unmixing into a fully-populated
+:class:`mne.preprocessing.ICA`; the other methods delegate to that object, so MNE
+performs the export/plot/back-projection machinery unchanged.
+
+This phase covers the single-model, full-rank case (``n_models == 1``, no PCA
+reduction). Multi-model exposure is issue #141.
+"""
+
+from typing import Optional, Union
+
+import numpy as np
+import torch
+
+# MNE is an optional extra (`pip install pamica[mne]`); this subpackage is never
+# imported by ``pamica.__init__``, so ``import pamica`` does not require it. The
+# base type-check/CI env has no mne, hence the scoped ignore (issue #139).
+import mne  # ty: ignore[unresolved-import]
+from mne.preprocessing import ICA as _MNEICA  # ty: ignore[unresolved-import]
+
+from ..amica import AMICA
+
+
+class AMICAICA:
+    """Fit AMICA from MNE objects and interoperate with ``mne.preprocessing.ICA``.
+
+    The wrapper fits pamica's natural-gradient AMICA backend on the data of an
+    MNE :class:`~mne.io.Raw` or :class:`~mne.Epochs` and lets MNE consume the
+    result: :meth:`get_sources`, :meth:`apply`, :meth:`get_components`,
+    :meth:`plot_components` and :meth:`plot_sources` all delegate to a real
+    :class:`mne.preprocessing.ICA` built by :meth:`to_mne_ica`.
+
+    Parameters
+    ----------
+    n_mix : int, default=3
+        Number of mixture components per source (AMICA ``n_mix``).
+    random_state : int or None, default=None
+        Seed for the AMICA fit (passed through as the backend ``seed``) and
+        stored on the exported :class:`~mne.preprocessing.ICA`.
+    device : str or torch.device, optional
+        Torch device for the fit (``None`` = auto; the float64 parity backend
+        falls back to CPU when auto-selection lands on MPS). See :class:`AMICA`.
+    verbose : bool, default=True
+        Whether the underlying :class:`AMICA` prints fit progress.
+
+    Attributes
+    ----------
+    amica_ : AMICA
+        The fitted single-model pamica model.
+    info_ : mne.Info
+        The picked measurement info the fit was run on (channel subset only).
+    ch_names_ : list of str
+        Names of the fitted channels, in order.
+    n_components_ : int
+        Number of ICA components (equals the number of fitted channels; AMICA
+        keeps ``n_sources == n_channels``).
+    converged_ : bool
+        Whether the last fit ended usable (not degenerate). A degenerate fit is
+        kept for inspection but refused by the consumer methods (issue #50).
+    stop_reason_ : str or None
+        Why the backend fit stopped (e.g. ``"max_iter"``, ``"nan_ll"``).
+
+    Notes
+    -----
+    The single-model AMICA transform is ``S = W_fort @ sphere @ (X - mean)`` (the
+    per-model data-space center ``c`` is identically zero for one model, since
+    its update is gated to ``n_models > 1``). MNE computes sources as
+    ``S = unmixing_matrix_ @ pca_components_ @ (X - pca_mean_)`` (with a unit
+    pre-whitener). Writing the symmetric-ZCA ``sphere`` as
+    ``V @ diag(1/sqrt(e)) @ V.T`` with ``V`` orthonormal, the exported ICA uses
+    ``pca_components_ = V.T``, ``unmixing_matrix_ = W_fort @ sphere @ V`` and
+    ``pca_mean_ = mean``. Keeping ``pca_components_`` orthonormal is what makes
+    MNE's ``get_components`` (scalp maps ``inv(sphere) @ inv(W_fort)``) come out
+    right, since MNE assumes orthonormal PCA rows. The mapping is pinned by a
+    round-trip test (``to_mne_ica().get_sources(raw)`` equals
+    ``amica_.transform(X)``).
+
+    PCA reduction (``pcakeep``/``pcadb``) is unsupported: it leaves the sphere
+    rank-deficient, so the export (which assumes a full-rank whitening) would be
+    numerically invalid, and :meth:`fit` rejects it. Rank-deficient *data* (for
+    example average-referenced EEG) is the same hazard reached through data
+    conditioning rather than a keyword; such a fit typically diverges and is
+    refused as degenerate.
+    """
+
+    def __init__(
+        self,
+        n_mix: int = 3,
+        random_state: Optional[int] = None,
+        device: Optional[Union[str, torch.device]] = None,
+        verbose: bool = True,
+    ):
+        self.n_mix = n_mix
+        self.random_state = random_state
+        self.device = device
+        self.verbose = verbose
+
+        self.amica_: Optional[AMICA] = None
+        self.info_ = None
+        self.ch_names_: Optional[list] = None
+        self.n_components_: Optional[int] = None
+        self.converged_: bool = False
+        self.stop_reason_: Optional[str] = None
+        self._n_samples: Optional[int] = None
+        self._fit_kind: Optional[str] = None
+        self._mne_ica: Optional[_MNEICA] = None
+
+    # ------------------------------------------------------------------
+    # Fit
+    # ------------------------------------------------------------------
+    def fit(
+        self,
+        inst,
+        picks=None,
+        start: Optional[int] = None,
+        stop: Optional[int] = None,
+        **fit_kwargs,
+    ) -> "AMICAICA":
+        """Fit AMICA to the data of an MNE ``Raw`` or ``Epochs``.
+
+        Parameters
+        ----------
+        inst : mne.io.BaseRaw | mne.BaseEpochs
+            The data to decompose. ``Epochs`` are concatenated along time
+            (``np.hstack``), matching how MNE's own ICA fits epoched data.
+        picks : str | list | slice | None, default=None
+            Channels to fit, in any form MNE accepts (e.g. ``"eeg"``,
+            ``"data"``, a name list). ``None`` selects all good data channels
+            (bads excluded), matching MNE's ICA default.
+        start, stop : int | None
+            Sample range for ``Raw`` input, passed to ``get_data``; ``None`` uses
+            the full recording. Not supported for ``Epochs`` (raises).
+        **fit_kwargs
+            Forwarded to :meth:`AMICA.fit` (e.g. ``max_iter``, ``lrate``,
+            ``do_newton``) and the backend constructor (e.g. ``block_size``).
+            ``pcakeep``/``pcadb`` (PCA reduction) are rejected, since they leave
+            the sphere rank-deficient and the MNE export invalid.
+
+        Returns
+        -------
+        self : AMICAICA
+
+        Raises
+        ------
+        TypeError
+            If ``inst`` is not an MNE ``Raw``/``Epochs``.
+        ValueError
+            If ``start``/``stop`` are given for ``Epochs``, ``stop`` exceeds the
+            recording length, the selected data is non-finite, or the fit used
+            PCA reduction.
+        """
+        if not isinstance(inst, (mne.io.BaseRaw, mne.BaseEpochs)):
+            raise TypeError(
+                "AMICAICA.fit expects an mne.io.Raw or mne.Epochs, got "
+                f"{type(inst).__name__}."
+            )
+        is_raw = isinstance(inst, mne.io.BaseRaw)
+        if not is_raw and (start is not None or stop is not None):
+            raise ValueError("start/stop are only supported for Raw input, not Epochs.")
+
+        picked = inst.copy().pick("data" if picks is None else picks, exclude="bads")
+        ch_names = list(picked.ch_names)
+
+        if is_raw:
+            if stop is not None and stop > inst.n_times:
+                raise ValueError(
+                    f"stop={stop} exceeds the recording length ({inst.n_times} "
+                    "samples)."
+                )
+            range_kw = {}
+            if start is not None:
+                range_kw["start"] = start
+            if stop is not None:
+                range_kw["stop"] = stop
+            X = picked.get_data(**range_kw)
+            fit_kind = "raw"
+        else:
+            # Concatenate epochs along time, as MNE's ICA does for fitting.
+            X = np.hstack(picked.get_data())
+            fit_kind = "epochs"
+
+        X = np.ascontiguousarray(X, dtype=np.float64)
+        if not np.isfinite(X).all():
+            bad = [ch_names[i] for i in np.flatnonzero(~np.isfinite(X).all(axis=1))]
+            raise ValueError(
+                "AMICAICA.fit: input contains non-finite (NaN/Inf) samples in "
+                f"channel(s) {bad}; clean bad segments/interpolation before "
+                "fitting."
+            )
+
+        if isinstance(self.random_state, (int, np.integer)):
+            fit_kwargs.setdefault("seed", int(self.random_state))
+
+        amica = AMICA(
+            n_models=1, n_mix=self.n_mix, device=self.device, verbose=self.verbose
+        )
+        amica.fit(X, **fit_kwargs)
+
+        if amica.model_ is not None and amica.model_._pca_reduced():
+            raise ValueError(
+                "AMICAICA does not support PCA reduction (pcakeep/pcadb): it "
+                "leaves the sphere rank-deficient, so the MNE ICA export (which "
+                "assumes a full-rank whitening) would be numerically invalid. "
+                "Refit without pcakeep/pcadb."
+            )
+
+        # Publish to self only after every fallible step above succeeds, so a
+        # failed (re)fit leaves the previously fitted state intact rather than a
+        # mix of the old model and the new attempt's metadata (mirrors the
+        # local-first pattern in AMICA.fit).
+        self.info_ = picked.info
+        self.ch_names_ = ch_names
+        self.n_components_ = X.shape[0]
+        self._n_samples = X.shape[1]
+        self._fit_kind = fit_kind
+        self.amica_ = amica
+        self.converged_ = amica.converged_
+        self.stop_reason_ = amica.stop_reason_
+        self._mne_ica = None  # invalidate any cached export
+        return self
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+    def to_mne_ica(self) -> _MNEICA:
+        """Build (and cache) a fully-populated :class:`mne.preprocessing.ICA`.
+
+        The returned object is a genuine MNE ICA: ``get_sources``, ``apply``,
+        ``get_components``, ``save`` and the ``mne.viz`` plotters operate on it
+        natively. See the class :class:`Notes <AMICAICA>` for the
+        mean/sphere/unmixing to ``pca_mean_``/``pca_components_``/
+        ``unmixing_matrix_`` mapping.
+
+        The object is cached and returned by reference: mutating it (for example
+        setting ``.exclude``) persists across subsequent :meth:`apply`/
+        :meth:`get_sources` calls until the next :meth:`fit`.
+
+        Returns
+        -------
+        ica : mne.preprocessing.ICA
+        """
+        self._check_fitted("build the MNE ICA")
+        if self._mne_ica is not None:
+            return self._mne_ica
+
+        amica = self.amica_
+        if amica is None or amica.model_ is None or self.ch_names_ is None:
+            raise RuntimeError(
+                "AMICAICA: internal state is inconsistent; refit before to_mne_ica()."
+            )
+        backend = amica.model_
+        if backend.mean is None or backend.sphere is None:
+            raise RuntimeError(
+                "AMICAICA: the fitted backend is missing mean/sphere; refit "
+                "before to_mne_ica()."
+            )
+
+        mean = backend.mean.cpu().numpy().ravel()
+        sphere = backend.sphere.cpu().numpy()
+        w_fort = amica.get_unmixing_matrix(model_idx=0)
+        n_ch = sphere.shape[0]
+
+        # Orthonormal eigenbasis of the symmetric-ZCA sphere
+        # (sphere = V diag(1/sqrt(cov_eval)) V.T). eigh gives ascending
+        # sphere-eigenvalues (= 1/sqrt(cov_eval)); reorder to descending
+        # explained variance so pca_components_ matches MNE's PCA convention.
+        sphere_evals, evecs = np.linalg.eigh(sphere)
+        cov_evals = 1.0 / sphere_evals**2
+        order = np.argsort(cov_evals)[::-1]
+        v = evecs[:, order]
+        cov_evals = cov_evals[order]
+
+        pca_components = v.T
+        unmixing = w_fort @ sphere @ v
+        # Single-model AMICA has the per-model center c identically zero (its
+        # update is gated to n_models>1), so no data-space offset enters pca_mean.
+        pca_mean = mean
+
+        ica = _MNEICA(
+            n_components=n_ch,
+            method="infomax",
+            max_iter="auto",
+            random_state=self.random_state,
+        )
+        # `method` is inert here: the fitted attributes are hand-populated and
+        # ICA.fit (the only place `method` branches) is never called, but
+        # ICA.__init__ still requires a valid method name.
+        ica.info = self.info_
+        ica.ch_names = list(self.ch_names_)
+        ica.n_components_ = n_ch
+        ica.pca_mean_ = pca_mean
+        ica.pca_components_ = pca_components
+        ica.pca_explained_variance_ = cov_evals
+        ica.unmixing_matrix_ = unmixing
+        ica.pre_whitener_ = np.ones((n_ch, 1))
+        ica.n_iter_ = max(int(getattr(backend, "iteration", 0)), 1)
+        # MNE's own fit sets these; read_ica_eeglab (the precedent for building
+        # an ICA from an external decomposition) sets reject_=None. Without them
+        # ICA.save()/plot_properties raise AttributeError.
+        ica.reject_ = None
+        ica.n_samples_ = int(self._n_samples) if self._n_samples is not None else 0
+        ica._update_mixing_matrix()
+        ica._update_ica_names()
+        ica.current_fit = self._fit_kind
+
+        self._mne_ica = ica
+        return ica
+
+    # ------------------------------------------------------------------
+    # MNE consumer surface (delegates to the exported ICA)
+    # ------------------------------------------------------------------
+    def get_sources(self, inst):
+        """Sources for ``inst`` as an MNE object (see ``ICA.get_sources``)."""
+        return self.to_mne_ica().get_sources(inst)
+
+    def apply(self, inst, **kwargs):
+        """Remove selected components and back-project (see ``ICA.apply``).
+
+        Pass ``exclude=[...]`` (or set it on the exported ICA) to drop
+        components; with no exclusions this reconstructs the input.
+        """
+        return self.to_mne_ica().apply(inst, **kwargs)
+
+    def get_components(self) -> np.ndarray:
+        """Scalp maps, shape ``(n_channels, n_components)`` (``ICA.get_components``)."""
+        return self.to_mne_ica().get_components()
+
+    def plot_components(self, *args, **kwargs):
+        """Plot component topographies (see ``ICA.plot_components``)."""
+        return self.to_mne_ica().plot_components(*args, **kwargs)
+
+    def plot_sources(self, inst, *args, **kwargs):
+        """Plot component time courses (see ``ICA.plot_sources``)."""
+        return self.to_mne_ica().plot_sources(inst, *args, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _check_fitted(self, action: str = "this call") -> None:
+        """Raise if no usable model is available.
+
+        ``ValueError`` when never fitted (matching :class:`AMICA`'s convention);
+        ``RuntimeError`` when the fit ended degenerate (non-finite parameters,
+        issue #50), so the failure surfaces here rather than as opaque NaNs
+        downstream.
+        """
+        if self.amica_ is None:
+            raise ValueError(f"AMICAICA must be fitted before {action}; run fit().")
+        if not self.converged_:
+            raise RuntimeError(
+                f"Refusing to {action}: the AMICA fit ended degenerate "
+                f"(stop_reason={self.stop_reason_!r}), so it holds non-finite "
+                "parameters and would produce NaN output. Lower lrate, disable "
+                "Newton, or check data conditioning, then refit."
+            )
+
+    def __repr__(self) -> str:
+        if self.amica_ is None:
+            return f"<AMICAICA (unfitted, n_mix={self.n_mix})>"
+        if not self.converged_:
+            return (
+                f"<AMICAICA (degenerate fit, stop_reason={self.stop_reason_!r}, "
+                f"n_mix={self.n_mix}, {self._fit_kind})>"
+            )
+        return (
+            f"<AMICAICA (fitted: {self.n_components_} components, "
+            f"n_mix={self.n_mix}, {self._fit_kind})>"
+        )

@@ -27,3 +27,13 @@ from pamica.mlx_impl import AMICAMLXNG  # requires the `mlx` extra
 
 - **[`AMICAMLXNG`](mlx-backend.md)** — the optional Apple-GPU (MLX) backend; the
   fastest option on Apple Silicon (float32).
+
+The optional MNE-Python wrapper is likewise imported explicitly:
+
+```python
+from pamica.mne_compat import AMICAICA  # requires the `mne` extra
+```
+
+- **[`AMICAICA`](mne-compat.md)** — fit AMICA from an MNE `Raw`/`Epochs` and
+  interoperate with `mne.preprocessing.ICA` (`get_sources`, `apply`,
+  `plot_components`, `to_mne_ica`).
