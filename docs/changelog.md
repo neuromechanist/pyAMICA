@@ -5,6 +5,14 @@ Release notes are also published on the
 
 ## Unreleased
 
+- Packaging and release: a PyPI publish workflow (`publish.yml`) uploads the
+  `pamica` sdist and wheel via Trusted Publishing (OIDC) when a GitHub release
+  is published, and `scripts/sync_version.py` keeps the release version in step
+  across `pyproject.toml`, `CITATION.cff` and `.zenodo.json` (the publish job
+  fails a release whose tag disagrees with them). The display title is now
+  **pAMICA**; the package, import and `pip install pamica` stay lowercase
+  `pamica` (pip name matching is case-insensitive, so `pip install pAmica`
+  resolves to the same project) (#177).
 - Native Fortran run engine (`AMICANative`), the fourth backend alongside NumPy,
   PyTorch and MLX. It runs the AMICA Fortran reference itself and returns an
   `AmicaOutput` with the usual accessors, so it is the parity oracle the Python

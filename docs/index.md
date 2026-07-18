@@ -1,4 +1,4 @@
-# pamica
+# pAMICA
 
 Python (PyTorch) implementation of **Adaptive Mixture Independent Component
 Analysis (AMICA)** that reproduces the results of the reference Fortran binary,
