@@ -42,6 +42,13 @@ MNE-Python compatibility layer (epic #139), additive: the scikit-learn-style
   folds each model's data-space center `c` into `pca_mean_`, so the round trip
   holds for the multi-model case too. `pamica.viz.plot_model_probability` now also
   accepts a live `lht` array, not only a written `AmicaOutput` (phase 2, #141).
+- pamica-specific fitted metadata is inspectable through the MNE wrapper rather
+  than silently dropped by the `mne.preprocessing.ICA` export: `get_pdftype(model_idx=...)`
+  returns each component's source-density family code (0-4, named by
+  `pamica.mne_compat.PDFTYPE_NAMES`), `get_rho(model_idx=...)` the
+  generalized-Gaussian shape parameters, and `shared_components()` the components
+  merged across models by `share_comps`. The same accessors are added to
+  `AMICA`/`AMICATorchNG` (phase 3, #142).
 
 ## 0.2.2
 

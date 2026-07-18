@@ -86,4 +86,27 @@ data-space center into `pca_mean_`, so `to_mne_ica(model_idx=h).get_sources(raw)
 reproduces `AMICA.transform(X, model_idx=h)` (with `X` the picked channel array)
 for every model, not just the first.
 
+## Inspecting pamica-specific metadata
+
+An `mne.preprocessing.ICA` has no field for AMICA's adaptive source densities or
+component sharing, so rather than drop them, the wrapper exposes them directly:
+
+```python
+from pamica.mne_compat import AMICAICA, PDFTYPE_NAMES
+
+ica = AMICAICA(n_models=2, random_state=42).fit(raw, max_iter=100)
+
+families = ica.get_pdftype(model_idx=0)        # (n_components,) codes 0-4
+names = [PDFTYPE_NAMES[c] for c in families]    # e.g. "generalized_gaussian"
+rho = ica.get_rho(model_idx=0)                  # (n_mix, n_components) GG shape
+shared = ica.shared_components()                # [(model, comp), ...] groups
+```
+
+`get_pdftype` returns each component's density family (0 generalized Gaussian,
+1 super-Gaussian cosh, 2 Gaussian, 3 logistic, 4 sub-Gaussian cosh; they differ
+per component only under the adaptive switcher `pdftype=1`). `get_rho` is the
+generalized-Gaussian shape (meaningful for `pdftype=0`). `shared_components`
+lists components merged across models by `share_comps` (empty otherwise). The
+same three accessors exist on the scikit-learn-style [`AMICA`](amica.md).
+
 ::: pamica.mne_compat.AMICAICA
