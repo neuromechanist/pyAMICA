@@ -2070,6 +2070,68 @@ class AMICATorchNG:
         return pairwise_mi(self.transform(X, model_idx=model_idx), nbins)
 
     # ------------------------------------------------------------------
+    # Multi-model posterior (issue #141)
+    # ------------------------------------------------------------------
+    def model_loglik(self, X: np.ndarray) -> np.ndarray:
+        """Per-model, per-sample log-likelihood ``Lht`` on (new) data.
+
+        For each model ``h`` and sample ``t`` this is the joint log-likelihood
+        ``log(gm[h]) + log|det W_h| + sldet + sum_i log p_h(s_i)`` (Fortran's
+        ``Lht``/``modloglik``), evaluated on arbitrary raw data via the STORED
+        sphere/mean -- never re-preprocessing, which would overwrite them. The
+        per-sample posterior over models (model dominance) is
+        ``softmax(Lht, axis=0)``; see :meth:`model_probability`.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+
+        Returns
+        -------
+        Lht : np.ndarray of shape (n_models, n_samples)
+
+        Raises
+        ------
+        RuntimeError
+            If the model is unfitted.
+        """
+        if self.sphere is None or self.mean is None or self.W is None:
+            raise RuntimeError(
+                "AMICATorchNG.model_loglik() requires a fitted model; call fit() first."
+            )
+        X_t = torch.from_numpy(np.ascontiguousarray(X)).to(self.device, self.dtype)
+        X_t = self.sphere @ (X_t - self.mean)
+        n_samples = X_t.shape[1]
+        Lht = np.zeros((self.n_models, n_samples))
+        for start in range(0, n_samples, self.block_size):
+            end = min(start + self.block_size, n_samples)
+            logV, *_ = self._forward(X_t[:, start:end])
+            Lht[:, start:end] = logV.T.detach().cpu().numpy()
+        return Lht
+
+    def model_probability(self, X: np.ndarray) -> np.ndarray:
+        """Per-sample posterior probability of each model (model dominance).
+
+        The column-wise ``softmax`` over models of :meth:`model_loglik`, i.e.
+        ``P(model h | x_t)``; each column sums to 1. For a single model this is
+        all ones.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+
+        Returns
+        -------
+        prob : np.ndarray of shape (n_models, n_samples)
+        """
+        Lht = self.model_loglik(X)
+        Lht = Lht - Lht.max(axis=0, keepdims=True)
+        ex = np.exp(Lht)
+        return ex / ex.sum(axis=0, keepdims=True)
+
+    # ------------------------------------------------------------------
     # EEGLAB drop-in output (issue #92)
     # ------------------------------------------------------------------
     def variance_order(

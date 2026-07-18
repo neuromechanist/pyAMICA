@@ -419,6 +419,49 @@ class AMICA:
 
         return self.model_.pmi(X, model_idx=model_idx, nbins=nbins)
 
+    def model_loglik(self, X: np.ndarray) -> np.ndarray:
+        """Per-model, per-sample log-likelihood ``Lht`` on ``X`` (issue #141).
+
+        Delegates to :meth:`AMICATorchNG.model_loglik`. For a multi-model fit
+        this is the joint log-likelihood of each model at each sample, from
+        which the per-sample model posterior (dominance) is
+        ``softmax(Lht, axis=0)``; see :meth:`model_probability`.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+
+        Returns
+        -------
+        Lht : np.ndarray of shape (n_models, n_samples)
+        """
+        self._check_usable("compute the model log-likelihood")
+        assert self.model_ is not None
+
+        return self.model_.model_loglik(X)
+
+    def model_probability(self, X: np.ndarray) -> np.ndarray:
+        """Per-sample posterior probability of each model (issue #141).
+
+        Delegates to :meth:`AMICATorchNG.model_probability`: the column-wise
+        ``softmax`` over models of :meth:`model_loglik`, i.e. ``P(model h |
+        x_t)``. Each column sums to 1; all ones for a single model.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+
+        Returns
+        -------
+        prob : np.ndarray of shape (n_models, n_samples)
+        """
+        self._check_usable("compute the model probability")
+        assert self.model_ is not None
+
+        return self.model_.model_probability(X)
+
     def variance_order(
         self, model_idx: int = 0, return_svar: bool = False
     ) -> Union[np.ndarray, tuple]:
