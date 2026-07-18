@@ -1,9 +1,9 @@
 # pAMICA: Adaptive Mixture ICA
 
-[![CI](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/sccn/pyAMICA/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/sccn/pyAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/sccn/pyAMICA)
+[![CI](https://github.com/sccn/pAMICA/actions/workflows/ci.yml/badge.svg)](https://github.com/sccn/pAMICA/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/sccn/pAMICA/branch/main/graph/badge.svg)](https://codecov.io/gh/sccn/pAMICA)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21312148.svg)](https://doi.org/10.5281/zenodo.21312148)
-[![Docs](https://img.shields.io/badge/docs-eeglab.org%2FpyAMICA-blue)](https://eeglab.org/pyAMICA/)
+[![Docs](https://img.shields.io/badge/docs-eeglab.org%2FpAMICA-blue)](https://eeglab.org/pAMICA/)
 
 Python (PyTorch) implementation of Adaptive Mixture Independent Component Analysis
 (AMICA) that reproduces the reference Fortran implementation within numerical
@@ -14,7 +14,7 @@ in EEGLAB.
 
 Single-model results match the Fortran reference (Hungarian-matched component correlation ~ 0.998
 on well-determined data, Newton disabled); see the
-[documentation](https://eeglab.org/pyAMICA/) for validation details and the
+[documentation](https://eeglab.org/pAMICA/) for validation details and the
 backend-selection guide.
 
 ## Overview
@@ -33,8 +33,8 @@ AMICA (Adaptive Mixture ICA) is an advanced blind source separation algorithm th
 The canonical environment is [uv](https://docs.astral.sh/uv/):
 
 ```bash
-git clone https://github.com/sccn/pyAMICA.git
-cd pyAMICA
+git clone https://github.com/sccn/pAMICA.git
+cd pAMICA
 uv sync                     # install dependencies into a managed venv
 uv run pytest               # optional: run the tests
 ```
@@ -95,7 +95,7 @@ The NumPy reference backend keeps a JSON-driven command-line interface:
 python -m pamica.numpy_impl.cli params.json --outdir results
 ```
 
-See the [documentation](https://eeglab.org/pyAMICA/) for the full API, the
+See the [documentation](https://eeglab.org/pAMICA/) for the full API, the
 parameter reference, and the backend-selection and validation guides.
 
 ## Citation

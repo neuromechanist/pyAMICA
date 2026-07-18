@@ -51,8 +51,8 @@ docs = [
 viz = ["mne>=1.6"]
 
 [project.urls]
-Homepage = "https://github.com/sccn/pyAMICA"
-Repository = "https://github.com/sccn/pyAMICA"
+Homepage = "https://github.com/sccn/pAMICA"
+Repository = "https://github.com/sccn/pAMICA"
 
 [tool.setuptools]
 # List subpackages explicitly so the wheel is deterministic across platforms

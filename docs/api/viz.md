@@ -15,7 +15,7 @@ mutating pyplot's global state.
   probable model at each timepoint.
 A per-component scalp-topography plot is not included yet: deriving source
 activations from a loaded `AmicaOutput` depends on an unsettled `W` convention
-question, tracked in [#159](https://github.com/sccn/pyAMICA/issues/159).
+question, tracked in [#159](https://github.com/sccn/pAMICA/issues/159).
 
 ```python
 from pamica import plot_pmi_heatmap, plot_model_probability

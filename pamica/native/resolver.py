@@ -17,7 +17,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-_REPO = os.environ.get("PAMICA_NATIVE_REPO", "sccn/pyAMICA")
+_REPO = os.environ.get("PAMICA_NATIVE_REPO", "sccn/pAMICA")
 _ENV_BINARY = "PAMICA_NATIVE_BINARY"
 _ENV_CACHE = "PAMICA_NATIVE_CACHE"
 
