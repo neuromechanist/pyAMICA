@@ -643,6 +643,12 @@ def test_unfitted_output_raises_not_fitted():
         model.mir(np.zeros((NW, 16)))
     with pytest.raises(ValueError, match="fitted"):
         model.pmi(np.zeros((NW, 16)))
+    with pytest.raises(ValueError, match="fitted"):
+        model.get_pdftype()
+    with pytest.raises(ValueError, match="fitted"):
+        model.get_rho()
+    with pytest.raises(ValueError, match="fitted"):
+        model.shared_components()
 
 
 def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
@@ -675,6 +681,9 @@ def test_degenerate_fit_refuses_output(real_data, tmp_path, caplog):
         lambda: model.variance_order(),
         lambda: model.mir(real_data[:, :512]),
         lambda: model.pmi(real_data[:, :512]),
+        lambda: model.get_pdftype(),
+        lambda: model.get_rho(),
+        lambda: model.shared_components(),
     ):
         with pytest.raises(RuntimeError, match="degenerate.*nan_ll"):
             action()

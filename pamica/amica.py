@@ -419,6 +419,105 @@ class AMICA:
 
         return self.model_.pmi(X, model_idx=model_idx, nbins=nbins)
 
+    def model_loglik(self, X: np.ndarray) -> np.ndarray:
+        """Per-model, per-sample log-likelihood ``Lht`` on ``X`` (issue #141).
+
+        Delegates to :meth:`AMICATorchNG.model_loglik`. For a multi-model fit
+        this is the joint log-likelihood of each model at each sample, from
+        which the per-sample model posterior (dominance) is
+        ``softmax(Lht, axis=0)``; see :meth:`model_probability`.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+
+        Returns
+        -------
+        Lht : np.ndarray of shape (n_models, n_samples)
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted, or if ``X`` is non-finite.
+        RuntimeError
+            If the fit ended degenerate (issue #50).
+        """
+        self._check_usable("compute the model log-likelihood")
+        assert self.model_ is not None
+
+        return self.model_.model_loglik(X)
+
+    def model_probability(self, X: np.ndarray) -> np.ndarray:
+        """Per-sample posterior probability of each model (issue #141).
+
+        Delegates to :meth:`AMICATorchNG.model_probability`: the column-wise
+        ``softmax`` over models of :meth:`model_loglik`, i.e. ``P(model h |
+        x_t)``. Each column sums to 1; all ones for a single model.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_channels, n_samples)
+            Raw (unpreprocessed) data.
+
+        Returns
+        -------
+        prob : np.ndarray of shape (n_models, n_samples)
+
+        Raises
+        ------
+        ValueError
+            If the model is unfitted, if ``X`` is non-finite, or if every model
+            underflows to ``-inf`` log-likelihood at some sample.
+        RuntimeError
+            If the fit ended degenerate (issue #50).
+        """
+        self._check_usable("compute the model probability")
+        assert self.model_ is not None
+
+        return self.model_.model_probability(X)
+
+    def get_pdftype(self, model_idx: int = 0) -> np.ndarray:
+        """Per-source density-family code for model ``model_idx`` (issue #142).
+
+        Delegates to :meth:`AMICATorchNG.get_pdftype`. One integer per source
+        component (0-4; see :data:`pamica.torch_impl.PDFTYPE_NAMES`).
+
+        Returns
+        -------
+        np.ndarray of int, shape (n_sources,)
+        """
+        self._check_usable("get the density family")
+        assert self.model_ is not None
+
+        return self.model_.get_pdftype(model_idx=model_idx)
+
+    def get_rho(self, model_idx: int = 0) -> np.ndarray:
+        """Generalized-Gaussian shape ``rho`` for model ``model_idx`` (issue #142).
+
+        Delegates to :meth:`AMICATorchNG.get_rho`.
+
+        Returns
+        -------
+        np.ndarray of float, shape (n_mix, n_sources)
+        """
+        self._check_usable("get rho")
+        assert self.model_ is not None
+
+        return self.model_.get_rho(model_idx=model_idx)
+
+    def shared_components(self) -> list:
+        """Components shared across models by ``share_comps`` (issue #142).
+
+        Delegates to :meth:`AMICATorchNG.shared_components`: one group of
+        ``(model_idx, source_idx)`` pairs per shared column; empty when nothing
+        is shared.
+        """
+        self._check_usable("get the shared components")
+        assert self.model_ is not None
+
+        return self.model_.shared_components()
+
     def variance_order(
         self, model_idx: int = 0, return_svar: bool = False
     ) -> Union[np.ndarray, tuple]:

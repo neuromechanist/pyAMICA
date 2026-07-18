@@ -1212,6 +1212,9 @@ docs = [
 mlx = [
     { name = "mlx" },
 ]
+mne = [
+    { name = "mne" },
+]
 viz = [
     { name = "mne" },
 ]
@@ -1234,6 +1237,7 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.26" },
     { name = "mlx", marker = "extra == 'mlx'", specifier = ">=0.32" },
+    { name = "mne", marker = "extra == 'mne'", specifier = ">=1.6" },
     { name = "mne", marker = "extra == 'viz'", specifier = ">=1.6" },
     { name = "numpy" },
     { name = "scipy" },
@@ -1241,7 +1245,7 @@ requires-dist = [
     { name = "torch", specifier = ">=2.12.1" },
     { name = "tqdm" },
 ]
-provides-extras = ["mlx", "docs", "viz"]
+provides-extras = ["mlx", "docs", "viz", "mne"]
 
 [package.metadata.requires-dev]
 dev = [

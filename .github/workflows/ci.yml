@@ -113,6 +113,28 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
 
+  test-mne:
+    name: Test MNE wrapper (optional [mne] extra)
+    needs: [lint, typecheck]
+    runs-on: ubuntu-latest
+    env:
+      PYTORCH_ENABLE_MPS_FALLBACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # mne IS pip-installable on Linux (unlike the Apple-only mlx extra), so the
+      # AMICAICA wrapper (issue #139) is exercised for real in CI here. Its tests
+      # live in pamica/tests/mne_tests and self-skip in the base `test` job
+      # (importorskip on mne); this job installs the [mne] extra so they run on
+      # the real sample EEG. pamica/mne_compat is omitted from coverage in
+      # pyproject (the base env has no mne), so no fail-under gate applies here.
+      - run: uv sync --extra mne
+      - name: pytest (mne wrapper, real sample EEG)
+        run: uv run pytest pamica/tests/mne_tests
+
   build:
     name: Build + import (Python ${{ matrix.python-version }})
     needs: [lint, typecheck]

@@ -3,6 +3,60 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pAMICA/releases).
 
+## 0.3.0
+
+MNE-Python compatibility layer (epic #139), additive: the scikit-learn-style
+`AMICA` API and the byte-identical EEGLAB I/O are unchanged.
+
+- `pamica.mne_compat.AMICAICA`, an MNE-facing wrapper that fits AMICA directly
+  from an `mne.io.Raw`/`Epochs` (`picks=...`, epochs concatenated along time like
+  MNE's own ICA) and interoperates with the standard MNE ICA consumer surface:
+  `get_sources`, `apply`, `get_components`, `plot_components` and `plot_sources`.
+  `to_mne_ica()`
+  returns a fully-populated `mne.preprocessing.ICA` (including `reject_`/
+  `n_samples_`, so `ICA.save` and `plot_properties` work), so the whole MNE ICA
+  ecosystem (component plotting, `find_bads_eog`/`_ecg`, exclusion workflows)
+  works on an AMICA decomposition. The export maps pamica's mean, symmetric-ZCA
+  sphere and unmixing into MNE's `pca_mean_`/`pca_components_`/`unmixing_matrix_`,
+  writing the sphere as `V diag(1/sqrt(e)) V^T` with `V` orthonormal so MNE's
+  scalp maps are in channel space; `to_mne_ica().get_sources(raw)` reproduces
+  `AMICA.transform(X)` to float64 precision, pinned on real sample EEG. `fit`
+  rejects PCA reduction (`pcakeep`/`pcadb`, which leaves the sphere rank-deficient
+  and the export invalid) and non-finite input, and a degenerate fit is refused
+  by the consumer methods rather than emitting NaNs. MNE is an
+  optional extra (`pip install pamica[mne]`); `import pamica` never requires it,
+  and a dedicated CI job runs the wrapper tests with the extra installed (phase 1,
+  single-model, #140).
+- Multi-model exposure through the MNE wrapper: `AMICAICA(n_models=...)` fits a
+  mixture of ICA models, and since MNE's `ICA` represents only one unmixing,
+  each model is exported as its own single-model `mne.preprocessing.ICA` via
+  `to_mne_ica(model_idx=...)` (and the `model_idx` argument on `get_sources`/
+  `apply`/`get_components`/`plot_components`/`plot_sources`). The per-sample model
+  dominance MNE cannot represent is exposed directly: `get_model_probability(inst)`
+  returns `P(model | sample)` (`(n_models, n_samples)`, columns sum to 1) and
+  `plot_model_probability(inst)` draws the per-model probability plus best-model
+  log-likelihood over time. These build on a new public live accessor,
+  `AMICA.model_loglik`/`model_probability` (and the `AMICATorchNG` equivalents),
+  which score arbitrary data through the stored sphere/mean; the training-data
+  path (without `do_reject`) is pinned bit-for-bit against the E-step's own `Lht`. The per-model export
+  folds each model's data-space center `c` into `pca_mean_`, so the round trip
+  holds for the multi-model case too. `pamica.viz.plot_model_probability` now also
+  accepts a live `lht` array, not only a written `AmicaOutput` (phase 2, #141).
+- pamica-specific fitted metadata is inspectable through the MNE wrapper rather
+  than silently dropped by the `mne.preprocessing.ICA` export: `get_pdftype(model_idx=...)`
+  returns each component's source-density family code (0-4, named by
+  `pamica.mne_compat.PDFTYPE_NAMES`), `get_rho(model_idx=...)` the
+  generalized-Gaussian shape parameters, and `shared_components()` the components
+  merged across models by `share_comps`. The same accessors are added to
+  `AMICA`/`AMICATorchNG` (phase 3, #142).
+- Separation-quality metrics are available directly on an MNE object:
+  `AMICAICA.mir(inst, model_idx=...)` (Mutual Information Reduction, in nats) and
+  `AMICAICA.pmi(inst, model_idx=...)` (pairwise mutual information between the
+  fitted sources), so MNE-side users get the same metrics as EEGLAB-side users.
+  Both extract the fitted channels from the `Raw`/`Epochs` and delegate to
+  `AMICA.mir`/`pmi` (#133); the results match the array API exactly (phase 4,
+  #143).
+
 ## 0.2.2
 
 GitHub repository rename to pAMICA and a `__version__` fix.

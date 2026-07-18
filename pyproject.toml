@@ -49,6 +49,10 @@ docs = [
 # Visualization for the benchmark sweeps: MNE builds the scalp-map montage for
 # the IC topomaps and (issue #91) the distributed channel-subset positions.
 viz = ["mne>=1.6"]
+# MNE-Python compatibility layer (AMICAICA, issue #139). MNE is not a core
+# dependency, so install with `pip install pamica[mne]`; `import pamica` never
+# requires it (pamica.mne_compat is imported lazily, same pattern as mlx).
+mne = ["mne>=1.6"]
 
 [project.urls]
 Homepage = "https://github.com/sccn/pAMICA"
@@ -57,7 +61,7 @@ Repository = "https://github.com/sccn/pAMICA"
 [tool.setuptools]
 # List subpackages explicitly so the wheel is deterministic across platforms
 # (a bare ["pamica"] dropped torch_impl/ on some setuptools versions).
-packages = ["pamica", "pamica.numpy_impl", "pamica.torch_impl", "pamica.mlx_impl", "pamica.metrics", "pamica.native"]
+packages = ["pamica", "pamica.numpy_impl", "pamica.torch_impl", "pamica.mlx_impl", "pamica.metrics", "pamica.native", "pamica.mne_compat"]
 # numpy_impl/params.json is the NumPy backend's default parameter file, loaded at
 # runtime via importlib/__file__, so it must ship in the wheel.
 package-data = {"pamica" = ["data/*"], "pamica.numpy_impl" = ["params.json"]}
@@ -83,6 +87,10 @@ omit = [
     # GPU, so CI (ubuntu, no mlx) cannot exercise it and always measures 0%. It is
     # covered locally by tests/mlx_tests/ on Apple hardware (issue #76).
     "pamica/mlx_impl/*",
+    # Optional MNE compatibility layer (issue #139): imports mne, absent from the
+    # base test env, so the base coverage run always measures 0%. Exercised by
+    # the dedicated `test-mne` CI job (uv sync --extra mne) on real sample EEG.
+    "pamica/mne_compat/*",
 ]
 
 [tool.coverage.report]
