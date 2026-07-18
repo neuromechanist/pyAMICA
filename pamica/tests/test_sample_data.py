@@ -709,6 +709,33 @@ def test_check_convergence_ratchets_lrate_on_decrease():
     assert model.rholrate == pytest.approx(rholrate_before * model.rholratefact)
 
 
+def test_reinitialize_for_restart_resets_rho_ceiling():
+    """Issue #193: a mid-fit restart (non-finite LL, Fortran restartiter path)
+    resets the rho-rate ceiling to rholrate0, exactly like the lrate reset -- a
+    previously-ratcheted rholrate must not carry across the restart.
+    """
+    model = AMICA(num_models=1, num_mix=3, seed=0)
+    model.data_dim = 4
+    model.num_samples = 16
+    model.num_comps = 4
+    model.good_idx = None
+    model.num_good_samples = 16
+    model._initialize_parameters()
+
+    # Simulate a fit that ratcheted both ceilings, then hit a non-finite LL.
+    model.rholrate = model.rholrate0 * 0.25
+    model.lrate = model.lrate0 * 0.25
+    model.ll = [-3.0, -3.1]
+    model.nd = [0.5]
+
+    model._reinitialize_for_restart()
+
+    # Both ceilings restored to pristine; history cleared for a fresh judgment.
+    assert model.rholrate == model.rholrate0
+    assert model.lrate == model.lrate0
+    assert model.ll == []
+
+
 @pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
 def test_cli_subprocess_output_loadable(tmp_path):
     """The actual cli entrypoint writes loadmodout-readable output.
