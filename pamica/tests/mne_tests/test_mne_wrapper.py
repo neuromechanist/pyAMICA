@@ -153,7 +153,7 @@ def test_pca_components_orthonormal_and_variance_ordered(raw, fitted):
     """The eigenbasis ordering (invisible to the V-cancelling round trip) is real.
 
     get_sources/get_components reduce to W@sphere and inv(sphere)@inv(W) for ANY
-    orthonormal V, so they cannot see an eigenvector mis-ordering. Pin it here:
+    orthonormal V, so they cannot see a wrong eigenvector order. Pin it here:
     pca_components_ must be orthonormal and its rows ordered by descending data
     variance, with pca_explained_variance_ equal to that per-row variance.
     """
