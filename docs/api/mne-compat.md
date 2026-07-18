@@ -109,4 +109,17 @@ generalized-Gaussian shape (meaningful for `pdftype=0`). `shared_components`
 lists components merged across models by `share_comps` (empty otherwise). The
 same three accessors exist on the scikit-learn-style [`AMICA`](amica.md).
 
+## Separation-quality metrics
+
+The [MIR/PMI metrics](metrics.md) are available directly on an MNE object, so
+MNE-side users get the same separation-quality numbers as EEGLAB-side users:
+
+```python
+mir_nats, variance = ica.mir(raw, model_idx=0)   # mutual information reduced
+mi_matrix = ica.pmi(raw, model_idx=0)            # pairwise MI between sources
+```
+
+Both extract the fitted channels from the `Raw`/`Epochs` and delegate to
+`AMICA.mir`/`pmi`, reproducing the array API exactly.
+
 ::: pamica.mne_compat.AMICAICA

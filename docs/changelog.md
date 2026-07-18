@@ -49,6 +49,13 @@ MNE-Python compatibility layer (epic #139), additive: the scikit-learn-style
   generalized-Gaussian shape parameters, and `shared_components()` the components
   merged across models by `share_comps`. The same accessors are added to
   `AMICA`/`AMICATorchNG` (phase 3, #142).
+- Separation-quality metrics are available directly on an MNE object:
+  `AMICAICA.mir(inst, model_idx=...)` (Mutual Information Reduction, in nats) and
+  `AMICAICA.pmi(inst, model_idx=...)` (pairwise mutual information between the
+  fitted sources), so MNE-side users get the same metrics as EEGLAB-side users.
+  Both extract the fitted channels from the `Raw`/`Epochs` and delegate to
+  `AMICA.mir`/`pmi` (#133); the results match the array API exactly (phase 4,
+  #143).
 
 ## 0.2.2
 
