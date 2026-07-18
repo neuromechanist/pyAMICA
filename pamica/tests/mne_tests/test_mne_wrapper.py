@@ -465,3 +465,45 @@ def test_metadata_requires_fit():
         ica.get_pdftype()
     with pytest.raises(ValueError, match="must be fitted"):
         ica.shared_components()
+
+
+# --- separation-quality metrics (issue #143) --------------------------------
+def test_mir_matches_amica_per_model(raw, fitted_2m):
+    x = _picked_data(raw)
+    for h in range(2):
+        np.testing.assert_allclose(
+            fitted_2m.mir(raw, model_idx=h), fitted_2m.amica_.mir(x, model_idx=h)
+        )
+
+
+def test_pmi_matches_amica_per_model(raw, fitted_2m):
+    x = _picked_data(raw)
+    for h in range(2):
+        pmi_w = fitted_2m.pmi(raw, model_idx=h)
+        assert pmi_w.shape == (fitted_2m.n_components_, fitted_2m.n_components_)
+        np.testing.assert_allclose(pmi_w, fitted_2m.amica_.pmi(x, model_idx=h))
+
+
+def test_mir_pmi_on_epochs(raw, fitted_2m):
+    epochs = mne.make_fixed_length_epochs(raw, duration=2.0, preload=True)
+    x = np.hstack(epochs.copy().pick("data", exclude="bads").get_data())
+    np.testing.assert_allclose(fitted_2m.mir(epochs), fitted_2m.amica_.mir(x))
+    assert fitted_2m.pmi(epochs).shape == (
+        fitted_2m.n_components_,
+        fitted_2m.n_components_,
+    )
+
+
+def test_mir_pmi_respect_model_idx_bounds(fitted_2m, raw):
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.mir(raw, model_idx=2)
+    with pytest.raises(ValueError, match="out of range"):
+        fitted_2m.pmi(raw, model_idx=-1)
+
+
+def test_mir_pmi_require_fit(raw):
+    ica = AMICAICA()
+    with pytest.raises(ValueError, match="must be fitted"):
+        ica.mir(raw)
+    with pytest.raises(ValueError, match="must be fitted"):
+        ica.pmi(raw)
