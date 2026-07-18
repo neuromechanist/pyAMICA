@@ -1,6 +1,6 @@
 cff-version: 1.3.0
 message: "If you use this software, please cite it using the metadata below."
-title: "pamica: a Python implementation of Adaptive Mixture ICA"
+title: "pAMICA: a Python implementation of Adaptive Mixture ICA"
 abstract: >-
   pamica is a Python (PyTorch) implementation of Adaptive Mixture Independent
   Component Analysis (AMICA) that reproduces the reference Fortran
