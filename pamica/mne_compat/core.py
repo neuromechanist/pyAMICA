@@ -1,4 +1,4 @@
-"""MNE-Python-facing wrapper over pamica's AMICA backend (issue #139, phase 1).
+"""MNE-Python-facing wrapper over pamica's AMICA backend (issue #139).
 
 :class:`AMICAICA` fits AMICA directly from an :class:`mne.io.Raw` /
 :class:`mne.Epochs` and exposes the standard MNE ICA consumer surface
@@ -11,7 +11,12 @@ performs the export/plot/back-projection machinery unchanged.
 Multi-model AMICA (``n_models > 1``) is exposed per-model (each model is its own
 single-model MNE ICA), plus a per-sample model-dominance accessor
 (:meth:`AMICAICA.get_model_probability`) that MNE's ``ICA`` cannot represent
-(issue #141). PCA reduction is unsupported (full-rank whitening only).
+(issue #141). The pamica-specific fitted metadata MNE cannot hold -- source-
+density family, GG shape, component sharing -- stays inspectable via
+:meth:`AMICAICA.get_pdftype` / :meth:`get_rho` / :meth:`shared_components`
+(issue #142), and the separation-quality metrics :meth:`AMICAICA.mir` /
+:meth:`pmi` run directly on an MNE object (issue #143). PCA reduction is
+unsupported (full-rank whitening only).
 """
 
 from typing import Optional, Union
