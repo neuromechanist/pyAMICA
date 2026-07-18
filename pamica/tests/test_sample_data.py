@@ -665,9 +665,14 @@ def test_restart_gives_up_after_maxrestarts(tmp_path):
 
 def test_check_convergence_ratchets_lrate_on_decrease():
     """After max_decs consecutive LL decreases, _check_convergence lowers the
-    learning-rate ceiling (lrate0, and newtrate under Newton) and resets numdecs
-    -- it does NOT stop -- matching Fortran's ratchet (#41). Drives the
-    convergence handler directly with a decreasing LL history.
+    learning-rate ceilings (lrate0; the rho rate once iter>newt_start; newtrate
+    under Newton) and resets numdecs -- it does NOT stop -- matching Fortran's
+    ratchet (#41). Drives the convergence handler directly with a decreasing LL
+    history.
+
+    Also pins the #193 fix: the rho rate is a maxdecs-ratcheted CEILING, NOT a
+    per-decrease monotone decay. rholrate must stay untouched on a decrease below
+    max_decs and only ratchet when numdecs hits max_decs.
     """
     model = AMICA(
         num_models=1,
@@ -679,16 +684,19 @@ def test_check_convergence_ratchets_lrate_on_decrease():
         use_grad_norm=False,
         use_min_dll=False,
     )
-    model.iter = 100  # past newt_start, so the Newton-rate ratchet applies
+    model.iter = 100  # past newt_start, so the Newton/rho-rate ratchets apply
     model.nd = [1.0]  # gradient norm well above min_grad_norm (no floor stop)
     lrate0_before = model.lrate0
     newtrate_before = model.newtrate
+    rholrate_before = model.rholrate
 
-    # First decrease: numdecs -> 1 (below max_decs), so just reduce lrate.
+    # First decrease: numdecs -> 1 (below max_decs), so just reduce lrate. The rho
+    # ceiling must NOT move here -- pre-#193 it decayed on every decrease.
     model.ll = [-3.0, -3.1]
     conv, _, numdecs, numincs = model._check_convergence(0, 0)
     assert conv is False
     assert numdecs == 1
+    assert model.rholrate == rholrate_before
 
     # Second consecutive decrease: numdecs hits max_decs=2 -> ratchet ceilings,
     # reset numdecs, and CONTINUE (not converged).
@@ -698,6 +706,7 @@ def test_check_convergence_ratchets_lrate_on_decrease():
     assert numdecs == 0
     assert model.lrate0 == lrate0_before * 0.5
     assert model.newtrate == newtrate_before * 0.5
+    assert model.rholrate == pytest.approx(rholrate_before * model.rholratefact)
 
 
 @pytest.mark.skipif(not op.exists(eeglab_data_file), reason="sample data missing")
