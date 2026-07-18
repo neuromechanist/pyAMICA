@@ -81,11 +81,23 @@ def load_sample_data() -> Tuple[np.ndarray, Dict]:
 
 
 def run_fortran_amica(
-    data: np.ndarray, params: Dict, output_dir: Path, seed: int
+    data: np.ndarray,
+    params: Dict,
+    output_dir: Path,
+    seed: int,
+    binary_path: Optional[Path] = None,
 ) -> Optional[Dict]:
-    """Run Fortran AMICA binary and collect results."""
-    # Use the macOS binary in sample_data directory
-    binary_path = Path("pamica/sample_data/amica15mac")
+    """Run the AMICA reference binary and collect results.
+
+    ``binary_path`` selects which reference binary to run. It defaults to the
+    bundled macOS x86_64 fixture (``pamica/sample_data/amica15mac``); pass the
+    cross-platform native-engine binary (see ``--native-engine`` in ``main``) to
+    run the real Fortran reference on Linux/Windows/Apple-Silicon instead.
+    """
+    if binary_path is None:
+        binary_path = Path("pamica/sample_data/amica15mac")
+    # Resolve to an absolute path now, before the run chdirs into fortran_dir.
+    binary_path = Path(binary_path).resolve()
     if not binary_path.exists():
         print(
             f"Warning: Fortran binary not found at {binary_path}. Skipping Fortran comparison."
@@ -138,7 +150,7 @@ def run_fortran_amica(
         os.chdir(fortran_dir)
 
         result = subprocess.run(
-            [str(original_dir / binary_path), "input.param"],
+            [str(binary_path), "input.param"],
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout
@@ -494,6 +506,21 @@ def main():
     parser.add_argument(
         "--skip-fortran", action="store_true", help="Skip Fortran comparison"
     )
+    parser.add_argument(
+        "--native-engine",
+        action="store_true",
+        help="Run the reference through pamica.native: resolve the binary via "
+        "PAMICA_NATIVE_BINARY or the cached/downloaded cross-platform release "
+        "binary, instead of the bundled macOS-only sample_data/amica15mac. This "
+        "is how to run the real Fortran reference on Linux/Windows/Apple Silicon.",
+    )
+    parser.add_argument(
+        "--fortran-binary",
+        type=str,
+        default=None,
+        help="Explicit path to the AMICA reference binary (overrides the bundled "
+        "fixture; ignored when --native-engine is given).",
+    )
 
     args = parser.parse_args()
 
@@ -516,10 +543,30 @@ def main():
         # Update parameters
         params["max_iter"] = args.max_iter
 
+        # Resolve which reference binary to run: the bundled macOS fixture by
+        # default, or the cross-platform native-engine binary on request.
+        fortran_binary = None
+        if not args.skip_fortran and args.native_engine:
+            from pamica.native import resolver
+
+            try:
+                fortran_binary = resolver.resolve()
+                print(f"Reference binary (native engine): {fortran_binary}")
+            except Exception as e:
+                print(
+                    f"Could not resolve a native AMICA binary ({e}); "
+                    "skipping Fortran comparison."
+                )
+                args.skip_fortran = True
+        elif args.fortran_binary:
+            fortran_binary = Path(args.fortran_binary)
+
         # Run Fortran implementation
         fortran_results = None
         if not args.skip_fortran:
-            fortran_results = run_fortran_amica(data, params, output_dir, args.seed)
+            fortran_results = run_fortran_amica(
+                data, params, output_dir, args.seed, binary_path=fortran_binary
+            )
 
         # Run PyTorch implementation
         pytorch_results = run_pytorch_amica(data, params, output_dir, args.seed)

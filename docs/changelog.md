@@ -13,6 +13,13 @@ Release notes are also published on the
   **pAMICA**; the package, import and `pip install pamica` stay lowercase
   `pamica` (pip name matching is case-insensitive, so `pip install pAmica`
   resolves to the same project) (#177).
+- Native engine docs and validation wiring: a dedicated `AMICANative`
+  documentation page (usage, binary cache/SHA-256 verification,
+  `PAMICA_NATIVE_BINARY`, the `python -m pamica.native` installer, and the
+  offline `native/build.sh` fallback), and `validate_implementations.py` gains
+  `--native-engine`/`--fortran-binary` so the real Fortran reference runs as a
+  backend on any platform, not only through the bundled macOS `amica15mac`
+  fixture (#147 phase 5, #179).
 - Native Fortran run engine (`AMICANative`), the fourth backend alongside NumPy,
   PyTorch and MLX. It runs the AMICA Fortran reference itself and returns an
   `AmicaOutput` with the usual accessors, so it is the parity oracle the Python
