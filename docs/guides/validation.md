@@ -55,6 +55,17 @@ distance:
 The fixed source-density families are bit-exact against the literal Fortran score/derivative expressions (~1e-15),
 and the backend converges to the binary's solution within ~0.005 log-likelihood on either dataset.
 
+### Newton-enabled runs and the initialization basin
+
+The comparison above disables Newton (`do_newton=0`) to isolate the algorithm from its starting point.
+With Newton enabled (`do_newton=1`, the default), agreement at the full 2000-iteration budget depends on the initialization, not on any dynamics difference between the backends.
+From an *identical* initialization (the same starting mixing matrix and densities fed to both), `pamica` and Fortran converge to the same solution:
+mean Hungarian-matched correlation ~0.997 with no collapsed components on the full 70-channel recording, the residual being floating-point summation-order noise between two implementations rather than an algorithmic gap.
+From *independent* random initializations the picture differs, because the two backends' random number generators do not share a state, so a fixed seed does not map to a matched start.
+At the long Newton budget this occasionally settles a few of the weakest, under-determined components into a different but equally likely (equal- or higher-likelihood) optimum.
+Fortran is more robust to its own random inits (run-to-run self-consistency ~0.9997) than `pamica` is, so the effect appears as a `pamica`-specific spread on those components, not a divergence from the reference.
+It is therefore an initialization-basin property (like the non-identifiable multi-model case below), not a parity defect; see issue #145 and the optional init-robustness follow-up #198.
+
 ### Source-density families are bit-exact
 
 AMICA models each source with one of the reference's five `pdftype` density families.
