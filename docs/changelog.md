@@ -3,6 +3,29 @@
 Release notes are also published on the
 [GitHub releases page](https://github.com/sccn/pAMICA/releases).
 
+## 0.3.1
+
+Rho-rate schedule fixes across all backends and a reproducible-seed option in the
+native binary build.
+
+- Fixed the rho learning-rate (`rholrate`) schedule to match Fortran
+  `amica15.f90`: it is a `maxdecs`-ratcheted ceiling (reset to `rholrate0` each
+  iteration/fit, tightened only after `maxdecs` persistent log-likelihood
+  decreases, gated on `iter > newt_start`), not a per-decrease monotone decay.
+  The previous decay collapsed the rho rate toward ~1e-5 and froze the source
+  shape. Fixed in the PyTorch and NumPy backends (#194, issue #193) and the MLX
+  backend (#197, issue #195).
+- Native binary build: reproducible `seed` option. A `seed <int>` line in
+  `input.param` now seeds the random initialization deterministically (per-rank,
+  no system clock), so a native run is reproducible run to run; without it the
+  default stays clock-random. Also makes `random_seed` portable across compilers
+  via `random_seed(SIZE=...)`. Adopted from sccn/amica PR #54; the released
+  binaries (rebuilt by CI) carry the option (#196).
+- Documented the #145 investigation (Newton-vs-Fortran weak-component divergence
+  at long budgets): resolved as init-basin sensitivity on under-determined
+  components, not a dynamics bug (identical init gives matching results); the
+  optional init-robustness enhancement is tracked in #198.
+
 ## 0.3.0
 
 MNE-Python compatibility layer (epic #139), additive: the scikit-learn-style
