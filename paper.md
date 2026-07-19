@@ -75,15 +75,16 @@ logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture o
 and the Amari distance [@amari1996new], a standard unmixing-matrix comparison metric that needs no assignment step since it is permutation- and scale-invariant by construction.
 Both implementations were run for AMICA's usual 2000 iterations with Newton off (`do_newton=0`) and otherwise-default parameters
 (two separate configuration files drive them, JSON for `pamica` and Fortran's own text format, with a transcribed subset of settings; a shared-format reader is planned).
-The single-model headline (Table 1) uses an external recording (OpenNeuro ds002718, 70 channels, $k\approx153$), well past the ~60 threshold where cross-backend agreement plateaus (documentation);
-the bundled 32-channel sample used below sits at that threshold's boundary ($k\approx30$) and gives a consistent Amari distance.
+Newton is disabled here to isolate the algorithm from initialization: with Newton on, independent random seeds (the backends share no random state) can settle a few under-determined components in different but equally likely optima, whereas from a matched initialization the two agree (documentation).
+The single-model headline (Table 1) uses an external recording (OpenNeuro ds002718, 70 channels, $k\approx153$), well past the ~60 threshold where cross-backend agreement plateaus;
+the bundled 32-channel sample below ($k\approx30$) gives a consistent Amari distance.
 Score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions on the bundled sample.
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar for the multi-model case;
 it is instead assessed by whether the two implementations sample a similar distribution of solutions, across ensembles of 20 bundled-sample runs each (\autoref{fig:ensemble}).
-A run-level permutation test, which permutes the 40 runs as intact units to respect the dependence among pairwise values, finds no evidence that cross-implementation
+A run-level permutation test (the 40 runs permuted as intact units) finds no evidence that cross-implementation
 agreement is worse than Fortran's own run-to-run agreement, so single-run values reflect intrinsic estimator spread rather than a shortfall.
 The multi-model log-likelihood distributions still differ slightly at a matched 100-iteration budget
-(`pamica` reaches Fortran's mean with about twice as many iterations), so full-likelihood similarity is not yet claimed. Per-run detail for both metrics is in the documentation.
+(`pamica` reaches Fortran's mean with about twice as many iterations), so full-likelihood similarity is not yet claimed.
 
 | Regime | Metric | Result (mean; correlation / Amari distance) |
 |---|---|---|
@@ -108,7 +109,7 @@ On Apple Silicon the MLX backend is the fastest option and is flat with channel 
 about eight times faster than double-precision multithreaded CPU; PyTorch-MPS is not a win (at or worse than the CPU).
 On NVIDIA hardware double-precision CUDA is the reproducible path and is overhead-bound at EEG scale,
 so single precision gives it little additional speedup (Table 2). Native Fortran itself scales with CPU cores, unlike the CPU backends above:
-with enough cores pinned it beats the CUDA GPU on the workstation (Table 2), though only by dedicating most cores of a larger, hotter host than a laptop GPU;
+with enough cores pinned it beats the CUDA GPU on the workstation (Table 2), though only on a larger, hotter host;
 it does not catch Apple's MLX on laptop hardware.
 A data-size sweep further shows cross-backend component agreement rising with frames per channel and plateauing near 0.98 once the decomposition is well-determined,
 where two independent double-precision implementations (native Fortran and PyTorch-CUDA) agree at a mean of 0.995;
@@ -128,21 +129,20 @@ single-precision runs agree with double precision to four to five significant di
 `pdftype`=0, `block_size`=512; warm, minimum of repeated runs).
 CPU, MPS, and MLX on Apple Silicon; CUDA on a separate NVIDIA RTX 4090;
 CUDA float32 is comparable (~36 ms).
-The two native-Fortran rows are from a separate core-count sweep (documentation) on the same two machines, at each backend's throughput plateau;
-the other CPU rows above use the platform default thread count, so they are not core-matched to Fortran.
+The two native-Fortran rows are from a separate core-count sweep (documentation) at each backend's plateau;
+the other CPU rows use platform-default threads, so they are not core-matched to Fortran.
 Unlike the correctness comparison, this benchmark uses external data (OpenNeuro ds002718, one subject so far) and specific GPU hardware.
 
 The correctness harness compares `pamica` against Fortran with two metrics, Hungarian-matched component correlation and Amari distance, and never uses synthetic data;
 the multi-model and score-function checks need no external download (bundled sample only).
-The full per-channel and multi-model performance tables, the per-run Amari-distance detail,
-and the data-size sweep, along with the step-by-step commands to reproduce every number here,
-are in the documentation (<https://eeglab.org/pAMICA/guides/validation/>).
+The full performance tables, per-run Amari-distance detail, data-size sweep,
+and step-by-step reproduction commands are in the documentation (<https://eeglab.org/pAMICA/guides/validation/>).
 
 # State of the field
 
-`pamica` complements rather than replaces EEGLAB [@delorme2004eeglab] and its Fortran AMICA plugin: it reads and writes the same output format, so results move between the two, while adding GPU support and a Python API.
+`pamica` complements rather than replaces EEGLAB [@delorme2004eeglab] and its Fortran AMICA plugin: it reads and writes the same output format, so results move between the two, adds GPU support and a Python API, and can run the reference Fortran itself from Python through a bundled dependency-free native build (no MKL or MPI runtime).
 Two other Python AMICA reimplementations have appeared [@esmaeili2025amica; @herforth2026pyamica],
-both of which provide MNE-Python-compatible objects; `pamica` instead offers a scikit-learn-style array API and byte-identical EEGLAB I/O, and does not yet ship an MNE-Python wrapper.
+both of which provide MNE-Python-compatible objects; `pamica` leads with a scikit-learn-style array API and byte-identical EEGLAB I/O, and also ships an MNE-Python wrapper (an optional extra).
 What distinguishes `pamica` is the rigor and scope of its Fortran-parity validation,
 beyond what either alternative publishes: source-density score functions exact to floating-point resolution ($\sim\!10^{-15}$),
 single-model component correlation and Amari distance against the reference, and a distributional-similarity framework for the non-identifiable multi-model case,
