@@ -372,3 +372,19 @@ def test_rholrate_ceiling_ratchet_gated_on_newt_start():
     assert n_dec >= m.maxdecs, "config did not exercise the decrease path"
     # Gated off for the whole run: the rho ceiling never moved.
     assert m.rholrate == m.rholrate0
+
+
+def test_rholrate_ceiling_resets_at_fit_start():
+    """Issue #195: the rho-rate ceiling is reset to rholrate0 at fit start
+    (``_initialize_parameters``, the same call ``fit`` makes), so a previously
+    ratcheted ``rholrate`` does not carry across a re-fit/restart -- parity with
+    the numpy backend's ``test_reinitialize_for_restart_resets_rho_ceiling``."""
+    from pamica.mlx_impl import AMICAMLXNG
+
+    m = AMICAMLXNG(n_channels=NW, n_mix=NMIX, seed=SEED)
+    # Simulate a prior fit that ratcheted both ceilings down at maxdecs.
+    m.rholrate = m.rholrate0 * 0.25
+    m.lrate_cap = m.lrate0 * 0.25
+    m._initialize_parameters()  # fit-start reset
+    assert m.rholrate == m.rholrate0
+    assert m.lrate_cap == m.lrate0

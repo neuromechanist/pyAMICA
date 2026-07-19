@@ -93,7 +93,7 @@ class AMICAMLXNG:
         lratefact: float = 0.5,
         maxdecs: int = 5,
         newt_ramp: int = 10,
-        newt_start: int = 50,
+        newt_start: int = 20,
         do_newton: bool = False,
         rho0: float = 1.5,
         minrho: float = 1.0,
