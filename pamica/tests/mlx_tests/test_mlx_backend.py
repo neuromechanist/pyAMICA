@@ -310,3 +310,65 @@ def test_multimodel_dead_model_keeps_prior_c():
     m.c = mx.array(np.stack([np.zeros(NW, np.float32), marker], axis=1))
     m._update_parameters(acc, xt.shape[1])
     assert np.allclose(np.array(m.c)[:, 1], marker)  # dead model kept its prior c
+
+
+def test_rholrate_ratchets_at_maxdecs_not_per_decrease():
+    """Issue #195 (mirrors #193/#194 for torch/numpy): the MLX rho learning rate is
+    a maxdecs-ratcheted CEILING, not a per-LL-decrease monotone decay.
+
+    Fortran resets ``rholrate = rholrate0`` each iteration before the rho update
+    (amica15.f90:1788) and only tightens the ceiling at ``maxdecs``
+    (amica15.f90:1050, gated on ``iter > newt_start``). MLX previously decayed
+    ``rholrate`` on EVERY LL decrease with no reset, collapsing it toward ~1e-5
+    within a few hundred iterations and freezing rho at a stale shape.
+
+    An aggressive-lrate natural-gradient run on the real sample overshoots and
+    triggers several LL decreases; with ``newt_start=0`` (gate always open) the
+    ceiling ratchets once per ``maxdecs`` decreases, NOT once per decrease.
+    """
+    from pamica.mlx_impl import AMICAMLXNG
+
+    data = _load_real_data()
+    m = AMICAMLXNG(
+        n_channels=NW, n_mix=NMIX, seed=SEED, block_size=256,
+        lrate=0.5, lratefact=0.5, rholrate=0.05, rholratefact=0.5,
+        maxdecs=3, newt_start=0,
+    )  # fmt: skip
+    m.fit(data, max_iter=400, verbose=False)
+
+    ll = m.ll_history
+    n_dec = sum(1 for i in range(1, len(ll)) if ll[i] < ll[i - 1])
+    assert m.lrate > m.minlrate, "run hit the lrate floor; use a gentler config"
+    assert n_dec >= m.maxdecs, "too few LL decreases to exercise the ratchet"
+
+    # The ceiling ratcheted a whole number of times at the maxdecs cadence
+    # (rholrate0 * rholratefact**k), far fewer steps than one-per-decrease.
+    assert m.rholrate < m.rholrate0
+    k = round(np.log(m.rholrate / m.rholrate0) / np.log(m.rholratefact))
+    assert m.rholrate == pytest.approx(m.rholrate0 * m.rholratefact**k)
+    assert k <= n_dec // m.maxdecs + 1
+    # Guard against a regression to the old per-decrease decay (orders below).
+    buggy = m.rholrate0 * (m.rholratefact**n_dec)
+    assert m.rholrate > buggy * 10
+
+
+def test_rholrate_ceiling_ratchet_gated_on_newt_start():
+    """The rholrate ceiling ratchet is gated on ``iter > newt_start`` (Fortran
+    amica15.f90:1049, independent of do_newton). With ``newt_start`` past the whole
+    budget, LL decreases must NOT tighten the rho ceiling -- it stays at
+    ``rholrate0`` exactly (only ``lrate_cap`` ratchets, which is not gated)."""
+    from pamica.mlx_impl import AMICAMLXNG
+
+    data = _load_real_data()
+    m = AMICAMLXNG(
+        n_channels=NW, n_mix=NMIX, seed=SEED, block_size=256,
+        lrate=0.5, lratefact=0.5, rholrate=0.05, rholratefact=0.5,
+        maxdecs=3, newt_start=100_000,
+    )  # fmt: skip
+    m.fit(data, max_iter=400, verbose=False)
+
+    ll = m.ll_history
+    n_dec = sum(1 for i in range(1, len(ll)) if ll[i] < ll[i - 1])
+    assert n_dec >= m.maxdecs, "config did not exercise the decrease path"
+    # Gated off for the whole run: the rho ceiling never moved.
+    assert m.rholrate == m.rholrate0
