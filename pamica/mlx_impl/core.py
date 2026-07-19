@@ -93,6 +93,7 @@ class AMICAMLXNG:
         lratefact: float = 0.5,
         maxdecs: int = 5,
         newt_ramp: int = 10,
+        newt_start: int = 20,
         do_newton: bool = False,
         rho0: float = 1.5,
         minrho: float = 1.0,
@@ -134,6 +135,11 @@ class AMICAMLXNG:
         self.lratefact = lratefact
         self.maxdecs = maxdecs
         self.newt_ramp = newt_ramp
+        # Schedule threshold for the rholrate ceiling ratchet (Fortran
+        # amica15.f90:1049 gates it on iter > newt_start, independent of
+        # do_newton). MLX does no Newton, but keeps newt_start as this gate so the
+        # rho-rate schedule matches Fortran/torch.
+        self.newt_start = newt_start
         self.do_newton = False
 
         self.rho0 = rho0
@@ -602,7 +608,18 @@ class AMICAMLXNG:
             self.ll_history.append(ll)
 
             # Learning-rate control (Fortran amica17.f90:1062-1108): anneal on an
-            # LL decrease; ratchet the ceiling after maxdecs persistent decreases.
+            # LL decrease; ratchet the ceilings after maxdecs persistent decreases.
+            #
+            # rholrate is a maxdecs-ratcheted CEILING, not a per-decrease-annealed
+            # working rate. Fortran resets rholrate=rholrate0 every iteration before
+            # the rho update (amica15.f90:1788) and only tightens the rholrate0
+            # ceiling at maxdecs (amica15.f90:1050, gated on iter > newt_start), so
+            # its per-decrease rholrate*=rholratefact (:1045) never reaches the rho
+            # update. rho has no ramp, so self.rholrate carries that ceiling directly
+            # (reset to rholrate0 at fit start, nothing re-inflates it) and must
+            # ratchet ONLY at maxdecs. The previous per-decrease decay collapsed the
+            # rho rate to ~1e-5 within a few hundred iterations and froze rho at a
+            # stale shape (issue #195, mirroring the torch/numpy fix in #193/#194).
             if len(self.ll_history) > 1 and ll < self.ll_history[-2]:
                 if self.lrate <= self.minlrate:
                     logger.warning(
@@ -613,10 +630,11 @@ class AMICAMLXNG:
                     self.stop_reason = "lrate_floor"
                     break
                 self.lrate *= self.lratefact
-                self.rholrate *= self.rholratefact
                 numdecs += 1
                 if numdecs >= self.maxdecs:
                     self.lrate_cap *= self.lratefact
+                    if it > self.newt_start:
+                        self.rholrate *= self.rholratefact
                     numdecs = 0
 
         if self.stop_reason in self._DEGENERATE_STOP_REASONS:
