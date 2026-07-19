@@ -12,7 +12,7 @@ This is epic #165 phase 1. It extends sccn/amica PR #53's vendor-neutral recipe:
 | Intel MKL | `-cpp` skips the `#ifdef MKL` branches | (build flags) |
 | AMD LibM (`vrda_exp`/`vrda_log`) | libm exp/log loops | `vmath_shim.c` |
 | Open MPI runtime | single-rank MPI shim | `mpi_single.f90` + `mpi_single.c` |
-| ifort-only `random_seed` | portable full-size seed array (PR #53) | `patch_sources.py` |
+| ifort-only `random_seed` | portable full-size seed array + reproducible `seed` param (PR #54, supersedes #53) | `patch_sources.py` |
 
 LAPACK/BLAS remains, satisfied by Apple's Accelerate framework on macOS (a system
 framework, always present) and static reference LAPACK/OpenBLAS on Linux/Windows.

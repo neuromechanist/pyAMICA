@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build a dependency-free native amica15 (epic #165, phase 1).
 #
-# Extends sccn/amica PR #53's vendor-neutral recipe (gfortran, no MKL, portable
-# random_seed, vmath_shim for vrda_exp/vrda_log) with a single-rank MPI shim
+# Extends sccn/amica PR #54's vendor-neutral recipe (gfortran, no MKL, portable
+# + reproducible random_seed, vmath_shim for vrda_exp/vrda_log) with a single-rank MPI shim
 # (mpi_single.f90 + mpi_single.c), so the binary links NO MPI runtime and is
 # self-contained. Runtime dependencies after this are only the C/Fortran runtime
 # and LAPACK/BLAS, which we static-link where possible.
