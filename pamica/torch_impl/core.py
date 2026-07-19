@@ -1824,12 +1824,24 @@ class AMICATorchNG:
 
             # Learning-rate control, ported from Fortran (amica17.f90:1062-1108).
             # Natural-gradient/Newton ascent is not monotonic at a fixed rate:
-            # when the log-likelihood decreases, anneal the working rates
-            # (lrate, rholrate). If decreases persist for maxdecs iterations,
-            # ratchet the *ceilings* down (lrate_cap, and newtrate once Newton
-            # is running) so the per-iteration ramp can no longer re-inflate
-            # lrate back to the overshooting value -- without this the ramp and
-            # a one-shot halving just oscillate and the LL drifts down.
+            # when the log-likelihood decreases, anneal the working lrate. If
+            # decreases persist for maxdecs iterations, ratchet the *ceilings*
+            # down (lrate_cap; newtrate once Newton is running; and the rho rate)
+            # so the per-iteration ramp can no longer re-inflate lrate back to the
+            # overshooting value -- without this the ramp and a one-shot halving
+            # just oscillate and the LL drifts down.
+            #
+            # rholrate is a CEILING here, not a per-decrease-annealed working
+            # rate. Fortran resets rholrate=rholrate0 each iteration before the
+            # rho update (amica15.f90:1788) and only tightens the rholrate0
+            # ceiling at maxdecs (amica15.f90:1050, gated on iter>newt_start), so
+            # its per-decrease rholrate*=rholratefact (:1045) is always overwritten
+            # by the reset and never reaches the rho update. rho has no ramp, so
+            # self.rholrate carries that ceiling directly (reset to rholrate0 each
+            # fit, nothing re-inflates it) and must ratchet ONLY at maxdecs. The
+            # previous per-decrease self.rholrate*=rholratefact was a monotone
+            # decay with no reset that collapsed the rho rate to ~1e-5 within a few
+            # hundred iterations and froze rho at a stale shape (issue #193).
             if len(self.ll_history) > 1 and ll < self.ll_history[-2]:
                 if self.lrate <= self.minlrate:
                     logger.warning(
@@ -1840,10 +1852,11 @@ class AMICATorchNG:
                     self.stop_reason = "lrate_floor"
                     break
                 self.lrate *= self.lratefact
-                self.rholrate *= self.rholratefact
                 numdecs += 1
                 if numdecs >= self.maxdecs:
                     self.lrate_cap *= self.lratefact
+                    if it > self.newt_start:
+                        self.rholrate *= self.rholratefact
                     if self.do_newton and it > self.newt_start:
                         self.newtrate *= self.lratefact
                     numdecs = 0

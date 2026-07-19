@@ -1380,3 +1380,43 @@ def test_keep_best_inactive_under_reject():
     m.fit(data, max_iter=12, verbose=False)
     assert m.numrej >= 1  # rejection actually fired, so the good set changed
     assert m.final_ll_ == m.ll_history[-1]  # no best-iterate restore under reject
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not DATA_FILE.exists(), reason="sample data missing")
+def test_rholrate_ratchets_at_maxdecs_not_per_decrease():
+    """Issue #193: the rho learning rate is a maxdecs-ratcheted *ceiling*, not a
+    per-LL-decrease monotone decay.
+
+    Fortran resets ``rholrate = rholrate0`` every iteration before the rho update
+    (amica15.f90:1788) and only tightens the ceiling at ``maxdecs``
+    (amica15.f90:1050, gated on ``iter > newt_start``). torch previously decayed
+    ``rholrate`` on EVERY LL decrease with no reset, collapsing it to ~1e-5 within
+    a few hundred iterations and freezing rho at a stale shape.
+
+    On the real sample data a long-enough Newton run overshoots and triggers
+    several LL decreases. The surviving ``rholrate`` must have ratcheted exactly
+    as often as ``newtrate`` (both gated on ``iter > newt_start`` at ``maxdecs``,
+    matched 0.5 factor here), NOT once per decrease.
+    """
+    data = _load_real_data()
+    m = _fresh_ng(
+        block_size=512, do_newton=True, newt_start=50, newtrate=1.0, lrate=0.05,
+        lratefact=0.5, rholrate=0.05, rholratefact=0.5, maxdecs=3,
+    )  # fmt: skip
+    m.fit(data, max_iter=300, verbose=False)
+
+    ll = m.ll_history
+    n_dec = sum(1 for i in range(1, len(ll)) if ll[i] < ll[i - 1])
+    # The run must actually exercise the schedule (Newton overshoots past
+    # newt_start), or the assertions below prove nothing.
+    assert m.newtrate < m.newtrate0, "no newtrate ratchet fired; budget too short"
+    assert n_dec > m.maxdecs, "too few LL decreases to distinguish the schedules"
+
+    # rholrate and newtrate share the maxdecs ratchet schedule, so the surviving
+    # rho ceiling ratcheted the same number of times as newtrate.
+    assert m.rholrate == pytest.approx(m.rholrate0 * (m.newtrate / m.newtrate0))
+    # The old per-decrease decay (rholrate0 * rholratefact**n_dec) sits orders of
+    # magnitude below the fixed ceiling; guard against a regression to it.
+    buggy = m.rholrate0 * (m.rholratefact**n_dec)
+    assert m.rholrate > buggy * 10
