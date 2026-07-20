@@ -72,9 +72,8 @@ It also computes mutual information reduction (MIR) and pairwise mutual informat
 and the Amari distance [@amari1996new], a relabeling- and scale-invariant unmixing-matrix metric that needs no assignment step.
 Both implementations were run for AMICA's usual 2000 iterations with Newton off (`do_newton=0`) and otherwise-default parameters
 (settings transcribed between `pamica`'s JSON and Fortran's native text format).
-Newton is disabled here to isolate the algorithm from initialization: with Newton on, independently seeded runs can settle a few under-determined components in different, equally likely optima, though a matched initialization recovers agreement (documentation).
-The single-model headline (Table 1) uses an external recording (OpenNeuro ds002718, 70 channels) with a data-adequacy ratio $k\approx153$ ($k$ = frames divided by squared channel count), well past the ~60 threshold where cross-backend agreement plateaus;
-the bundled 32-channel sample below ($k\approx30$) gives a consistent Amari distance.
+Newton is disabled here to isolate the algorithm from initialization: with Newton on, independently seeded runs can settle a few under-determined components in different, equally likely optima, though a matched initialization recovers agreement ([documentation](https://eeglab.org/pAMICA/guides/validation/)).
+The single-model comparison uses a well-determined external recording (OpenNeuro ds002718, $k\approx153$, where $k$ = frames over squared channel count), well past the ~60 threshold where cross-backend agreement plateaus, together with the bundled 32-channel sample ($k\approx30$); Table 1 gives each metric's dataset.
 Score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions on the bundled sample.
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar for the multi-model case;
 it is instead assessed by whether the two implementations sample a similar distribution of solutions, across ensembles of 20 runs each (\autoref{fig:ensemble}).
@@ -82,17 +81,17 @@ A permutation test finds no evidence that cross-implementation agreement is wors
 Multi-model log-likelihood distributions still differ slightly at a matched iteration budget
 (`pamica` needs about twice as many iterations to reach Fortran's mean), so full-likelihood similarity is not yet claimed.
 
-| Regime | Metric | Result (mean) |
+| Regime | Metric (dataset) | Result (mean) |
 |---|---|---|
-| Single-model | Log-likelihood gap to Fortran (mean per-sample-channel log-likelihood, $-3.6993$, $k\approx153$) | within ~0.0005 |
-| Single-model | Conformity with Fortran | 0.998 ($k\approx153$) / 0.006 (bundled, $k\approx30$) |
-| Single-model | Score functions (non-default families) and sufficient statistics | exact to floating-point resolution ($\sim\!10^{-15}$) |
-| Multi-model | Single-run magnitude (`pamica`-Fortran; Fortran-Fortran) | 0.65; 0.64 (sd 0.05) / 0.163; 0.174 (sd 0.02) |
-| Multi-model | Ensemble similarity, 20 runs each: mean difference, between $-$ within-Fortran (permutation $p$) | $+0.011$ ($p=0.96$) / $-0.011$ ($p>0.999$) |
+| Single-model | Log-likelihood gap to Fortran (ds002718, $k\approx153$) | within ~0.0005 of $-3.6993$ |
+| Single-model | Hungarian-matched component correlation (ds002718, $k\approx153$) | 0.998 |
+| Single-model | Amari distance (bundled 32-channel sample, $k\approx30$) | 0.006 |
+| Single-model | Score functions and sufficient statistics (bundled sample) | exact, $\sim\!10^{-15}$ |
+| Multi-model | Component correlation, single run: `pamica`-Fortran; Fortran-Fortran (bundled) | 0.65; 0.64 (sd 0.05) |
+| Multi-model | Amari distance, single run: `pamica`-Fortran; Fortran-Fortran (bundled) | 0.163; 0.174 (sd 0.02) |
+| Multi-model | Ensemble agreement, cross-implementation $-$ within-Fortran, 20 runs each (bundled) | correlation $+0.011$ ($p=0.96$); Amari $-0.011$ ($p>0.999$) |
 
-: Single-model parity (external ds002718, $k\approx153$; Amari and score-function checks on the bundled sample) and
-multi-model distributional similarity (bundled sample) of `pamica` with the Fortran reference. All values are means
-(sd = standard deviation, shown where relevant) over matched components (single-model) or within/cross-implementation pairs (190/400, multi-model).
+: Parity of `pamica` with the Fortran reference. The two single-model conformity metrics use different recordings, hence the two data-adequacy ratios $k$: the correlation headline uses a well-determined external recording ($k\approx153$), while the Amari distance and score-function checks use the bundled 32-channel sample ($k\approx30$). Multi-model agreement is distributional, since a mixture of models is not partition-identifiable; the ensemble row is the mean difference between cross-implementation and within-Fortran agreement, with a run-level permutation $p$-value. Values are means (sd, standard deviation) over matched components or, for multi-model, over within/cross-implementation run pairs (190/400).
 
 ![Multi-model solution-ensemble partition-correlation distributions (panel A) and log-likelihood distributions (panel B) for 20 `pamica` and 20 Fortran fits of the sample EEG; dashed lines mark each distribution's mean.
 The within-Fortran, within-`pamica`, and between-implementation correlation distributions overlap,
@@ -103,7 +102,7 @@ All backends converge to the same single-model log-likelihood on real EEG (maxim
 On Apple Silicon, MLX is the fastest backend and flat with channel count (Table 2); PyTorch-MPS is never a win.
 Double-precision CUDA is the reproducible NVIDIA path; native Fortran scales with CPU cores and, with enough cores pinned,
 can beat the GPU on a larger, hotter host, though it does not match Apple's MLX on laptop hardware.
-A data-size sweep (documentation) shows cross-backend component agreement rising with frames per channel and plateauing near 0.98 once the decomposition is well-determined,
+A data-size sweep ([documentation](https://eeglab.org/pAMICA/guides/validation/)) shows cross-backend component agreement rising with frames per channel and plateauing near 0.98 once the decomposition is well-determined,
 where two independent double-precision implementations agree at a mean of 0.995;
 single-precision runs agree with float64 to four to five significant digits, so float64 stays the default for parity.
 
@@ -120,14 +119,14 @@ single-precision runs agree with float64 to four to five significant digits, so 
 : Single-model throughput on real 70-channel EEG (`n_mix`=3,
 `pdftype`=0, `block_size`=512; warm, minimum of repeated runs).
 CPU, MPS, and MLX on Apple Silicon; CUDA on a separate NVIDIA RTX 4090 (float32 comparable, ~36 ms).
-The two native-Fortran rows are from a separate core-count sweep (documentation) at each backend's plateau;
+The two native-Fortran rows are from a separate core-count sweep ([documentation](https://eeglab.org/pAMICA/guides/validation/)) at each backend's plateau;
 the other CPU rows use platform-default threads and are not core-matched to Fortran.
 Unlike the correctness comparison, this benchmark uses external data (OpenNeuro ds002718, one subject so far) and specific GPU hardware.
 
 The correctness harness never uses synthetic data;
 the multi-model and score-function checks need no external download (bundled sample only).
 The full performance tables, per-run Amari-distance detail, data-size sweep,
-and step-by-step reproduction commands are in the documentation (<https://eeglab.org/pAMICA/guides/validation/>).
+and step-by-step reproduction commands are in the [documentation](https://eeglab.org/pAMICA/guides/validation/).
 
 # State of the field
 
