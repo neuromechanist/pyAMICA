@@ -29,19 +29,19 @@ bibliography: paper.bib
 
 # Summary
 
-Independent Component Analysis (ICA) is a standard method for separating electroencephalography (EEG) and electromyography (EMG) recordings into maximally independent sources,
-which isolates brain, muscle, and artifact activity for downstream analysis. Adaptive Mixture ICA (AMICA) generalizes single-model ICA to a mixture of ICA models with adaptive source densities,
+Independent Component Analysis (ICA) is a standard method for separating electroencephalography (EEG) and electromyography (EMG) recordings into maximally independent sources
+that isolate brain, muscle, and artifact activity for downstream analysis. Adaptive Mixture ICA (AMICA) [@palmer2012amica] generalizes single-model ICA to a mixture of such models with adaptive source densities,
 and produces the most dipolar (and thus most physiologically interpretable) component decompositions of EEG among the widely used algorithms benchmarked by @delorme2012independent.
 Its reference implementation is a Fortran program parallelized with the Message Passing Interface (MPI) and distributed as a compiled binary driven from MATLAB/EEGLAB,
-which is difficult to install, runs only on the CPU, and is not usable from a Python scientific workflow.
+which is difficult to install, runs only on the central processing unit (CPU), and is not usable from a Python scientific workflow.
 
-`pamica` is a Python implementation of AMICA that reproduces the reference Fortran results within numerical tolerance while running on the CPU, NVIDIA GPUs (CUDA), and Apple GPUs (Apple's MLX array framework [@mlx2023]).
-It is a complete NumPy/PyTorch reimplementation, not a wrapper around the Fortran binary,
-built on PyTorch [@paszke2019pytorch], NumPy [@harris2020array],
-and SciPy [@virtanen2020scipy], and exposes a scikit-learn-style estimator under a BSD-3-Clause license.
-In double precision it reproduces the reference score-function algebra to machine precision;
+`pamica` is a Python implementation of AMICA that reproduces the reference Fortran results within numerical tolerance while running on the CPU, NVIDIA graphics processing units (GPUs, via CUDA), and Apple GPUs (Apple's MLX array framework [@mlx2023]).
+It is a complete reimplementation built on PyTorch [@paszke2019pytorch], NumPy [@harris2020array],
+and SciPy [@virtanen2020scipy], not a wrapper around the Fortran binary,
+and exposes a scikit-learn-style estimator under a BSD-3-Clause license.
+In double precision it reproduces the reference score-function algebra to floating-point round-off;
 it also runs in single precision (float32),
-which the CPU-only binary does not offer and which is required to use Apple GPUs, which have no float64 and host the fastest backend (MLX).
+unavailable in the CPU-only binary and required for Apple GPUs, which have no float64 and host the fastest backend (MLX).
 `pamica` writes output in the binary format that EEGLAB's AMICA loader reads:
 a single-model output file is byte-identical in layout to a native AMICA file,
 and multi-model output round-trips through the same loader. Correctness is defined as parity with the Fortran reference for the single-model case and, because multi-model AMICA is not partition-identifiable, as a similar distribution of solutions for the multi-model case;
@@ -50,30 +50,30 @@ The software is at <https://github.com/sccn/pAMICA> (archived at doi:10.5281/zen
 
 # Statement of need
 
-AMICA also supports equivalent-dipole source localization and automated component classification [@piontonachini2019iclabel].
-As neuroimaging analysis moves toward Python, for example MNE-Python [@gramfort2013meg], its MATLAB-only Fortran implementation is an increasing obstacle:
+AMICA's decompositions are well suited to equivalent-dipole source localization and automated component classification [@piontonachini2019iclabel].
+Yet its reference implementation is MATLAB-only Fortran, an increasing obstacle as neuroimaging analysis moves toward Python, for example MNE-Python [@gramfort2013meg]:
 an AMICA that runs natively in Python and on a GPU, and that is validated to reproduce the Fortran reference numerically, is needed for modern pipelines.
 
 General-purpose Python ICA implementations do not fill this gap. `scikit-learn` and `MNE-Python` provide FastICA [@hyvarinen2000independent] and Infomax [@bell1995information; @lee1999independent],
-and Picard [@ablin2018faster] provides a faster maximum-likelihood ICA,
-but none implement AMICA's mixture of models, adaptive generalized-Gaussian source densities, or Newton updates,
-and so they do not reproduce AMICA decompositions. `pamica` targets EEG/EMG analysts who want AMICA-quality decompositions inside a Python pipeline,
+while Picard [@ablin2018faster] offers faster-converging maximum-likelihood ICA;
+none implement AMICA's mixture of models, adaptive generalized-Gaussian source densities, or Newton updates,
+so they do not reproduce AMICA decompositions. `pamica` targets EEG/EMG analysts who want AMICA-quality decompositions inside a Python pipeline,
 users of GPU hardware who want faster runs than the CPU-only binary, and methodologists who need a transparent reference implementation to build on.
 
 # Implementation and validation
 
-`pamica` provides a natural-gradient [@amari1998natural] expectation-maximization backend that ports the full AMICA algorithm:
+`pamica` provides a natural-gradient [@amari1998natural] expectation-maximization (EM) backend that ports the full AMICA algorithm:
 exact-EM mixture updates, a positive-definite Newton step [@palmer2008newton],
 symmetric zero-phase-component-analysis (ZCA) sphering, the five source-density families of the reference (generalized Gaussian, Gaussian,
 logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture of ICA models, and component sharing across models.
 It also computes mutual information reduction (MIR) and pairwise mutual information (PMI), the separation-quality metrics used to benchmark ICA algorithms [@delorme2012independent].
 
 `pamica`'s conformity with the reference binary is measured with two complementary metrics: Hungarian-matched component correlation
-and the Amari distance [@amari1996new], a permutation- and scale-invariant unmixing-matrix metric that needs no assignment step.
+and the Amari distance [@amari1996new], a relabeling- and scale-invariant unmixing-matrix metric that needs no assignment step.
 Both implementations were run for AMICA's usual 2000 iterations with Newton off (`do_newton=0`) and otherwise-default parameters
 (settings transcribed between `pamica`'s JSON and Fortran's native text format).
 Newton is disabled here to isolate the algorithm from initialization: with Newton on, independently seeded runs can settle a few under-determined components in different, equally likely optima, though a matched initialization recovers agreement (documentation).
-The single-model headline (Table 1) uses an external recording (OpenNeuro ds002718, 70 channels, $k\approx153$ frames per squared channel count), well past the ~60 threshold where cross-backend agreement plateaus;
+The single-model headline (Table 1) uses an external recording (OpenNeuro ds002718, 70 channels) with a data-adequacy ratio $k\approx153$ ($k$ = frames divided by squared channel count), well past the ~60 threshold where cross-backend agreement plateaus;
 the bundled 32-channel sample below ($k\approx30$) gives a consistent Amari distance.
 Score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions on the bundled sample.
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar for the multi-model case;
@@ -82,9 +82,9 @@ A permutation test finds no evidence that cross-implementation agreement is wors
 Multi-model log-likelihood distributions still differ slightly at a matched iteration budget
 (`pamica` needs about twice as many iterations to reach Fortran's mean), so full-likelihood similarity is not yet claimed.
 
-| Regime | Metric | Result (mean; correlation / Amari distance) |
+| Regime | Metric | Result (mean) |
 |---|---|---|
-| Single-model | Log-likelihood gap to Fortran (mean per-sample-channel LL, $-3.6993$, $k\approx153$) | within ~0.0005 |
+| Single-model | Log-likelihood gap to Fortran (mean per-sample-channel log-likelihood, $-3.6993$, $k\approx153$) | within ~0.0005 |
 | Single-model | Conformity with Fortran | 0.998 ($k\approx153$) / 0.006 (bundled, $k\approx30$) |
 | Single-model | Score functions (non-default families) and sufficient statistics | exact to floating-point resolution ($\sim\!10^{-15}$) |
 | Multi-model | Single-run magnitude (`pamica`-Fortran; Fortran-Fortran) | 0.65; 0.64 (sd 0.05) / 0.163; 0.174 (sd 0.02) |
@@ -92,7 +92,7 @@ Multi-model log-likelihood distributions still differ slightly at a matched iter
 
 : Single-model parity (external ds002718, $k\approx153$; Amari and score-function checks on the bundled sample) and
 multi-model distributional similarity (bundled sample) of `pamica` with the Fortran reference. All values are means
-(sd shown where relevant) over matched components (single-model) or within/cross-implementation pairs (190/400, multi-model).
+(sd = standard deviation, shown where relevant) over matched components (single-model) or within/cross-implementation pairs (190/400, multi-model).
 
 ![Multi-model solution-ensemble partition-correlation distributions (panel A) and log-likelihood distributions (panel B) for 20 `pamica` and 20 Fortran fits of the sample EEG; dashed lines mark each distribution's mean.
 The within-Fortran, within-`pamica`, and between-implementation correlation distributions overlap,
@@ -102,10 +102,10 @@ Panel B's apparent separation is a 0.009 log-likelihood gap on a ~0.035 axis.\la
 All backends converge to the same single-model log-likelihood on real EEG (maximum pairwise difference ~0.003).
 On Apple Silicon, MLX is the fastest backend and flat with channel count (Table 2); PyTorch-MPS is never a win.
 Double-precision CUDA is the reproducible NVIDIA path; native Fortran scales with CPU cores and, with enough cores pinned,
-can beat the GPU on a larger, hotter host, though it does not catch Apple's MLX on laptop hardware.
-A data-size sweep (documentation) shows cross-backend component agreement rising with frames per channel and plateauing near 0.98 once well-determined,
+can beat the GPU on a larger, hotter host, though it does not match Apple's MLX on laptop hardware.
+A data-size sweep (documentation) shows cross-backend component agreement rising with frames per channel and plateauing near 0.98 once the decomposition is well-determined,
 where two independent double-precision implementations agree at a mean of 0.995;
-single-precision runs agree with double precision to four to five significant digits, so double precision stays the default for parity.
+single-precision runs agree with float64 to four to five significant digits, so float64 stays the default for parity.
 
 | Backend (device) | Precision | ms / iteration |
 |---|---|---:|
@@ -132,17 +132,16 @@ and step-by-step reproduction commands are in the documentation (<https://eeglab
 # State of the field
 
 `pamica` complements rather than replaces EEGLAB [@delorme2004eeglab] and its Fortran AMICA plugin: it shares EEGLAB's output format,
-adds GPU support and a Python API, and can run the reference Fortran itself through a bundled dependency-free native build (no MKL or MPI runtime).
+adds a Python API with GPU support, and runs the reference Fortran itself through a bundled dependency-free native build (no Intel Math Kernel Library or MPI runtime).
 Two other Python AMICA reimplementations have appeared [@esmaeili2025amica; @herforth2026pyamica],
-both of which provide MNE-Python-compatible objects; `pamica` leads with a scikit-learn-style array API, byte-identical EEGLAB I/O, and an MLX backend for Apple GPUs, and also ships an MNE-Python wrapper (an optional extra).
-What distinguishes `pamica` is the rigor and scope of its Fortran-parity validation beyond what either alternative publishes (Table 1).
+both of which provide MNE-Python-compatible objects; `pamica` offers a scikit-learn-style array API, byte-identical EEGLAB I/O, an MLX backend for Apple GPUs, and an optional MNE-Python wrapper.
+What sets `pamica` apart is the depth of its Fortran-parity validation (Table 1): source-density score functions bit-exact to floating-point resolution against the literal Fortran expressions, and a distributional-similarity framework for the non-identifiable multi-model case.
 
 # Acknowledgements
 
-We thank Jason Palmer and Ken Kreutz-Delgado, co-developers of AMICA, for the reference implementation,
-and the EEGLAB community for the tools and sample data used to validate this work.
-Two of the authors are original developers of the methods `pamica` builds on: S.M. co-developed the AMICA algorithm (Palmer et al.,
-cited above) and A.D. is a lead developer of EEGLAB [@delorme2004eeglab].
+We thank Jason Palmer and Ken Kreutz-Delgado, co-developers of AMICA, for the reference implementation.
+We also thank the EEGLAB community for the tools and sample data used to validate this work.
+Two of the authors are original developers of the methods `pamica` builds on: S.M. co-developed the AMICA algorithm [@palmer2012amica] and A.D. is a lead developer of EEGLAB [@delorme2004eeglab].
 This work was supported by The Swartz Foundation (Old Field, NY) to the Swartz Center for Computational Neuroscience and by National Institutes of Health grant R01-NS047293 (to A.D. and S.M.).
 
 # References
