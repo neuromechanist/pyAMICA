@@ -66,14 +66,15 @@ users of GPU hardware who want faster runs than the CPU-only binary, and methodo
 exact-EM mixture updates, a positive-definite Newton step [@palmer2008newton],
 symmetric zero-phase-component-analysis (ZCA) sphering, the five source-density families of the reference (generalized Gaussian, Gaussian,
 logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture of ICA models, and component sharing across models.
-It also computes mutual information reduction (MIR) and pairwise mutual information (PMI), separation-quality metrics useful for benchmarking ICA algorithms [@delorme2012independent].
+It also computes mutual information reduction (MIR) and pairwise mutual information (PMI), separation-quality metrics useful for benchmarking ICA algorithms [@delorme2012independent; @frank2023optimal].
 
 `pamica`'s conformity with the reference binary is measured with two complementary metrics: Hungarian-matched component correlation
 and the Amari distance [@amari1996new], a relabeling- and scale-invariant unmixing-matrix metric that needs no assignment step.
 Both implementations were run for the AMICA heuristic default of 2000 iterations with Newton off (`do_newton=0`) and otherwise-default parameters
 (settings transcribed between `pamica`'s JSON and Fortran's native text format).
+This 2000-iteration budget is a practical stopping point, not a convergence point: source separation keeps improving slowly at higher iteration counts [@frank2023optimal].
 Newton acceleration is disabled here to isolate the algorithm from initialization: the Newton update speeds convergence, but once enabled it lets independently seeded runs settle a few under-determined components into different, equally likely optima, whereas a matched initialization recovers agreement ([documentation](https://eeglab.org/pAMICA/guides/validation/)).
-The single-model comparison uses a well-determined external recording (OpenNeuro ds002718, $k\approx153$, where $k$ = frames over squared channel count), well past the ~60 threshold where cross-backend agreement plateaus, together with the bundled 32-channel sample ($k\approx30$); Table 1 gives each metric's dataset.
+The single-model comparison uses a well-determined external recording (OpenNeuro ds002718, $k\approx153$, where $k$ = frames over squared channel count [@frank2025sufficient]), well past the ~60 threshold where cross-backend agreement plateaus, together with the bundled 32-channel sample ($k\approx30$); Table 1 gives each metric's dataset.
 Score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions on the bundled sample.
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar for the multi-model case;
 it is instead assessed by whether the two implementations sample a similar distribution of solutions, across ensembles of 20 runs each (\autoref{fig:ensemble}).
