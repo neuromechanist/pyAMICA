@@ -29,10 +29,10 @@ bibliography: paper.bib
 
 # Summary
 
-Independent Component Analysis (ICA) is a standard method for separating electroencephalography (EEG) and electromyography (EMG) recordings into maximally independent sources
-that isolate brain, muscle, and artifact activity for downstream analysis. Adaptive Mixture ICA (AMICA) [@palmer2012amica] generalizes single-model ICA to a mixture of such models with adaptive source densities,
-and produces the most dipolar (and thus most physiologically interpretable) component decompositions of EEG among the widely used algorithms benchmarked by @delorme2012independent.
-Its reference implementation is a Fortran program parallelized with the Message Passing Interface (MPI) and distributed as a compiled binary driven from MATLAB/EEGLAB,
+Independent Component Analysis (ICA) is a widely applied method for separating electroencephalographic and magnetoencephalographic (EEG/MEG) recordings into maximally independent sources
+that isolate brain, muscle, and artifact activities for downstream analysis [@makeig1995independent; @vigario1997independent; @iversen2019megeeg]. Adaptive Mixture ICA (AMICA) [@palmer2012amica] generalizes single-model ICA to a mixture of such models with adaptive source densities,
+and produces both the least dependent and the most dipolar (and thus most physiologically interpretable) component decompositions of EEG among the algorithms benchmarked by @delorme2012independent.
+Its reference implementation, written by Jason Palmer, is a Fortran program parallelized with the Message Passing Interface (MPI) and distributed as a compiled binary callable from MATLAB/EEGLAB,
 which is difficult to install, runs only on the central processing unit (CPU), and is not usable from a Python scientific workflow.
 
 `pamica` is a Python implementation of AMICA that reproduces the reference Fortran results within numerical tolerance while running on the CPU, NVIDIA graphics processing units (GPUs, via CUDA), and Apple GPUs (Apple's MLX array framework [@mlx2023]).
@@ -50,14 +50,14 @@ The software is at <https://github.com/sccn/pAMICA> (archived at doi:10.5281/zen
 
 # Statement of need
 
-AMICA's decompositions are well suited to equivalent-dipole source localization and automated component classification [@piontonachini2019iclabel].
+AMICA decompositions of neuroelectromagnetic data are well suited to equivalent-dipole source localization and automated component classification [@piontonachini2019iclabel].
 Yet its reference implementation is MATLAB-only Fortran, an increasing obstacle as neuroimaging analysis moves toward Python, for example MNE-Python [@gramfort2013meg]:
 an AMICA that runs natively in Python and on a GPU, and that is validated to reproduce the Fortran reference numerically, is needed for modern pipelines.
 
 General-purpose Python ICA implementations do not fill this gap. `scikit-learn` and `MNE-Python` provide FastICA [@hyvarinen2000independent] and Infomax [@bell1995information; @lee1999independent],
 while Picard [@ablin2018faster] offers faster-converging maximum-likelihood ICA;
 none implement AMICA's mixture of models, adaptive generalized-Gaussian source densities, or Newton updates,
-so they do not reproduce AMICA decompositions. `pamica` targets EEG/EMG analysts who want AMICA-quality decompositions inside a Python pipeline,
+so they do not reproduce AMICA decompositions. `pamica` targets EEG and MEG analysts who want AMICA-quality decompositions inside a Python pipeline,
 users of GPU hardware who want faster runs than the CPU-only binary, and methodologists who need a transparent reference implementation to build on.
 
 # Implementation and validation
@@ -66,13 +66,13 @@ users of GPU hardware who want faster runs than the CPU-only binary, and methodo
 exact-EM mixture updates, a positive-definite Newton step [@palmer2008newton],
 symmetric zero-phase-component-analysis (ZCA) sphering, the five source-density families of the reference (generalized Gaussian, Gaussian,
 logistic, sub-Gaussian, and the extended-Infomax kurtosis switcher), a mixture of ICA models, and component sharing across models.
-It also computes mutual information reduction (MIR) and pairwise mutual information (PMI), the separation-quality metrics used to benchmark ICA algorithms [@delorme2012independent].
+It also computes mutual information reduction (MIR) and pairwise mutual information (PMI), separation-quality metrics useful for benchmarking ICA algorithms [@delorme2012independent].
 
 `pamica`'s conformity with the reference binary is measured with two complementary metrics: Hungarian-matched component correlation
 and the Amari distance [@amari1996new], a relabeling- and scale-invariant unmixing-matrix metric that needs no assignment step.
-Both implementations were run for AMICA's usual 2000 iterations with Newton off (`do_newton=0`) and otherwise-default parameters
+Both implementations were run for the AMICA heuristic default of 2000 iterations with Newton off (`do_newton=0`) and otherwise-default parameters
 (settings transcribed between `pamica`'s JSON and Fortran's native text format).
-Newton is disabled here to isolate the algorithm from initialization: with Newton on, independently seeded runs can settle a few under-determined components in different, equally likely optima, though a matched initialization recovers agreement ([documentation](https://eeglab.org/pAMICA/guides/validation/)).
+Newton acceleration is disabled here to isolate the algorithm from initialization: the Newton update speeds convergence, but once enabled it lets independently seeded runs settle a few under-determined components into different, equally likely optima, whereas a matched initialization recovers agreement ([documentation](https://eeglab.org/pAMICA/guides/validation/)).
 The single-model comparison uses a well-determined external recording (OpenNeuro ds002718, $k\approx153$, where $k$ = frames over squared channel count), well past the ~60 threshold where cross-backend agreement plateaus, together with the bundled 32-channel sample ($k\approx30$); Table 1 gives each metric's dataset.
 Score functions and per-block sufficient statistics are exact to floating-point resolution against the literal Fortran expressions on the bundled sample.
 A mixture of ICA models is not partition-identifiable, so exact partition parity is the wrong bar for the multi-model case;
@@ -130,7 +130,7 @@ and step-by-step reproduction commands are in the [documentation](https://eeglab
 
 # State of the field
 
-`pamica` complements rather than replaces EEGLAB [@delorme2004eeglab] and its Fortran AMICA plugin: it shares EEGLAB's output format,
+`pamica` complements rather than replaces the reference Fortran AMICA used with EEGLAB [@delorme2004eeglab]: it uses the same output format as that Fortran version,
 adds a Python API with GPU support, and runs the reference Fortran itself through a bundled dependency-free native build (no Intel Math Kernel Library or MPI runtime).
 Two other Python AMICA reimplementations have appeared [@esmaeili2025amica; @herforth2026pyamica],
 both of which provide MNE-Python-compatible objects; `pamica` offers a scikit-learn-style array API, byte-identical EEGLAB I/O, an MLX backend for Apple GPUs, and an optional MNE-Python wrapper.
@@ -138,7 +138,7 @@ What sets `pamica` apart is the depth of its Fortran-parity validation (Table 1)
 
 # Acknowledgements
 
-We thank Jason Palmer and Ken Kreutz-Delgado, co-developers of AMICA, for the reference implementation.
+We thank Jason Palmer and his advisor Ken Kreutz-Delgado, co-developers of AMICA, for the reference implementation.
 We also thank the EEGLAB community for the tools and sample data used to validate this work.
 Two of the authors are original developers of the methods `pamica` builds on: S.M. co-developed the AMICA algorithm [@palmer2012amica] and A.D. is a lead developer of EEGLAB [@delorme2004eeglab].
 This work was supported by The Swartz Foundation (Old Field, NY) to the Swartz Center for Computational Neuroscience and by National Institutes of Health grant R01-NS047293 (to A.D. and S.M.).
